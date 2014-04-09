@@ -26,6 +26,25 @@ case "$1" in
         perl fhem.pl $port "shutdown"
         RETVAL=$?
         ;;
+'restart')
+        echo "Stopping fhem..."
+        perl fhem.pl $port "shutdown"
+        RETVAL=$?
+        echo "Starting fhem..."
+        perl fhem.pl fhem.cfg
+        RETVAL=$?		
+        ;;
+'reanimate')
+        cnt=`ps -ef | grep "fhem.pl" | grep -v grep | wc -l`
+        if [ "$cnt" -eq "0" ] ; then
+                echo "fhem is not running -> Starting fhem..."
+				perl fhem.pl fhem.cfg
+				RETVAL=$?
+        else
+                echo "fhem is running -> No reanimation needed."
+				RETVAL=1
+        fi		
+        ;;	
 'status')
         cnt=`ps -ef | grep "fhem.pl" | grep -v grep | wc -l`
         if [ "$cnt" -eq "0" ] ; then
@@ -35,7 +54,7 @@ case "$1" in
         fi
         ;;
 *)
-        echo "Usage: $0 { start | stop | status }"
+        echo "Usage: $0 { start | stop | restart | reanimate | status }"
         RETVAL=1
         ;;
 esac
