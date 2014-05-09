@@ -127,7 +127,7 @@ COMMAND_HANDLER: {
     defined($s{$key}) and do {
       my %tristateChars = reverse(%tristateBits);
       my $tristateCode = join("", map { my $v = $tristateChars{$_}; defined $v ? $v : "X";} @$value); 
-      Log3 $name, 4, "$s{$key}: $tristateCode";
+      Log3 $name, 5, "$s{$key}: $tristateCode";
       main::readingsSingleUpdate($hash, $s{$key}, $tristateCode, 1);
       last;
     };
