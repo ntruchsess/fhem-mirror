@@ -117,9 +117,26 @@ sub FRM_RCIN_observer
   
 COMMAND_HANDLER: {
     ($key eq $Device::Firmata::Protocol::RCINPUT_COMMANDS->{RCINPUT_MESSAGE}) and do {
-      # TODO decode data
-      Log3 $name, 4, "Received RC message: $value";
-      main::readingsSingleUpdate($hash, 'state', $value, 1);
+      Log3 $name, 5, "Received RC message: " . join(" ", @$value);
+
+      my $message   = (@$value[0] << 24) + (@$value[1] << 16) + (@$value[2] << 8) + @$value[3];
+      my $bitlength = (@$value[4] << 8) + @$value[5];
+      my $delay     = (@$value[6] << 8) + @$value[7];
+      my $protocol  = (@$value[8] << 8) + @$value[9];
+
+      # TODO: check for redundancy with RCOUT;  extract the sub long_to_tristate_code
+      my @messageAsTristateBits;
+      for (my $shift = 30; $shift >= 0; $shift-=2) {
+        push @messageAsTristateBits, ($message >> $shift) & 3;
+      }
+      my %tristateChars = reverse(%tristateBits);
+      my $tristateCode = join("", map { my $v = $tristateChars{$_}; defined $v ? $v : "X";} @messageAsTristateBits); 
+      
+      main::readingsSingleUpdate($hash, 'message', $message, 1);
+      main::readingsSingleUpdate($hash, 'tristateCode', $tristateCode, 1);
+      main::readingsSingleUpdate($hash, 'bitlength', $bitlength, 1);
+      main::readingsSingleUpdate($hash, 'delay', $delay, 1);
+      main::readingsSingleUpdate($hash, 'protocol', $protocol, 1);
       last;
     };
     defined($a{$key}) and do {
