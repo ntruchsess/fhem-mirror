@@ -366,7 +366,7 @@ sub FRM_DoInit($) {
 	$device->observe_string(\&FRM_string_observer,$shash);
 	
 	my $found; # we cannot call $device->probe() here, as it doesn't select bevore read, so it would likely cause IODev to close the connection on the first attempt to read from empty stream
-	my $endTicks = time+5;
+	my $endTicks = time+7;
 	my $queryTicks = time+2;
 	$device->system_reset();
 	do {
