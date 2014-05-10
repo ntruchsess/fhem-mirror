@@ -24,12 +24,6 @@ my %attributes = (
   "tolerance"        => $Device::Firmata::Protocol::RCINPUT_COMMANDS->{RCINPUT_TOLERANCE},
 );
 
-my %tristateBits = (
-  "0" => $Device::Firmata::Protocol::RC_TRISTATE_BITS->{TRISTATE_0},
-  "F" => $Device::Firmata::Protocol::RC_TRISTATE_BITS->{TRISTATE_F},
-  "1" => $Device::Firmata::Protocol::RC_TRISTATE_BITS->{TRISTATE_1},
-);
-
 sub
 FRM_RCIN_Initialize($)
 {
@@ -114,15 +108,12 @@ sub FRM_RCIN_observer
   my $name = $hash->{NAME};
   
   my %a = reverse(%attributes);
+  my $attrName = $a{$key};
   
 COMMAND_HANDLER: {
     ($key eq $Device::Firmata::Protocol::RCINPUT_COMMANDS->{RCINPUT_MESSAGE}) and do {
-      my $message   = (@$value[0] << 24) + (@$value[1] << 16) + (@$value[2] << 8) + @$value[3];
-      my $bitlength = (@$value[4] <<  8) + @$value[5];
-      my $delay     = (@$value[6] <<  8) + @$value[7];
-      my $protocol  = (@$value[8] <<  8) + @$value[9];
-      my $tristateCode = long_to_tristate_code($message, $bitlength); 
-      
+
+      my ($message, $bitlength, $delay, $protocol, $tristateCode) = @$value;
       readingsBeginUpdate($hash);
       readingsBulkUpdate($hash, 'message', $message);
       readingsBulkUpdate($hash, 'tristateCode', $tristateCode);
@@ -132,27 +123,15 @@ COMMAND_HANDLER: {
       readingsEndUpdate($hash, 1);
       last;
     };
-    defined($a{$key}) and do {
-      $value = @$value[0] + (@$value[1] << 8);
-      Log3 $name, 4, "$a{$key}: $value";
+    defined($attrName) and do {
+      $value = shift @$value;
+      Log3 $name, 4, "$attrName: $value";
 
-      $main::attr{$name}{$a{$key}}=$value;
+      $main::attr{$name}{$attrName}=$value;
       # TODO refresh web GUI somehow?
       last;
     };
 };
-}
-
-sub long_to_tristate_code
-{
-  my ($message, $bitlength) = @_;
-  my @messageAsTristateBits;
-  for (my $shift = $bitlength-2; $shift >= 0; $shift-=2) {
-    push @messageAsTristateBits, ($message >> $shift) & 3;
-  }
-  my %tristateChars = reverse(%tristateBits);
-  my $tristateCode = join("", map { my $v = $tristateChars{$_}; defined $v ? $v : "X";} @messageAsTristateBits);
-  return $tristateCode;
 }
 
 1;

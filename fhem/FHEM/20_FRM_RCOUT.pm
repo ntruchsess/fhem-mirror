@@ -18,15 +18,16 @@ use Device::Firmata::Constants  qw/ :all /;
 #####################################
 
 my %sets = (
-  "tristateCode"     => $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_CODE_TRISTATE},
-#  "longCode"         => $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_CODE_LONG},
-#  "charCode"         => $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_CODE_CHAR},
+  "tristateCode"     => $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_CODE_PACKED_TRISTATE},
+  "longCode"         => $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_CODE_LONG},
+  "charCode"         => $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_CODE_CHAR},
 );
 
 my %attributes = (
   "protocol"         => $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_PROTOCOL},
   "pulseLength"      => $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_PULSE_LENGTH},
   "repeatTransmit"   => $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_REPEAT_TRANSMIT},
+  "defaultBitCount"  => 24,
 );
 
 my %tristateBits = (
@@ -62,7 +63,7 @@ FRM_RCOUT_Init($$)
     $firmata->observe_rc($pin, \&FRM_RCOUT_observer, $hash);
   };
   return FRM_Catch($@) if $@;
-  main::readingsSingleUpdate($hash, "state", "Initialized", 1);
+  readingsSingleUpdate($hash, "state", "Initialized", 1);
   return undef;
 }
 
@@ -110,9 +111,11 @@ sub FRM_RCOUT_apply_attribute {
   return "Unknown attribute $attribute, choose one of " . join(" ", sort keys %attributes)
   	if(!defined($attributes{$attribute}));
 
-  FRM_Client_FirmataDevice($hash)->rcoutput_set_parameter($hash->{PIN},
-                                                          $attributes{$attribute},
-                                                          $main::attr{$name}{$attribute});
+  if ($attribute ne "defaultBitCount") {
+    FRM_Client_FirmataDevice($hash)->rc_set_parameter($hash->{PIN},
+                                                      $attributes{$attribute},
+                                                      $main::attr{$name}{$attribute});
+  }
 }
 
 sub FRM_RCOUT_observer
@@ -122,20 +125,36 @@ sub FRM_RCOUT_observer
   
   my %s = reverse(%sets);
   my %a = reverse(%attributes);
+  my $subcommand = $s{$key};
+  my $attrName = $a{$key};
   
 COMMAND_HANDLER: {
-    defined($s{$key}) and do {
-      my %tristateChars = reverse(%tristateBits);
-      my $tristateCode = join("", map { my $v = $tristateChars{$_}; defined $v ? $v : "X";} @$value); 
-      Log3 $name, 5, "$s{$key}: $tristateCode";
-      main::readingsSingleUpdate($hash, $s{$key}, $tristateCode, 1);
+    defined($subcommand) and do {
+      if ("tristateCode" eq $subcommand) {
+        my $tristateCode = shift @$value;
+        Log3 $name, 5, "$subcommand: $tristateCode";
+        readingsSingleUpdate($hash, $subcommand, $tristateCode, 1);
+      } elsif ("longCode" eq $subcommand) {
+        my $bitlength = shift @$value;
+        my $longCode  = shift @$value;
+        Log3 $name, 5, "$subcommand: $longCode";
+        readingsBeginUpdate($hash);
+        readingsBulkUpdate($hash, $subcommand, $longCode);
+        readingsBulkUpdate($hash, "bitlength", $bitlength);
+        readingsEndUpdate($hash, 1);
+      } elsif ("charCode" eq $subcommand || "tristateString" eq $subcommand) {
+        my $charCode = shift @$value; 
+        readingsSingleUpdate($hash, $subcommand, $charCode, 1);
+      } else {
+        readingsSingleUpdate($hash, "state", "unknown subcommand $subcommand", 1);
+      }
       last;
     };
-    defined($a{$key}) and do {
-      $value = @$value[0] + (@$value[1] << 8);
-      Log3 $name, 4, "$a{$key}: $value";
+    defined($attrName) and do {
+      $value = shift @$value;
+      Log3 $name, 4, "$attrName: $value";
 
-      $main::attr{$name}{$a{$key}}=$value;
+      $main::attr{$name}{$attrName}=$value;
       # TODO refresh web GUI somehow?
       last;
     };
@@ -147,18 +166,23 @@ FRM_RCOUT_Set($@)
 {
   my ($hash, @a) = @_;
   return "Need at least 2 parameters" if(@a < 2);
+  my $command = $sets{$a[1]};
   return "Unknown argument $a[1], choose one of " . join(" ", sort keys %sets)
-  	if(!defined($sets{$a[1]}));
-  my $command = $a[1];
-  my $value = uc($a[2]);
-  
-  my @v = map {$tristateBits{$_}} split("", $value); 
-
-  my %s = reverse(%sets);
+  	if(!defined($command));
+  my @code;
   eval {
-    if ($sets{$command} eq $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_CODE_TRISTATE}) {
-      FRM_Client_FirmataDevice($hash)->rcoutput_send_code_tristate($hash->{PIN}, @v);
+    if ($command eq $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_CODE_PACKED_TRISTATE}) {
+      @code = map {$tristateBits{$_}} split("", uc($a[2])); 
+    } elsif ($command eq $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_CODE_LONG}) {
+      my $value = $a[2];
+      my $bitCount = $a[3];
+      $bitCount = $attr{$hash->{NAME}}{"defaultBitCount"} if not defined $bitCount;
+      $bitCount = 24 if not defined $bitCount;
+      @code = ($bitCount, $value);
+    } elsif ($command eq $Device::Firmata::Protocol::RCOUTPUT_COMMANDS->{RCOUTPUT_CODE_CHAR}) {
+        @code = map {ord($_)} split("", $a[2]);
     }
+    FRM_Client_FirmataDevice($hash)->rcoutput_send_code($command, $hash->{PIN}, @code);
   };
   return $@;
 }
