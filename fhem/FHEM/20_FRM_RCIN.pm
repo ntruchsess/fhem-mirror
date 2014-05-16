@@ -133,7 +133,7 @@ COMMAND_HANDLER: {
       readingsBulkUpdate($hash, 'bitCount', $bitCount);
       readingsBulkUpdate($hash, 'delay', $delay);
       readingsBulkUpdate($hash, 'protocol', $protocol);
-      if ($main::attr{$name}{'rawDataEnabled'} ne 0) {
+      if (defined $main::attr{$name}{'rawDataEnabled'} and $main::attr{$name}{'rawDataEnabled'} ne 0) {
         readingsBulkUpdate($hash, 'rawData', $rawHex);
       }
       readingsEndUpdate($hash, 1);
