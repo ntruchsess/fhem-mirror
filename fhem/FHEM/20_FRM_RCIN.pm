@@ -17,11 +17,9 @@ use Device::Firmata::Constants  qw/ :all /;
 
 #####################################
 
-my %sets = (
-);
-
 my %attributes = (
   "tolerance"        => $Device::Firmata::Protocol::RCINPUT_COMMANDS->{RCINPUT_TOLERANCE},
+  "rawDataEnabled"   => $Device::Firmata::Protocol::RCINPUT_COMMANDS->{RCINPUT_RAW_DATA},
 );
 
 sub
@@ -34,8 +32,8 @@ FRM_RCIN_Initialize($)
   $hash->{UndefFn}   = "FRM_Client_Undef";
   $hash->{AttrFn}    = "FRM_RCIN_Attr";
   
-  $hash->{AttrList}  = "IODev " . join(" ", keys %attributes) . " $main::readingFnAttributes";
-  main::LoadModule("FRM");
+  $hash->{AttrList}  = "IODev " . join(" ", keys %attributes) . " " . $readingFnAttributes;
+  LoadModule("FRM");
 }
 
 sub
@@ -48,9 +46,12 @@ FRM_RCIN_Init($$)
   eval {
     my $firmata = FRM_Client_FirmataDevice($hash);
     $firmata->observe_rc($pin, \&FRM_RCIN_observer, $hash);
+    foreach my $a (keys %attributes) { # send attribute values to the board
+      FRM_RCIN_apply_attribute($hash, $a) if $attr{$hash->{NAME}}{$a}
+    }
   };
   return FRM_Catch($@) if $@;
-  main::readingsSingleUpdate($hash, "state", "Initialized", 1);
+  readingsSingleUpdate($hash, "state", "Initialized", 1);
   return undef;
 }
 
@@ -68,10 +69,9 @@ FRM_RCIN_Attr($$$$) {
           }
           last;
         };
-        
         defined($attributes{$attribute}) and do {
+          $main::attr{$name}{$attribute}=$value; # store value, but don't send it to the the board until everything is up
           if ($main::init_done) {
-          	$main::attr{$name}{$attribute}=$value;
             FRM_RCIN_apply_attribute($hash,$attribute);
           }
           last;
@@ -97,8 +97,8 @@ sub FRM_RCIN_apply_attribute { # TODO this one is identical to FRM_RCOUT_apply_a
   return "Unknown attribute $attribute, choose one of " . join(" ", sort keys %attributes)
   	if(!defined($attributes{$attribute}));
 
-  FRM_Client_FirmataDevice($hash)->rc_set_parameter($hash->{PIN},
-                                                    $attributes{$attribute},
+  FRM_Client_FirmataDevice($hash)->rc_set_parameter($attributes{$attribute},
+                                                    $hash->{PIN},
                                                     $main::attr{$name}{$attribute});
 }
 
@@ -113,13 +113,29 @@ sub FRM_RCIN_observer
 COMMAND_HANDLER: {
     ($key eq $Device::Firmata::Protocol::RCINPUT_COMMANDS->{RCINPUT_MESSAGE}) and do {
 
-      my ($message, $bitlength, $delay, $protocol, $tristateCode) = @$value;
+      my ($longCode, $bitCount, $delay, $protocol, $tristateCode, $rawData) = @$value;
+      my $rawInt = join(" ", @$rawData);
+      my $rawHex = join(" ", map { sprintf "%04X", $_ } @$rawData);
+
+      Log3 $hash, 4, "message: " . join(", ", @$value);
+      if ($main::attr{$name}{"verbose"} > 3) {
+        my $s = $rawHex;
+        my $rawBlock = "";
+        while ($s) {
+          $rawBlock .= substr($s, 0, 40, '')."\n";
+        }
+        Log3 $hash, 4, "raw data:\n" . $rawBlock;
+      }
+      
       readingsBeginUpdate($hash);
-      readingsBulkUpdate($hash, 'message', $message);
+      readingsBulkUpdate($hash, 'value', $longCode);
       readingsBulkUpdate($hash, 'tristateCode', $tristateCode);
-      readingsBulkUpdate($hash, 'bitlength', $bitlength);
+      readingsBulkUpdate($hash, 'bitCount', $bitCount);
       readingsBulkUpdate($hash, 'delay', $delay);
       readingsBulkUpdate($hash, 'protocol', $protocol);
+      if ($main::attr{$name}{'rawDataEnabled'} ne 0) {
+        readingsBulkUpdate($hash, 'rawData', $rawHex);
+      }
       readingsEndUpdate($hash, 1);
       last;
     };
@@ -141,41 +157,46 @@ COMMAND_HANDLER: {
 
 <a name="FRM_RCIN"></a>
 <h3>FRM_RCIN</h3>
-<ul>
-  represents a pin of an <a href="http://www.arduino.cc">Arduino</a> running <a href="http://www.firmata.org">Firmata</a>
-  configured to receive data via the RCSwitch library.<br>
-  Requires a defined <a href="#FRM">FRM</a>-device to work.<br><br> 
-  
+  <p>
+   Represents a pin of an <a href="http://www.arduino.cc">Arduino</a> running
+   <a href="http://www.firmata.org">Firmata</a> configured to receive data via
+   the RCSwitch library.<br />
+   Requires a defined <a href="#FRM">FRM</a>-device to work.<br><br> 
+  </p>
   <a name="FRM_RCINdefine"></a>
-  <b>Define</b>
-  <ul>
-  <code>define &lt;name&gt; FRM_RCIN &lt;pin&gt;</code> <br>
-  Defines the FRM_RCIN device. &lt;pin&gt> is the arduino-pin to use.
-  </ul>
-  
-  <br>
+  <h4>Define</h4>
+   <p>
+    <code>define &lt;name&gt; FRM_RCIN &lt;pin&gt;</code> <br/>
+    Defines the FRM_RCIN device. &lt;pin&gt> is the arduino-pin to use.
+   </p>
   <a name="FRM_RCINset"></a>
-  <b>Set</b><br>
-  <ul>
-  N/A
-  </ul>
+  <h4>Set</h4>
+  <p>
+   N/A
+  </p>
   <a name="FRM_RCINget"></a>
-  <b>Get</b><br>
-  <ul>
-  N/A
-  </ul><br>
+  <h4>Get</h4>
+  <p>
+   N/A
+  </p>
   <a name="FRM_RCINattr"></a>
-  <b>Attributes</b><br>
+  <h4>Attributes</h4>
   <ul>
-      <li><a href="#IODev">IODev</a><br>
-      Specify which <a href="#FRM">FRM</a> to use. (Optional, only required if there is more
-      than one FRM-device defined.)
-      </li>
-      <li>tolerance Receive tolerance (in percent)</li>
-      <li><a href="#eventMap">eventMap</a><br></li>
-      <li><a href="#readingFnAttributes">readingFnAttributes</a><br></li>
+    <li><a href="#IODev">IODev</a><br/>
+      Specify which <a href="#FRM">FRM</a> to use.
+    </li>
+    <li>
+      <code>tolerance</code>: RCSwitch parameter <code>receiveTolerance</code> in percent
+      (default: 60; see RCSwitch for details)
+    </li>
+    <li>
+      <code>rawDataEnabled</code>: If set to 1, an additional reading
+      <code>rawData</code> will be created, containing the received data in raw
+      format (default: 0 which means that reporting of raw data is disabled)
+    </li>
+    <li><a href="#eventMap">eventMap</a><br></li>
+    <li><a href="#readingFnAttributes">readingFnAttributes</a><br></li>
     </ul>
-  </ul>
 <br>
 
 =end html
