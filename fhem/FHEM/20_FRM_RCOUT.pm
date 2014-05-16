@@ -41,6 +41,7 @@ FRM_RCOUT_Initialize($)
 {
   my ($hash) = @_;
 
+  $hash->{GetFn}     = "FRM_RCOUT_Get";
   $hash->{SetFn}     = "FRM_RCOUT_Set";
   $hash->{DefFn}     = "FRM_Client_Define";
   $hash->{InitFn}    = "FRM_RCOUT_Init";
@@ -193,6 +194,16 @@ FRM_RCOUT_Set($@)
     FRM_Client_FirmataDevice($hash)->rcoutput_send_code($command, $hash->{PIN}, @code);
   };
   return $@;
+}
+
+# FRM_RCOUT_Get behaves as CUL_Get so that 10_IT can use FRM_RCOUT as IODev
+sub
+FRM_RCOUT_Get($@)
+{
+  my ($self, $space, $get, $codeCommand) = @_;
+  my ($code) = $codeCommand =~ /is([01fF]+)/;
+  my $set = FRM_RCOUT_Set($self, $self->{NAME}, "tristateCode", $code);
+  return "raw => $codeCommand";
 }
 
 1;
