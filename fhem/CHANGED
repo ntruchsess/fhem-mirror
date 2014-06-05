@@ -1,5 +1,55 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on it.
+  - bugfix:  SYSMON: prevent some warnings
+  - change:  SYSMONremoved support for old format of filesystem reading
+  - change:  moved 98_openweathermap.pm to contrib
+             moved 98_geodata.pm to contrib
+             moved 55_BBB_BMP180.pm to contrib
+  - change:  honor DURATION in 57_Calendar.pm
+  - bugfix:  YAMAHA_AVR: don't let FHEM hang anymore, when the receiver
+             is not reachable
+  - change:  55_GDS.pm: use Blocking.pm for retrieval of large files
+  - change:  YAMAHA_BD: make YAMAHA_BD more performant by using non-blocking
+             HTTP request (from HttpUtils.pm)
+  - added:   YAMAHA_BD: new set command trickPlay and more remoteControl
+             commands. new reading trickPlay
+  - added:   new module 98_statistics.pm: hourly, daily, monthly, yearly
+             statistics for min/avg/max/delta/duration of selected readings
+  - added:   new module 52_I2C_MCP23017.pm (klausw)
+  - feature: Dashboard Configuration-Dialog for Tabs
+  - feature: new module 33_readingsHistory.pm added (justme1968)
+  - feature: new command copy (justme1968)
+  - feature: enabled GIF, PNG and JPG as background image formats, enabled 
+             relative font size changed and perl specials for font size
+             in 02_RSS.pm
+  - feature: YAMAHA_AVR: new set commands and readings for controlling
+             the sound output behavior (Enhancer, DSP and straight 
+             output) and sleep timer. For details, see commandref.
+  - bugfix:  configdb filemove not working after previous changes 
+  - change:  IMPORTANT CHANGES TO configDB!
+             changed: all files will be imported as binary
+             changed: all existing textfiles will be moved to binary
+             removed: command binfileimport
+             added: sorted write and read of configuration data
+  - bugfix:  SYSMON: css class name (sysmon)
+  - feature: option to determine the number of icons from WeatherAsHtml
+  - feature: DbLog: (thanks to betateilchen)
+             * added new global modules function $hash->{DbLog_splitFn}
+               to let split the generated events by the own module
+               into readingsname, value and unit 
+             * added SVG_sampleDataFn
+             * added FW_detailFn
+  - added:   new module contrib/97_SprinkleControl.pm (tobiasfaust)
+  - added:   new module contrib/98_Sprinkle.pm (tobiasfaust)
+             both modules helps to control the sprinkles in your garden
+             --> take a look to the Wiki-Article 
+             http://www.fhemwiki.de/wiki/Bew%C3%A4sserungssteuerung
+  - feature: FB_CALLMONITOR: new reading "missed_call_line" indicating
+             the line number which received the missed call
+  - feature: YAMAHA_AVR current* readings will be erased in case they
+             not applicable
+  - feature: YAMAHA_AVR currentTitle available for TUNER
+  - feature: new Method: SYSMON_getValues([desired keys])
   - feature: JSONMETER: hourly statistics
   - feature: configdb: new command search
   - feature: LUXTRONIK2: estimation of electrical power consumption, 

@@ -73,35 +73,66 @@
 #
 # 2014-04-27 - added     new functions for binfile handling
 #
+# 2014-05-11 - removed   command binfileimport
+#              changed   store all files as binary
+#              added     _cfgDB_Move to move all files from text 
+#                        to binary filesave on first load of configDB
+#
+# 2014-05-12 - added     sorted write & read for config data
+#
+# 2014-05-15 - fixed     handling of multiline defs
+#
+# 2014-05-20 - removed   no longer needed functions for file handling
+#              changed   code improvement; use strict; use warnings;
+#
 ##############################################################################
 #
 
+use strict;
+use warnings;
 use DBI;
-#use Data::Dumper; # for debugging only
 
 ##################################################
 # Forward declarations for functions in fhem.pl
 #
 sub AnalyzeCommandChain($$;$);
-sub AttrVal($$$);
-sub Debug($);
 sub Log3($$$);
-sub GlobalAttr($$$$);
 
 ##################################################
 # Forward declarations inside this library
 #
+sub cfgDB_AttrRead($);
+sub cfgDB_Init();
+sub cfgDB_FileRead($);
+sub cfgDB_FileUpdate($);
+sub cfgDB_Fileversion($$);
+sub cfgDB_FileWrite($@);
+sub cfgDB_FW_fileList($$@);
+sub cfgDB_Read99();
+sub cfgDB_ReadAll($);
+sub cfgDB_SaveCfg();
+sub cfgDB_SaveState();
+sub cfgDB_svnId();
 
-sub _cfgDB_Connect;
-sub _cfgDB_InsertLine($$$);
+sub _cfgDB_binFileimport($$;$);
+sub _cfgDB_Connect();
+sub _cfgDB_Diff($$);
+sub __cfgDB_Diff($$$);
+sub _cfgDB_InsertLine($$$$);
 sub _cfgDB_Execute($@);
+sub _cfgDB_Filedelete($);
+sub _cfgDB_Fileexport($);
+sub _cfgDB_Filelist(;$);
+sub _cfgDB_Info();
+sub _cfgDB_Migrate();
+sub _cfgDB_Move();
 sub _cfgDB_ReadCfg(@);
 sub _cfgDB_ReadState(@);
-sub _cfgDB_Rotate($);
-sub _cfgDB_Uuid;
-sub _cfgDB_Info;
-sub _cfgDB_Filelist(;$);
+sub _cfgDB_Recover($);
 sub _cfgDB_Reorg(;$$);
+sub _cfgDB_Rotate($);
+sub _cfgDB_Search($$;$);
+sub _cfgDB_Uuid();
 
 ##################################################
 # Read configuration file for DB connection
@@ -122,7 +153,8 @@ my $cfgDB_dbuser	= $dbconfig{user};
 my $cfgDB_dbpass	= $dbconfig{password};
 my $cfgDB_dbtype;
 
-(%dbconfig, @config) = (undef,undef);
+%dbconfig = ();
+@config   = ();
 
 if($cfgDB_dbconn =~ m/pg:/i) {
 	$cfgDB_dbtype ="POSTGRESQL";
@@ -134,13 +166,15 @@ if($cfgDB_dbconn =~ m/pg:/i) {
 	$cfgDB_dbtype = "unknown";
 }
 
+$attr{configdb}{nostate} = 1 if($ENV{'cfgDB_nostate'});
+
 ##################################################
 # Basic functions needed for DB configuration
 # directly called from fhem.pl
 #
 
 # initialize database, create tables if necessary
-  sub cfgDB_Init {
+sub cfgDB_Init() {
 ##################################################
 #	Create non-existing database tables 
 #	Create default config entries if necessary
@@ -159,36 +193,55 @@ if($cfgDB_dbconn =~ m/pg:/i) {
 	my $count = $fhem_dbh->selectrow_array('SELECT count(*) FROM fhemconfig');
 	if($count < 1) {
 #		insert default entries to get fhem running
+		$fhem_dbh->commit();
 		my $uuid = _cfgDB_Uuid;
 		$fhem_dbh->do("INSERT INTO fhemversions values (0, '$uuid')");
-		_cfgDB_InsertLine($fhem_dbh, $uuid, '#created by cfgDB_Init');
-		_cfgDB_InsertLine($fhem_dbh, $uuid, 'attr global logfile ./log/fhem-%Y-%m-%d.log');
-		_cfgDB_InsertLine($fhem_dbh, $uuid, 'attr global modpath .');
-		_cfgDB_InsertLine($fhem_dbh, $uuid, 'attr global userattr devStateIcon devStateStyle icon sortby webCmd');
-		_cfgDB_InsertLine($fhem_dbh, $uuid, 'attr global verbose 3');
-		_cfgDB_InsertLine($fhem_dbh, $uuid, 'define telnetPort telnet 7072 global');
-		_cfgDB_InsertLine($fhem_dbh, $uuid, 'define WEB FHEMWEB 8083 global');
-		_cfgDB_InsertLine($fhem_dbh, $uuid, 'define Logfile FileLog ./log/fhem-%Y-%m-%d.log fakelog');
+		_cfgDB_InsertLine($fhem_dbh, $uuid, '#created by cfgDB_Init',0);
+		_cfgDB_InsertLine($fhem_dbh, $uuid, 'attr global logfile ./log/fhem-%Y-%m-%d.log',1);
+		_cfgDB_InsertLine($fhem_dbh, $uuid, 'attr global modpath .',2);
+		_cfgDB_InsertLine($fhem_dbh, $uuid, 'attr global userattr devStateIcon devStateStyle icon sortby webCmd',3);
+		_cfgDB_InsertLine($fhem_dbh, $uuid, 'attr global verbose 3',4);
+		_cfgDB_InsertLine($fhem_dbh, $uuid, 'define telnetPort telnet 7072 global',5);
+		_cfgDB_InsertLine($fhem_dbh, $uuid, 'define WEB FHEMWEB 8083 global',6);
+		_cfgDB_InsertLine($fhem_dbh, $uuid, 'define Logfile FileLog ./log/fhem-%Y-%m-%d.log fakelog',7);
 	}
 
 #	create TABLE fhemstate if nonexistent
 	$fhem_dbh->do("CREATE TABLE IF NOT EXISTS fhemstate(stateString TEXT)");
 
-#	create TABLE fhemfilesave if nonexistent
-	$fhem_dbh->do("CREATE TABLE IF NOT EXISTS fhemfilesave(filename TEXT, line TEXT)");
-
 #	create TABLE fhembinfilesave if nonexistent
 	$fhem_dbh->do("CREATE TABLE IF NOT EXISTS fhembinfilesave(filename TEXT, content BLOB)");
+
+	$fhem_dbh->commit();
+
+#	check if we need to move files from text to binary
+	my $needmove;
+	
+	if($cfgDB_dbtype eq "SQLITE") {
+		$needmove = $fhem_dbh->selectrow_array( "SELECT count(1) FROM sqlite_master WHERE name='fhemfilesave'" );
+	}
+
+	if($cfgDB_dbtype eq "MYSQL") {
+		my $result = $fhem_dbh->do("SHOW TABLES LIKE 'fhemfilesave'"); 
+		$needmove = ($result > 0) ? 1 : 0; 
+	}
+
+	if($cfgDB_dbtype eq "POSTGRESQL") {
+		$needmove = $fhem_dbh->selectrow_array("SELECT count(1) from pg_catalog.pg.tables where tablename = 'fhemfilesave'"); 
+	}
 
 #	close database connection
 	$fhem_dbh->commit();
 	$fhem_dbh->disconnect();
 
+#	move all files from text filesave to binary if not already done
+	_cfgDB_Move if($needmove);
+
 	return;
 }
 
 # read attributes
-  sub cfgDB_AttrRead($) {
+sub cfgDB_AttrRead($) {
 	my ($readSpec) = @_;
 	my ($row, $sql, @line, @rets);
 	my $fhem_dbh = _cfgDB_Connect;
@@ -199,82 +252,78 @@ if($cfgDB_dbconn =~ m/pg:/i) {
 	my $sth = $fhem_dbh->prepare( $sql );  
 	$sth->execute();
 	while (@line = $sth->fetchrow_array()) {
-		$row = "$line[1],$line[2],$line[3]";
 		if($line[1] eq 'configdb') {
 			$attr{configdb}{$line[2]} = $line[3];
 		} else {
-			push @rets, $row;
+			push @rets, "attr $line[1] $line[2] $line[3]";
 		}
 	}
 	$fhem_dbh->disconnect();
 	return @rets;
 }
 
-# functions for filehandling to be called
-# from fhem.pl and other fhem modules
-
-  sub cfgDB_FileRead($) {
+# generic file functions called from fhem.pl
+sub cfgDB_FileRead($) {
 	my ($filename) = @_;
+	my ($err, @ret, $counter);
 	my $fhem_dbh = _cfgDB_Connect;
-	my $sth = $fhem_dbh->prepare( "SELECT line FROM fhemfilesave WHERE filename LIKE '$filename'" );  
+	my $sth = $fhem_dbh->prepare( "SELECT content FROM fhembinfilesave WHERE filename LIKE '$filename'" );
 	$sth->execute();
-	my @outfile;
-	while (my @line = $sth->fetchrow_array()) {
-		push @outfile, "$line[0]";
-	}
+	my $blobContent = $sth->fetchrow_array();
 	$sth->finish();
 	$fhem_dbh->disconnect();
-	return (int(@outfile)) ? @outfile : undef;
-}
-
-  sub cfgDB_FileWrite($@) {
-	my ($filename,@content) = @_;
-
-	my $fhem_dbh = _cfgDB_Connect;
-	$fhem_dbh->do("delete from fhemfilesave where filename = '$filename'");
-	my $sth = $fhem_dbh->prepare('INSERT INTO fhemfilesave values (?, ?)');
-	foreach (@content){
-		$sth->execute($filename,rtrim($_));
+	$counter = length($blobContent);
+	if($counter) {
+		@ret = split(/\n/,$blobContent);
+		$err = "";
+	} else {
+		@ret = undef;
+		$err = "Error on reading $filename from database!";
 	}
+	return ($err, @ret);
+}
+sub cfgDB_FileWrite($@) {
+	my ($filename,@content) = @_;
+#	chomp(@content) if($filename =~ m/.gplot$/);
+	my $fhem_dbh = _cfgDB_Connect;
+	$fhem_dbh->do("delete from fhembinfilesave where filename = '$filename'");
+	my $sth = $fhem_dbh->prepare('INSERT INTO fhembinfilesave values (?, ?)');
+	$sth->execute($filename,join("\n", @content));
 	$sth->finish();
 	$fhem_dbh->commit();
 	$fhem_dbh->disconnect();
 	return;
 }
-
-  sub cfgDB_FileUpdate($) {
+sub cfgDB_FileUpdate($) {
 	my ($filename) = @_;
 	my $fhem_dbh = _cfgDB_Connect;
-	my $id = $fhem_dbh->selectrow_array("SELECT filename from fhemfilesave where filename = '$filename'");
+	my $id = $fhem_dbh->selectrow_array("SELECT filename from fhembinfilesave where filename = '$filename'");
 	$fhem_dbh->disconnect();
 	if($id) {
-		_cfgDB_Fileimport($filename,1) if $id;
+		my $filesize = -s $filename;
+		_cfgDB_Fileimport($filename,$filesize,1) if $id;
 		Log 5, "file $filename updated in configDB";
 	}
 	return "";
 }
 
-# read and execute all commands from
-# fhemconfig and fhemstate
-
-  sub cfgDB_ReadAll($){
+# read and execute fhemconfig and fhemstate
+sub cfgDB_ReadAll($) {
 	my ($cl) = @_;
-	my $ret;
+	my ($ret, @dbconfig);
 	# add Config Rows to commandfile
-	my @dbconfig = _cfgDB_ReadCfg(@dbconfig);
+	@dbconfig = _cfgDB_ReadCfg(@dbconfig);
 	# add State Rows to commandfile
-	@dbconfig = _cfgDB_ReadState(@dbconfig);
+	@dbconfig = _cfgDB_ReadState(@dbconfig) unless $attr{configdb}{nostate};
 	# AnalyzeCommandChain for all entries
-	$ret .= _cfgDB_Execute($cl, @dbconfig);
+	$ret = _cfgDB_Execute($cl, @dbconfig);
 	return $ret if($ret);
 	return undef;
 }
 
-# rotate all older versions to versionnumber+1
 # save running configuration to version 0
-
-  sub cfgDB_SaveCfg {
-	my (%devByNr, @rowList);
+sub cfgDB_SaveCfg() {
+	my (%devByNr, @rowList, %comments, $t, $out);
 
 	map { $devByNr{$defs{$_}{NR}} = $_ } keys %defs;
 
@@ -300,9 +349,9 @@ if($cfgDB_dbconn =~ m/pg:/i) {
 			my $def = $defs{$d}{DEF};
 			if(defined($def)) {
 				$def =~ s/;/;;/g;
-				$def =~ s/\n/\n /g;
+				$def =~ s/\n/\\\n/g;
 			} else {
-				$dev = "";
+				$def = "";
 			}
 			push @rowList, "define $d $defs{$d}{TYPE} $def";
 		}
@@ -328,16 +377,21 @@ if($cfgDB_dbconn =~ m/pg:/i) {
 	$t = localtime;
 	$out = "#created $t";
 	push @rowList, $out;
-	foreach (@rowList) { _cfgDB_InsertLine($fhem_dbh, $uuid, $_); }
+	my $counter = 0;
+	foreach (@rowList) { 
+		_cfgDB_InsertLine($fhem_dbh, $uuid, $_, $counter); 
+		$counter++;
+	}
 	$fhem_dbh->commit();
 	$fhem_dbh->disconnect();
-	my $maxVersions = AttrVal('configdb','maxversions',0);
+	my $maxVersions = $attr{configdb}{maxversions};
+	$maxVersions = ($maxVersions) ? $maxVersions : 0;
 	_cfgDB_Reorg($maxVersions,1) if($maxVersions);
 	return 'configDB saved.';
 }
 
 # save statefile
-  sub cfgDB_SaveState {
+sub cfgDB_SaveState() {
 	my ($out,$val,$r,$rd,$t,@rowList);
 
 	$t = localtime;
@@ -391,12 +445,12 @@ if($cfgDB_dbconn =~ m/pg:/i) {
 }
 
 # return SVN Id, called by fhem's CommandVersion
-  sub cfgDB_svnId { 
+sub cfgDB_svnId() { 
 	return "# ".'$Id$' 
 }
 
 # return filelist depending on directory and regexp
-  sub cfgDB_FW_fileList(@$) {
+sub cfgDB_FW_fileList($$@) {
 	my ($dir,$re,@ret) = @_;
 	my @files = split(/\n/, _cfgDB_Filelist('notitle'));
 	foreach my $f (@files) {
@@ -409,10 +463,10 @@ if($cfgDB_dbconn =~ m/pg:/i) {
 }
 
 # read filelist containing 99_ files in database
-  sub cfgDB_Read99() {
+sub cfgDB_Read99() {
   my $ret;
   my $fhem_dbh = _cfgDB_Connect;
-  my $sth = $fhem_dbh->prepare( "SELECT filename FROM fhemfilesave WHERE filename like '%/99_%.pm' group by filename" );
+  my $sth = $fhem_dbh->prepare( "SELECT filename FROM fhembinfilesave WHERE filename like '%/99_%.pm' group by filename" );
   $sth->execute();
   while (my $line = $sth->fetchrow_array()) {
     $line =~ m,^(.*)/([^/]*)$,; # Split into dir and file
@@ -425,15 +479,13 @@ if($cfgDB_dbconn =~ m/pg:/i) {
 }
 
 # return SVN Id from file stored in database
-  sub cfgDB_Fileversion($$) {
+sub cfgDB_Fileversion($$) {
   my ($file,$ret) = @_;
-  my $fhem_dbh = _cfgDB_Connect;
-  my $id = $fhem_dbh->selectrow_array("SELECT line from fhemfilesave where filename = '$file' and line like '%$Id:%'");
-  $fhem_dbh->disconnect();
-  $ret = ($id) ? $id : $ret;
+  $ret = "No Id found for $file";
+  my ($err,@in) = cfgDB_FileRead($file);
+  foreach(@in){ $ret = $_ if($_ =~ m/# \$Id:/); }
   return $ret;
 }
-
 
 ##################################################
 # Basic functions needed for DB configuration
@@ -441,7 +493,7 @@ if($cfgDB_dbconn =~ m/pg:/i) {
 #
 
 # connect do database
-sub _cfgDB_Connect {
+sub _cfgDB_Connect() {
 	my $fhem_dbh = DBI->connect(
 	"dbi:$cfgDB_dbconn", 
 	$cfgDB_dbuser,
@@ -452,25 +504,26 @@ sub _cfgDB_Connect {
 }
 
 # add configuration entry into fhemconfig
-sub _cfgDB_InsertLine($$$) {
-	my ($fhem_dbh, $uuid, $line) = @_;
+sub _cfgDB_InsertLine($$$$) {
+	my ($fhem_dbh, $uuid, $line, $counter) = @_;
 	my ($c,$d,$p1,$p2) = split(/ /, $line, 4);
 	my $sth = $fhem_dbh->prepare('INSERT INTO fhemconfig values (?, ?, ?, ?, ?, ?)');
-	$sth->execute($c, $d, $p1, $p2, -1, $uuid);
+	$sth->execute($c, $d, $p1, $p2, $counter, $uuid);
 	return;
 }
 
 # pass command table to AnalyzeCommandChain
 sub _cfgDB_Execute($@) {
 	my ($cl, @dbconfig) = @_;
-	my ($ret,$r2);
-	foreach (@dbconfig){
-		my $l = $_;
-		$l =~ s/[\r\n]//g;
-		$r2 = AnalyzeCommandChain($cl, $l);
-		$ret .= "$r2\n" if($r2);
+	my (@ret);
+
+	foreach my $l (@dbconfig) {
+		$l =~ s/[\r\n]/\n/g;
+		$l =~ s/\\\n/\n/g;
+		my $tret = AnalyzeCommandChain($cl, $l);
+		push @ret, $tret if(defined($tret));
 	}
-	return $ret if($ret);
+	return join("\n", @ret) if(@ret);
 	return undef;
 }
 
@@ -481,9 +534,9 @@ sub _cfgDB_ReadCfg(@) {
 	my $fhem_dbh = _cfgDB_Connect;
 	my ($sth, @line, $row);
 
-# using a join would be much nicer, but does not work due to sort of join's result
+# maybe this will be done with join later
 	my $uuid = $fhem_dbh->selectrow_array('SELECT versionuuid FROM fhemversions WHERE version = 0');
-	$sth = $fhem_dbh->prepare( "SELECT * FROM fhemconfig WHERE versionuuid = '$uuid' and device <>'configdb'" );  
+	$sth = $fhem_dbh->prepare( "SELECT * FROM fhemconfig WHERE versionuuid = '$uuid' and device <>'configdb' order by version" );  
 
 	$sth->execute();
 	while (@line = $sth->fetchrow_array()) {
@@ -521,7 +574,7 @@ sub _cfgDB_Rotate($) {
 }
 
 # return a UUID based on DB-model
-sub _cfgDB_Uuid{
+sub _cfgDB_Uuid() {
 	my $fhem_dbh = _cfgDB_Connect;
 	my $uuid;
 	$uuid = $fhem_dbh->selectrow_array('select lower(hex(randomblob(16)))') if($cfgDB_dbtype eq 'SQLITE');
@@ -536,8 +589,8 @@ sub _cfgDB_Uuid{
 # not called from fhem.pl directly
 #
 
-#   migrate existing fhem config into database
-sub _cfgDB_Migrate {
+# migrate existing fhem config into database
+sub _cfgDB_Migrate() {
 	my $ret;
 	$ret = "Starting migration...\n";
 	Log3('configDB',4,'Starting migration.');
@@ -557,11 +610,11 @@ sub _cfgDB_Migrate {
 
 }
 
-#   show database statistics
-sub _cfgDB_Info {
-	my ($l, @r, @row_ary, $f);
+# show database statistics
+sub _cfgDB_Info() {
+	my ($l, @r, $f);
 	for my $i (1..65){ $l .= '-';}
-#	$l .= "\n";
+
 	push @r, $l;
 	push @r, " configDB Database Information";
 	push @r, $l;
@@ -571,17 +624,21 @@ sub _cfgDB_Info {
 	push @r, " dbuser: $cfgDB_dbuser" if !$attr{configdb}{private};
 	push @r, " dbpass: $cfgDB_dbpass" if !$attr{configdb}{private};
 	push @r, " dbtype: $cfgDB_dbtype";
-	push @r, " Unknown dbmodel type in configuration file." if $dbtype eq 'unknown';
-	push @r, " Only Mysql, Postgresql, SQLite are fully supported." if $dbtype eq 'unknown';
+	push @r, " Unknown dbmodel type in configuration file." if $cfgDB_dbtype eq 'unknown';
+	push @r, " Only Mysql, Postgresql, SQLite are fully supported." if $cfgDB_dbtype eq 'unknown';
 	push @r, $l;
 
 	my $fhem_dbh = _cfgDB_Connect;
 	my ($sql, $sth, @line, $row);
 
 # read versions table statistics
+	my $maxVersions = $attr{configdb}{maxversions};
+	$maxVersions = ($maxVersions) ? $maxVersions : 0;
+	push @r, " max Versions: $maxVersions" if($maxVersions);
 	my $count;
 	$count = $fhem_dbh->selectrow_array('SELECT count(*) FROM fhemconfig');
-	push @r, " config: $count entries\n";
+	push @r, " config: $count entries";
+	push @r, "";
 
 # read versions creation time
 	$sql = "SELECT * FROM fhemconfig as c join fhemversions as v on v.versionuuid=c.versionuuid ".
@@ -610,11 +667,8 @@ sub _cfgDB_Info {
 	}
 	push @r, $l;
 
-# count files stored in database
-	$row = $fhem_dbh->selectall_arrayref("SELECT filename from fhemfilesave group by filename");
-	$count = @$row;
 	$row = $fhem_dbh->selectall_arrayref("SELECT filename from fhembinfilesave group by filename");
-	$count += @$row;
+	$count = @$row;
 	$count = ($count)?$count:'No';
 	$f = ("$count" ne '1') ? "s" : "";
 	$row = " filesave: $count file$f stored in database";
@@ -626,7 +680,7 @@ sub _cfgDB_Info {
 	return join("\n", @r);
 }
 
-#   recover former config from database archive
+# recover former config from database archive
 sub _cfgDB_Recover($) {
 	my ($version) = @_;
 	my ($cmd, $count, $ret);
@@ -669,10 +723,10 @@ sub _cfgDB_Recover($) {
 	return $ret;
 }
 
-#   delete old configurations
+# delete old configurations
 sub _cfgDB_Reorg(;$$) {
 	my ($lastversion,$quiet) = @_;
-	$lastversion = ($lastversion > 0) ? $lastversion : 3;
+	$lastversion = (defined($lastversion)) ? $lastversion : 3;
 	Log3('configDB', 4, "DB Reorg started, keeping last $lastversion versions.");
 	my $fhem_dbh = _cfgDB_Connect;
 	$fhem_dbh->do("delete FROM fhemconfig   where versionuuid in (select versionuuid from fhemversions where version > $lastversion)");
@@ -683,41 +737,21 @@ sub _cfgDB_Reorg(;$$) {
 	return " Result after database reorg:\n"._cfgDB_Info;
 }
 
-#   list device(s) from given version
-sub _cfgDB_List(;$$) {
-	my ($search,$searchversion) = @_;
-	$search = $search ? $search : "%";
-	$searchversion = $searchversion ? $searchversion : 0;
-	my $fhem_dbh = _cfgDB_Connect;
-	my ($sql, $sth, @line, $row, @result, $ret);
-	$sql = "SELECT command, device, p1, p2 FROM fhemconfig as c join fhemversions as v ON v.versionuuid=c.versionuuid ".
-	       "WHERE v.version = '$searchversion' AND command not like '#create%' AND device like '$search%' ORDER BY lower(device),command DESC";
-	$sth = $fhem_dbh->prepare( $sql);
-	$sth->execute();
-	push @result, "search result for device: $search in version: $searchversion";
-	push @result, "--------------------------------------------------------------------------------";
-	while (@line = $sth->fetchrow_array()) {
-		$row = "$line[0] $line[1] $line[2] $line[3]";
-		push @result, "$row";
-	}
-	$fhem_dbh->disconnect();
-	$ret = join("\n", @result);
-	return $ret;
-}
-
-sub _cfgDB_Search($;$) {
-	my ($search,$searchversion) = @_;
+# search for device or fulltext in db
+sub _cfgDB_Search($$;$) {
+	my ($search,$searchversion,$dsearch) = @_;
 	return 'Syntax error.' if(!(defined($search)));
-	$searchversion = $searchversion ? $searchversion : 0;
 	my $fhem_dbh = _cfgDB_Connect;
-	my ($sql, $sth, @line, $row, @result, $ret);
-	$sql = "SELECT command, device, p1, p2 FROM fhemconfig as c join fhemversions as v ON v.versionuuid=c.versionuuid ".
-	       "WHERE v.version = '$searchversion' AND command not like '#create%' ".
-	       "AND (device like '$search%' OR P1 like '$search%' OR P2 like '$search%') ".
-	       "ORDER BY lower(device),command DESC";
+	my ($sql, $sth, @line, $row, @result, $ret, $text);
+	$sql  = "SELECT command, device, p1, p2 FROM fhemconfig as c join fhemversions as v ON v.versionuuid=c.versionuuid ";
+	$sql .= "WHERE v.version = '$searchversion' AND command not like '#create%' ";
+	$sql .= "AND device like '$search%' " if($dsearch);
+	$sql .= "AND (device like '$search%' OR P1 like '$search%' OR P2 like '$search%') " if(!$dsearch);
+	$sql .= "ORDER BY lower(device),command DESC";
 	$sth = $fhem_dbh->prepare( $sql);
 	$sth->execute();
-	push @result, "search result for: $search in version: $searchversion";
+	$text = " device" if($dsearch);
+	push @result, "search result for$text: $search in version: $searchversion";
 	push @result, "--------------------------------------------------------------------------------";
 	while (@line = $sth->fetchrow_array()) {
 		$row = "$line[0] $line[1] $line[2] $line[3]";
@@ -728,7 +762,7 @@ sub _cfgDB_Search($;$) {
 	return $ret;
 }
 
-#   called from cfgDB_Diff
+# called from cfgDB_Diff
 sub __cfgDB_Diff($$$) {
 	my ($fhem_dbh,$search,$searchversion) = @_;
 	my ($sql, $sth, @line, $ret);
@@ -742,7 +776,7 @@ sub __cfgDB_Diff($$$) {
 	return $ret;
 }
 
-#   compare device configurations from 2 versions
+# compare device configurations from 2 versions
 sub _cfgDB_Diff($$) {
 	my ($search,$searchversion) = @_;
 	use Text::Diff;
@@ -757,122 +791,56 @@ sub _cfgDB_Diff($$) {
 	return $ret;
 }
 
-sub _cfgDB_AttrTypeSet($$){
-	my ($dName,$tName) = @_;
-	my @typeAttr = cfgDB_AttrRead($tName);
-	foreach my $ta (@typeAttr) {
-		my (undef,$n,$v) = split(/,/,$ta);
-		$attr{$dName}{$n} = $v;
-	}
-	return;
-}
-
 ##################################################
 # functions used for file handling
+# called by 98_configdb.pm
 #
 
-#   find dbtable for file
-sub _cfgDB_Filefind($) {
-	my ($filename) = @_;
-	my $fhem_dbh = _cfgDB_Connect;
-	my @dbtable = ('fhemfilesave','fhembinfilesave');
-	my $retfile;
-	foreach (@dbtable) {
-		$retfile = $_;
-		my $ret = $fhem_dbh->selectrow_array("SELECT COUNT(*) from $retfile where filename = '$filename'");
-		last if $ret;
-		$retfile = undef;
-	}
-	$fhem_dbh->disconnect();
-	return $retfile;
-}
-
-#   delete file from database
+# delete file from database
 sub _cfgDB_Filedelete($) {
 	my ($filename) = @_;
-	my $dbtable = _cfgDB_Filefind($filename);
-	return "File $filename not found in database." if(!$dbtable);
 	my $fhem_dbh = _cfgDB_Connect;
-	my $ret = $fhem_dbh->do("delete from $dbtable where filename = '$filename'");
+	my $ret = $fhem_dbh->do("delete from fhembinfilesave where filename = '$filename'");
 	$fhem_dbh->commit();
 	$fhem_dbh->disconnect();
 	if($ret > 0) {
-		$ret = "File $filename deleted from database ($ret lines)";
+		$ret = "File $filename deleted from database.";
 	} else {
 		$ret = "File $filename not found in database.";
 	}
 	return $ret;
 }
 
-#   export file from database to filesystem
+# export file from database to filesystem
 sub _cfgDB_Fileexport($) {
 	my ($filename) = @_;
-	my $dbtable = _cfgDB_Filefind($filename);
-	return "File $filename not found in database." if(!$dbtable);
-	my $counter  = 0;
-	my $binfile  = ($dbtable eq 'fhembinfilesave') ? 1 : 0;
-	my $sunit    = ($binfile) ? 'bytes' : 'lines';
 	my $fhem_dbh = _cfgDB_Connect;
-	my $sth      = $fhem_dbh->prepare( "SELECT * FROM $dbtable WHERE filename = '$filename'" );  
+	my $sth      = $fhem_dbh->prepare( "SELECT content FROM fhembinfilesave WHERE filename = '$filename'" );  
 	$sth->execute();
+	my $blobContent = $sth->fetchrow_array();
+	my $counter = length($blobContent);
+	return "No data found for file $filename" unless $counter;
 
-	if($binfile) {          # write binfile
+	open( FILE,">$filename" );
+		binmode(FILE);
+		print FILE $blobContent;
+	close( FILE );
 
-		my $blobContent = $sth->fetchrow_array();
-		$counter = length($blobContent);
-		open( FILE,">$filename" );
-			binmode(FILE);
-			print FILE $blobContent;
-		close( FILE );
-
-	} else {                # write textfile
-
-		open( FILE, ">$filename" );
-		while (my @line = $sth->fetchrow_array()) {
-			$counter++;
-			print FILE $line[1], "\n";
-		}
-		close ( FILE );
-
-	}
-	
 	$sth->finish();
 	$fhem_dbh->disconnect();
-	return "$counter $sunit written from database into file $filename";
+	return "$counter bytes written from database into file $filename";
 }
 
-#   import text-file into database
-sub _cfgDB_Fileimport($;$) {
-	my ($filename,$doDelete) = @_;
-	$doDelete = (defined($doDelete)) ? 1 : 0;
-	my $counter = 0;
-	my $fhem_dbh = _cfgDB_Connect;
-	$fhem_dbh->do("delete from fhemfilesave where filename = '$filename'");
-	my $sth = $fhem_dbh->prepare('INSERT INTO fhemfilesave values (?, ?)');
-	open (in,"<$filename") || die $!;
-	while (<in>){
-		$counter++;
-		my $line = substr($_,0,length($_)-1);
-		$sth->execute($filename, $line);
-	}
-	close in;
-	$sth->finish();
-	$fhem_dbh->commit();
-	$fhem_dbh->disconnect();
-	unlink($filename) if($attr{configdb}{deleteimported} || $doDelete );
-	return "$counter lines written from file $filename to database";
-}
-
-#   import bin-file into database
-sub _cfgDB_binFileimport($;$) {
+# import file into database
+sub _cfgDB_binFileimport($$;$) {
 	my ($filename,$filesize,$doDelete) = @_;
 	$doDelete = (defined($doDelete)) ? 1 : 0;
 
-	open (in,"<$filename") || die $!;
+	open (inFile,"<$filename") || die $!;
 		my $blobContent;
-		binmode(in);
-		my $readBytes = read(in, $blobContent, $filesize);
-	close(in);
+		binmode(inFile);
+		my $readBytes = read(inFile, $blobContent, $filesize);
+	close(inFile);
 	my $fhem_dbh = _cfgDB_Connect;
 	$fhem_dbh->do("delete from fhembinfilesave where filename = '$filename'");
 	my $sth = $fhem_dbh->prepare('INSERT INTO fhembinfilesave values (?, ?)');
@@ -885,14 +853,14 @@ sub _cfgDB_binFileimport($;$) {
 	return "$readBytes bytes written from file $filename to database";
 }
 
-#   show a list containing all file(names) in database
+# list all files stored in database
 sub _cfgDB_Filelist(;$) {
 	my ($notitle) = @_;
 	my $ret =	"Files found in database:\n".
 						"------------------------------------------------------------\n";
 	$ret = "" if $notitle;
 	my $fhem_dbh = _cfgDB_Connect;
-	my @dbtable = ('fhemfilesave','fhembinfilesave');
+	my @dbtable = ('fhembinfilesave');
 	foreach (@dbtable) {
 		my $sth = $fhem_dbh->prepare( "SELECT filename FROM $_ group by filename order by filename" );  
 		$sth->execute();
@@ -905,73 +873,41 @@ sub _cfgDB_Filelist(;$) {
 	return $ret;
 }
 
-
 #######################################
 #
-# DEPRECATED functions
-# will be removed 2014-06-15
+# temporary inserted funktions
+# for data migration
+# and database maintenance
 #
 #######################################
 
-
-# replaced by cfgDB_AttrRead()
-sub cfgDB_GlobalAttr {
-	my (@line, $row);
-
+sub _cfgDB_Move() {
 	my $fhem_dbh = _cfgDB_Connect;
-	my $uuid = $fhem_dbh->selectrow_array('SELECT versionuuid FROM fhemversions WHERE version = 0');
-	my $sth = $fhem_dbh->prepare( "SELECT * FROM fhemconfig WHERE DEVICE = ( ? ) and VERSIONUUID = '$uuid'" );  
-
-	$sth->execute('global');
-	while (@line = $sth->fetchrow_array()) {
-		$row = "$line[0] $line[1] $line[2] $line[3]";
-		$line[3] =~ s/#.*//;
-		$line[3] =~ s/ .*$//;
-		$attr{global}{$line[2]} = $line[3];
-		GlobalAttr("set", "global", $line[2], $line[3]);
+	my $sth = $fhem_dbh->prepare( "select filename from fhemfilesave group by filename" );
+	$sth->execute();
+	while (my @file = $sth->fetchrow_array()) {
+		my @in = ();
+		Log3(undef, 1, "configDB: Moving $file[0] to binary filesave");
+		my $sth2 = $fhem_dbh->prepare( "SELECT * FROM fhemfilesave WHERE filename LIKE '$file[0]'" );  
+		$sth2->execute();
+		while (my @line = $sth2->fetchrow_array()) {
+			push @in, "$line[1]";
+		}
+		$sth2->finish();
+		$fhem_dbh->do("delete from fhembinfilesave where filename LIKE '$file[0]'");
+		$fhem_dbh->commit();
+		my $content = join("\n", @in);
+		my $sth3 = $fhem_dbh->prepare( 'INSERT INTO fhembinfilesave values (?, ?)' );
+		$sth3->execute($file[0],$content);
+		$sth3->finish();
+		$fhem_dbh->do("delete from fhemfilesave where filename = '$file[0]'");
+		$fhem_dbh->commit();
 	}
-
-	$sth->execute('configdb');
-	while (@line = $sth->fetchrow_array()) {
-		$row = "$line[0] $line[1] $line[2] $line[3]";
-		$line[3] =~ s/#.*//;
-		$line[3] =~ s/ .*$//;
-		$attr{configdb}{$line[2]} = $line[3];
-		GlobalAttr("set", "global", $line[2], $line[3]);
-	}
-
+	$fhem_dbh->do("drop table fhemfilesave");
+	$fhem_dbh->commit();
 	$fhem_dbh->disconnect();
 	return;
 }
-
-# deprecated - replaced by cfgDB_FileRead()
-sub _cfgDB_Readfile($) {
-	my ($filename) = @_;
-	my @outfile = cfgDB_FileRead($filename);
-	return (int(@outfile)) ? join("\n",@outfile) : undef;
-}
-
-# deprecated - replaced by cfgDB_FileWrite()
-sub _cfgDB_Writefile($$) {
-	my ($filename,$content) = @_;
-	my @c = split(/\n/,$content);
-	cfgDB_FileWrite($filename,@c);
-	return;
-}
-
-# deprecated - replaced by cfgDB_FileUpdate()
-sub _cfgDB_Updatefile($) {
-	my ($filename) = @_;
-	my $fhem_dbh = _cfgDB_Connect;
-	my $id = $fhem_dbh->selectrow_array("SELECT filename from fhemfilesave where filename = '$filename'");
-	$fhem_dbh->disconnect();
-	if($id) {
-		_cfgDB_Fileimport($filename,1) if $id;
-		Log 5, "file $filename updated in configDB";
-	}
-	return "";
-}
-
 
 1;
 

@@ -1,5 +1,7 @@
 ################################################################
 #
+#  $Id$
+#
 #  (c) 2014 Copyright: Wzut
 #  All rights reserved
 #
@@ -25,6 +27,7 @@
 # add command set IdleNow
 # Version 0.9   - 15.02.14
 # Version 0.8   - 01.02.14 , first version 
+
 
 package main;
 

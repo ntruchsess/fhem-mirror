@@ -1,5 +1,5 @@
 ##############################################
-# $Id: 00_FBAHA.pm 2777 2013-02-20 08:02:01Z rudolfkoenig $
+# $Id$
 package main;
 
 use strict;
@@ -103,7 +103,7 @@ FBAHA_Set($@)
 
     if($data =~ m/^01030010(........)/) {
       $hash->{STATE} =
-      $hash->{READINGS}{state}{VAL} = "Iniitalized";
+      $hash->{READINGS}{state}{VAL} = "Initialized";
       $hash->{READINGS}{state}{TIME} = TimeNow();
       $hash->{HANDLE} = $1;
       Log3 $name, 1,

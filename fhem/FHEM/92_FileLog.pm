@@ -465,7 +465,7 @@ FileLog_logWrapper($)
     }
     FW_pO "<table><tr><td>";
     FW_pO "<td>";
-    my $logtype = $defs{$d}{TYPE};
+    my $logtype = $defs{$d}{NAME};
     my $wl = "&amp;pos=" . join(";", map {"$_=$FW_pos{$_}"} keys %FW_pos);
     my $arg = "$FW_ME/SVG_showLog&dev=$logtype&logdev=$d".
                 "&gplotfile=$type&logfile=$file$wl";
@@ -759,7 +759,8 @@ RESCAN:
       my @lda = split("[_:]", $lastdate{$hd});
       my $ts = "12:00:00";                   # middle timestamp
       $ts = "$lda[1]:30:00" if($hd == 13);
-      my $line = sprintf("%s_%s %0.1f\n", $lda[0],$ts, $h->{last2}-$h->{last1});
+      my $line = sprintf("%s_%s %0.1f\n", $lda[0],$ts,
+                defined($h->{last1}) ? $h->{last2}-$h->{last1} : 0);
 
       if($outf eq "-") {
         $h->{ret} .= $line;

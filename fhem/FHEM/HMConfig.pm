@@ -232,7 +232,7 @@ my $K_actDetID = '000000'; # id of actionDetector
   "00A6" => {name=>"HM-RC-Key4-2"            ,st=>'remote'            ,cyc=>''      ,rxt=>'c:l'    ,lst=>'1,4'          ,chn=>"lock:1:1,unlock:2:2,open:3:3,light:4:4",},
   "00A7" => {name=>"HM-Sen-RD-O"             ,st=>'sensRain'          ,cyc=>''      ,rxt=>''       ,lst=>'1:1,4:1p'     ,chn=>"Rain:1:1,Heating:2:2",},#stc:70 THSensor
   "00A8" => {name=>"HM-WDS30-OT2-SM"         ,st=>'THSensor'          ,cyc=>'12:00' ,rxt=>'c:w:f'  ,lst=>'p'            ,chn=>"T1:1:1,T2:2:2,T1_T2:3:3,T2_T1:4:4,Event:5:5",},
-  "00A9" => {name=>"HM-PB-6-WM55"            ,st=>'remote'            ,cyc=>''      ,rxt=>'c'      ,lst=>'1,4'          ,chn=>"Btn:1:6",},
+  "00A9" => {name=>"HM-PB-6-WM55"            ,st=>'remote'            ,cyc=>''      ,rxt=>'c:l'    ,lst=>'1,4'          ,chn=>"Btn:1:6",},
   "00AB" => {name=>"HM-LC-SW4-BA-PCB"        ,st=>'switch'            ,cyc=>''      ,rxt=>'b'      ,lst=>'1,3'          ,chn=>"Sw:1:4",},
   "00AC" => {name=>"HM-ES-PMSw1-Pl"          ,st=>'powerMeter'        ,cyc=>'00:10' ,rxt=>''       ,lst=>'1:2.3.4.5.6,3:1p,4:3p.4p.5p.6p'
                                                                                                                         ,chn=>"Sw:1:1,Pwr:2:2,SenPwr:3:3,SenI:4:4,SenU:5:5,SenF:6:6"},
@@ -421,7 +421,7 @@ my $K_actDetID = '000000'; # id of actionDetector
   brightness      =>{a=>  4.0,s=>0.4,l=>0,min=>0  ,max=>15      ,c=>''         ,f=>''      ,u=>''    ,d=>1,t=>"Display brightness"},
   energyOpt       =>{a=>  8.0,s=>1.0,l=>0,min=>0  ,max=>127     ,c=>''         ,f=>2       ,u=>'s'   ,d=>1,t=>"energy Option: Duration of ilumination"},
 # sec_mdir
-  cyclicInfoMsg   =>{a=>  9.0,s=>1.0,l=>0,min=>0  ,max=>1       ,c=>'lit'      ,f=>''      ,u=>''    ,d=>1,t=>"cyclic message"          ,lit=>{off=>0,on=>200}},
+  cyclicInfoMsg   =>{a=>  9.0,s=>1.0,l=>0,min=>0  ,max=>1       ,c=>'lit'      ,f=>''      ,u=>''    ,d=>1,t=>"cyclic message"          ,lit=>{off=>0,on=>1,on_100=>200}},
   sabotageMsg     =>{a=> 16.0,s=>1.0,l=>0,min=>0  ,max=>1       ,c=>'lit'      ,f=>''      ,u=>''    ,d=>1,t=>"enable sabotage message" ,lit=>{off=>0,on=>1}},# sc needs 1 - others?
   cyclicInfoMsgDis=>{a=> 17.0,s=>1.0,l=>0,min=>0  ,max=>255     ,c=>''         ,f=>''      ,u=>''    ,d=>1,t=>"cyclic message"},
   lowBatLimit     =>{a=> 18.0,s=>1.0,l=>0,min=>10 ,max=>12      ,c=>''         ,f=>10      ,u=>'V'   ,d=>1,t=>"low batterie limit, step .1V"},
@@ -547,14 +547,14 @@ my $K_actDetID = '000000'; # id of actionDetector
   cndTxDecAbove   =>{a=>133  ,s=>1  ,l=>1,min=>0    ,max=>255   ,c=>''         ,f=>''      ,u=>''    ,d=>1,t=>"level for cndTxCycAbove"},
   cndTxDecBelow   =>{a=>134  ,s=>1  ,l=>1,min=>0    ,max=>255   ,c=>''         ,f=>''      ,u=>''    ,d=>1,t=>"level for cndTxCycBelow"},
 
-  txThrLoPwr      =>{a=>135.0,s=>4  ,l=>1,min=>0    ,max=>3680  ,c=>''         ,f=>'100'   ,u=>'W'   ,d=>1,t=>"threshold low power"},
-  txThrHiPwr      =>{a=>139.0,s=>4  ,l=>1,min=>0    ,max=>3680  ,c=>''         ,f=>'100'   ,u=>'W'   ,d=>1,t=>"threshold high power"},
-  txThrLoCur      =>{a=>135.0,s=>4  ,l=>1,min=>0    ,max=>16000 ,c=>''         ,f=>'100'   ,u=>'mA'  ,d=>1,t=>"threshold low current"},
-  txThrHiCur      =>{a=>139.0,s=>4  ,l=>1,min=>0    ,max=>16000 ,c=>''         ,f=>'100'   ,u=>'mA'  ,d=>1,t=>"threshold high current"},
-  txThrLoVlt      =>{a=>135.0,s=>4  ,l=>1,min=>115  ,max=>255   ,c=>''         ,f=>'100'   ,u=>'V'   ,d=>1,t=>"threshold low voltage"},
-  txThrHiVlt      =>{a=>139.0,s=>4  ,l=>1,min=>115  ,max=>255   ,c=>''         ,f=>'100'   ,u=>'V'   ,d=>1,t=>"threshold high voltage"},
-  txThrLoFrq      =>{a=>135.0,s=>4  ,l=>1,min=>48.72,max=>51.27 ,c=>''         ,f=>'100'   ,u=>'Hz'  ,d=>1,t=>"threshold low frequency"},
-  txThrHiFrq      =>{a=>139.0,s=>4  ,l=>1,min=>48.72,max=>51.27 ,c=>''         ,f=>'100'   ,u=>'Hz'  ,d=>1,t=>"threshold high frequency"},
+  txThrHiPwr      =>{a=>135.0,s=>4  ,l=>1,min=>0    ,max=>3680  ,c=>''         ,f=>'100'   ,u=>'W'   ,d=>1,t=>"threshold low power"},
+  txThrLoPwr      =>{a=>139.0,s=>4  ,l=>1,min=>0    ,max=>3680  ,c=>''         ,f=>'100'   ,u=>'W'   ,d=>1,t=>"threshold high power"},
+  txThrHiCur      =>{a=>135.0,s=>4  ,l=>1,min=>0    ,max=>16000 ,c=>''         ,f=>''      ,u=>'mA'  ,d=>1,t=>"threshold low current"},
+  txThrLoCur      =>{a=>139.0,s=>4  ,l=>1,min=>0    ,max=>16000 ,c=>''         ,f=>''      ,u=>'mA'  ,d=>1,t=>"threshold high current"},
+  txThrHiVlt      =>{a=>135.0,s=>4  ,l=>1,min=>115  ,max=>255   ,c=>''         ,f=>'10'    ,u=>'V'   ,d=>1,t=>"threshold low voltage"},
+  txThrLoVlt      =>{a=>139.0,s=>4  ,l=>1,min=>115  ,max=>255   ,c=>''         ,f=>'10'    ,u=>'V'   ,d=>1,t=>"threshold high voltage"},
+  txThrHiFrq      =>{a=>135.0,s=>4  ,l=>1,min=>48.72,max=>51.27 ,c=>''         ,f=>'100'   ,u=>'Hz'  ,d=>1,t=>"threshold low frequency"},
+  txThrLoFrq      =>{a=>139.0,s=>4  ,l=>1,min=>48.72,max=>51.27 ,c=>''         ,f=>'100'   ,u=>'Hz'  ,d=>1,t=>"threshold high frequency"},
 
   evtFltrPeriod   =>{a=>  1.0,s=>0.4,l=>1,min=>0.5,max=>7.5     ,c=>''         ,f=>2       ,u=>'s'   ,d=>1,t=>"event filter period"},
   evtFltrNum      =>{a=>  1.4,s=>0.4,l=>1,min=>1  ,max=>15      ,c=>''         ,f=>''      ,u=>''    ,d=>1,t=>"sensitivity - read each n-th puls"},
@@ -654,7 +654,7 @@ my $K_actDetID = '000000'; # id of actionDetector
                                                                                                                                         "0.0K"=>7, "0.5K"=>8, "1.0K"=>9, "1.5K"=>10, "2.0K"=>11, "2.5K"=>12, "3.0K"=>13, "3.5K"=>14}},
   btnNoBckLight   =>{a=>  9.4,s=>0.1,l=>7,min=>0  ,max=>1       ,c=>'lit'      ,f=>''      ,u=>''    ,d=>1,t=>"button response without backlight",lit=>{off=>0,on=>1}},
   showSetTemp     =>{a=>  9.5,s=>0.1,l=>7,min=>0  ,max=>1       ,c=>'lit'      ,f=>''      ,u=>''    ,d=>1,t=>"show set or actual temperature"   ,lit=>{actTemp=>0,setTemp=>1}},
-  showHumitidy    =>{a=>  9.6,s=>0.1,l=>7,min=>0  ,max=>1       ,c=>'lit'      ,f=>''      ,u=>''    ,d=>1,t=>"show temp only or also humidity"  ,lit=>{temp=>0,tempHum=>1}},
+  showHumidity    =>{a=>  9.6,s=>0.1,l=>7,min=>0  ,max=>1       ,c=>'lit'      ,f=>''      ,u=>''    ,d=>1,t=>"show temp only or also humidity"  ,lit=>{temp=>0,tempHum=>1}},
   sendWeatherData =>{a=>  9.7,s=>0.1,l=>7,min=>0  ,max=>1       ,c=>'lit'      ,f=>''      ,u=>''    ,d=>1,t=>"send  weather data"               ,lit=>{off=>0,on=>1}},
 
   boostPos        =>{a=> 10.0,s=>0.5,l=>7,min=>0  ,max=>100     ,c=>''         ,f=>'0.2'   ,u=>'%'   ,d=>1,t=>"valve boost position"},
@@ -1003,7 +1003,7 @@ $culHmRegModel{"ROTO_ZEL-STG-RM-FSA"} = $culHmRegModel{"HM-CC-VD"};
   "HM-CC-RT-DN06"     =>{ CtrlRc          =>1,TempRC          =>1},
   "HM-TC-IT-WM-W-EU02"=>{ dayTemp         =>1,nightTemp       =>1,tempMin         =>1,tempMax         =>1,tempOffset      =>1
                          ,hyst2point      =>1,heatCool        =>1,boostPeriod     =>1,winOpnBoost     =>1
-                         ,showWeekday     =>1,showInfo        =>1,showSetTemp     =>1,showHumitidy    =>1
+                         ,showWeekday     =>1,showInfo        =>1,showSetTemp     =>1,showHumidity    =>1
                          ,noMinMax4Manu   =>1,daylightSaveTime=>1,sendWeatherData =>1
                          ,modePrioParty   =>1,modePrioManu    =>1,weekPrgSel      =>1
                          },
@@ -1245,7 +1245,8 @@ $culHmRegChan{"ROTO_ZEL-STG-RM-FWT03"}= $culHmRegChan{"HM-CC-TC03"};
   none4Type  =>{ "test"=>"" },
 );
 %culHmModelGets = (
-  none4Mod   =>{ "none"=>"" },
+  "CCU-FHEM" =>{ "listDevice"=>"" },
+  "ActionDetector" =>{ "listDevice"=>"[all|alive|unknown|dead|notAlive]" },
 );
 
 ##############################---set---########################################
@@ -1430,7 +1431,7 @@ $culHmModelSets{"HM-Sen-Wa-Od"}        = $culHmModelSets{"HM-SEC-SD"};
                          ,off            =>""
                          ,toggle         =>""},
   "HM-CC-RT-DN00"     =>{ sysTime        =>""
-                         ,fwUpdate       =>"<filename>"
+                         ,fwUpdate       =>"<filename> <bootTime> ..."
                         },
   "HM-CC-RT-DN04"     =>{ controlMode    =>"[auto|manu|boost|day|night]"
                          ,controlManu    =>"[on|off|5.0..30.0]"
@@ -1721,5 +1722,46 @@ $culHmChanSets{"ROTO_ZEL-STG-RM-FWT02"} = $culHmChanSets{"HM-CC-TC02"};
                      TEMP     => '00,4,$val=((hex($val)&0x3FFF)/10)*((hex($val)&0x4000)?-1:1)',
                      HUM      => '04,2,$val=(hex($val))', } },
 );
+
+
+  foreach my $reg (keys %culHmRegDefShLg){ #update register list
+    %{$culHmRegDefine{"sh".$reg}} = %{$culHmRegDefShLg{$reg}};
+    %{$culHmRegDefine{"lg".$reg}} = %{$culHmRegDefShLg{$reg}};
+    $culHmRegDefine{"lg".$reg}{a} +=0x80;
+  }
+  foreach my $rN  (keys %culHmRegDefine){#create literal inverse for fast search
+    if ($culHmRegDefine{$rN}{lit}){# literal assigned => create inverse
+      foreach my $lit (keys %{$culHmRegDefine{$rN}{lit}}){
+        $culHmRegDefine{$rN}{litInv}{$culHmRegDefine{$rN}{lit}{$lit}}=$lit;
+      }
+    }
+  }
+  foreach my $type (keys %culHmRegType) { #update references to register
+    foreach my $reg (keys %{$culHmRegType{$type}}){
+      if ($culHmRegDefShLg{$reg}){
+        delete $culHmRegType{$type}{$reg};
+        $culHmRegType{$type}{"sh".$reg} = 1;
+        $culHmRegType{$type}{"lg".$reg} = 1;
+      }
+    }
+  }
+  foreach my $type (keys %culHmRegModel){ #update references to register
+    foreach my $reg (keys %{$culHmRegModel{$type}}){
+      if ($culHmRegDefShLg{$reg}){
+        delete $culHmRegModel{$type}{$reg};
+        $culHmRegModel{$type}{"sh".$reg} = 1;
+        $culHmRegModel{$type}{"lg".$reg} = 1;
+      }
+    }
+  }
+  foreach my $type (keys %culHmRegChan) { #update references to register
+    foreach my $reg (keys %{$culHmRegChan{$type}}){
+      if ($culHmRegDefShLg{$reg}){
+        delete $culHmRegChan{$type}{$reg};
+        $culHmRegChan{$type}{"sh".$reg} = 1;
+        $culHmRegChan{$type}{"lg".$reg} = 1;
+      }
+    }
+  }
 
 1;

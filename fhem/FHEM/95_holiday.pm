@@ -62,23 +62,13 @@ holiday_refresh($$)
   }
 
   my $fname = $attr{global}{modpath} . "/FHEM/" . $hash->{NAME} . ".holiday";
-  my @holidayfile;
-  if(configDBUsed()) {
-    my $hfile = _cfgDB_Readfile($fname);
-    return "Holiday file not found in database." unless defined $hfile;
-    @holidayfile = split("\n", $hfile);
-  } else {
-    return "Can't open $fname: $!" if(!open(FH, $fname));
-    @holidayfile = <FH>;
-    close(LAYOUT);
-  }
+  my ($err, @holidayfile) = FileRead($fname);
+  return $err if($err);
 
   my @foundList;
-
   foreach my $l (@holidayfile) {
     next if($l =~ m/^\s*#/);
     next if($l =~ m/^\s*$/);
-    chomp($l);
     my $found;
 
     if($l =~ m/^1/) {               # Exact date: 1 MM-DD Holiday
@@ -210,16 +200,21 @@ holiday_Get($@)
   my ($hash, @a) = @_;
 
   shift(@a) if($a[1] && $a[1] eq "MM-DD");
-  return "argument is missing" if(int(@a) != 2);
+  return "argument is missing" if(int(@a) < 2);
   my $arg;
 
   if($a[1] =~ m/^[01]\d-[0-3]\d/) {
     $arg = $a[1];
 
-  } elsif($a[1] =~ m/^yesterday|today|tomorrow$/) {
+  } elsif($a[1] =~ m/^(yesterday|today|tomorrow)$/) {
     my $t = time();
     $t += 86400 if($a[1] eq "tomorrow");
     $t -= 86400 if($a[1] eq "yesterday");
+    my @a = localtime($t);
+    $arg = sprintf("%02d-%02d", $a[4]+1, $a[3]);
+
+  } elsif($a[1] eq "days") {
+    my $t = time() + ($a[2] ? int($a[2]) : 0)*86400;
     my @a = localtime($t);
     $arg = sprintf("%02d-%02d", $a[4]+1, $a[3]);
 
@@ -358,6 +353,7 @@ western_easter($)
       <code>get &lt;name&gt; yesterday</code><br>
       <code>get &lt;name&gt; today</code><br>
       <code>get &lt;name&gt; tomorrow</code><br>
+      <code>get &lt;name&gt; days <offset></code><br>
       <br><br>
       Return the holiday name of the specified date or the text none.
       <br><br>
@@ -463,6 +459,7 @@ western_easter($)
       <code>get &lt;name&gt; yesterday</code><br>
       <code>get &lt;name&gt; today</code><br>
       <code>get &lt;name&gt; tomorrow</code><br>
+      <code>get &lt;name&gt; days <offset></code><br>
       <br><br>
       Gibt den Name des Feiertages zum angebenenen Datum zur&uuml;ck oder den
       Text none.

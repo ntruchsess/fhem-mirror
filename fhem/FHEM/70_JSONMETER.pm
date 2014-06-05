@@ -1,4 +1,5 @@
 ###############################################################
+# $Id$
 #
 #  70_JSONMETER.pm
 #
@@ -268,6 +269,9 @@ JSONMETER_Set($$@)
    elsif($cmd eq 'activeTariff' && int(@_)==4 ) {
       $val = 0 if( $val < 1 || $val > 9 );
       readingsSingleUpdate($hash,"activeTariff",$val, 1);
+       $hash->{LOCAL} = 1;
+       JSONMETER_GetUpdate($hash);
+       $hash->{LOCAL} = 0;
       return "$name: activeTariff set to $val.";
    }
    my $list = "statusRequest:noArg"
@@ -326,6 +330,7 @@ JSONMETER_GetUpdate($)
    if(!$hash->{LOCAL} && $hash->{INTERVAL} > 0) {
       RemoveInternalTimer($hash);
       InternalTimer(gettimeofday()+$hash->{INTERVAL}, "JSONMETER_GetUpdate", $hash, 1);
+      return undef if( AttrVal($name, "disable", 0 ) == 1 );
    }
 
    
@@ -655,7 +660,7 @@ JSONMETER_doStatisticMinMax ($$$)
       $yearLast += 1900;
       $monthLast ++;
    }
-   ($dummy, $dummy, $dummy, $dayNow, $monthNow, $yearNow) = localtime;
+   ($dummy, $dummy, $dummy, $dayNow, $monthNow, $yearNow) = localtime ( gettimeofday() + $hash->{INTERVAL});
    $yearNow += 1900;
    $monthNow ++;
 
@@ -700,7 +705,7 @@ JSONMETER_doStatisticMinMaxSingle ($$$$)
       $a[1]++; # Count
       $a[3] += $value; # Sum
       if ($value < $b[1]) { $b[1]=$value; } # Min
-      $b[3] = sprintf "%.0f" , $a[3] / $a[1]; # Avg
+      if ($a[1]>0) {$b[3] = sprintf "%.0f" , $a[3] / $a[1];} # Avg
       if ($value > $b[5]) { $b[5]=$value; } # Max
 
     # in case of period change, save "last" values and reset counters
@@ -751,7 +756,7 @@ JSONMETER_doStatisticDelta ($$$$$)
       $previousTariff = 0; 
       $showDate = 8;
    }
-   ($dummy, $dummy, $hourNow, $dayNow, $monthNow, $yearNow) = localtime;
+   ($dummy, $dummy, $hourNow, $dayNow, $monthNow, $yearNow) = localtime ( gettimeofday() + $hash->{INTERVAL});
 
    if ($yearNow != $yearLast) { $periodSwitch = 4; }
    elsif ($monthNow != $monthLast) { $periodSwitch = 3; }
@@ -813,13 +818,11 @@ JSONMETER_doStatisticDeltaSingle ($$$$$$)
    
  # get statistic values of previous period
    my @last;
-   if ($periodSwitch >= 1) {
-      if (exists ($hash->{READINGS}{$readingName."Last"})) { 
-         @last = split / /,  $hash->{READINGS}{$readingName."Last"}{VAL};
-         if ($last[0] eq "Day:") { $last[9]=$last[7]; $last[7]=$last[5]; $last[5]=$last[3]; $last[3]=$last[1]; $last[1]="-"; }
-      } else {
-         @last = split / /,  "Hour: - Day: - Month: - Year: -";
-      }
+   if (exists ($hash->{READINGS}{$readingName."Last"})) { 
+      @last = split / /,  $hash->{READINGS}{$readingName."Last"}{VAL};
+      if ($last[0] eq "Day:") { $last[9]=$last[7]; $last[7]=$last[5]; $last[5]=$last[3]; $last[3]=$last[1]; $last[1]="-"; }
+   } else {
+      @last = split / /,  "Hour: - Day: - Month: - Year: -";
    }
    
  # Do statistic
@@ -884,7 +887,7 @@ JSONMETER_doStatisticDeltaSingle ($$$$$$)
 
 <a name="JSONMETER"></a>
 <h3>JSONMETER</h3>
-<ul>
+<ul style="width:800px">
   This module reads data from a measurement unit (so called smart meters for electricity, gas or heat)
   <br>
   that provides OBIS compliant data in JSON format on a webserver or on the FHEM file system.
@@ -938,9 +941,9 @@ JSONMETER_doStatisticDeltaSingle ($$$$$$)
          <br>
          Polling interval in seconds
        </li><br>
-     <li><code>resetStatistics &lt;all|statElectricityConsumed...|statElectricityConsumedTariff...|statElectricityPower...&gt;</code>
+     <li><code>resetStatistics &lt;statReadings&gt;</code>
          <br>
-         Deletes the selected statistic values.
+         Deletes the selected statistic values: <i>all, statElectricityConsumed..., statElectricityConsumedTariff..., statElectricityPower...</i>
          </li><br>
      <li><code>restartJsonAnalysis</code><br>
          Restarts the analysis of the json file for known readings (compliant to the OBIS standard).
@@ -1002,9 +1005,8 @@ JSONMETER_doStatisticDeltaSingle ($$$$$$)
 
 <a name="JSONMETER"></a>
 <h3>JSONMETER</h3>
-<ul>
+<ul style="width:800px">
   Dieses Modul liest Daten von Messger&auml;ten (z.B. Stromz&auml;hler, Gasz&auml;hler oder W&auml;rmez&auml;hler, so genannte Smartmeter),
-  <br>
   welche <a href="http://de.wikipedia.org/wiki/OBIS-Kennzahlen">OBIS</a> kompatible Daten im JSON-Format auf einem Webserver oder auf dem FHEM-Dateisystem zur Verf&uuml;gung stellen.
   <br>
   &nbsp;
@@ -1046,22 +1048,21 @@ JSONMETER_doStatisticDeltaSingle ($$$$$$)
   <ul>
        <li><code>activeTariff &lt; 0 - 9 &gt;</code>
          <br>
-         Erlaubt die gezielte, separate Erfassung der statistischen Verbrauchswerte (doStatistics = 1) für verschiedene Tarife (Doppelstromz&auml;hler), wenn der Stromz&auml;hler dies selbst nicht unterscheiden kann (z.B. LS110) oder wenn gepr&uuml;ft werden soll, ob ein zeitabh&auml;ngiger Tarif preiswerter w&auml;re.<br>
-         Dieser Wert muss entsprechend des vorhandenen oder geplanten Tarifes zum jeweiligen Zeitpunkt z.B. durch den FHEM-Befehl "at" gesetzt werden.<br>
+         Erlaubt die gezielte, separate Erfassung der statistischen Verbrauchswerte (doStatistics = 1) f&uuml;r verschiedene Tarife (Doppelstromz&auml;hler), wenn der Stromz&auml;hler dies selbst nicht unterscheiden kann (z.B. LS110) oder wenn gepr&uuml;ft werden soll, ob ein zeitabh&auml;ngiger Tarif preiswerter w&auml;re. Dieser Wert muss entsprechend des vorhandenen oder geplanten Tarifes zum jeweiligen Zeitpunkt z.B. durch den FHEM-Befehl "at" gesetzt werden.<br>
          0 = tariflos 
       </li><br>
      <li><code>INTERVAL &lt;Abfrageinterval&gt;</code>
          <br>
          Abfrageinterval in Sekunden
       </li><br>
-      <li><code>resetStatistics &lt;all|statElectricityConsumed...|statElectricityConsumedTariff...|statElectricityPower...&gt;</code>
+      <li><code>resetStatistics &lt;statWerte&gt;</code>
          <br>
-         Löscht die ausgewählten statisischen Werte.
+         L&ouml;scht die ausgew&auml;hlten statisischen Werte: <i>all, statElectricityConsumed..., statElectricityConsumedTariff..., statElectricityPower...</i>
+ 
          </li><br>
       <li><code>restartJsonAnalysis</code>
         <br>
         Neustart der Analyse der json-Datei zum Auffinden bekannter Ger&auml;tewerte (kompatibel zum OBIS Standard).
-        <br>
         Diese Analysie wird normaler Weise nur einmalig durchgef&uuml;hrt, nachdem Ger&auml;tewerte gefunden wurden.
         </li><br>
      <li><code>statusRequest</code>
@@ -1095,7 +1096,6 @@ JSONMETER_doStatisticDeltaSingle ($$$$$$)
       <li><code>doStatistics &lt; 0 | 1 &gt;</code>
          <br>
          Bildet t&auml;gliche, monatliche und j&auml;hrliche Statistiken bestimmter Ger&auml;tewerte (Mittel/Min/Max oder kumulierte Werte).
-         <br>
          F&uuml;r grafische Auswertungen k&ouml;nnen die Werte der Form 'stat<i>ReadingName</i><b>Last</b>' genutzt werden.
          </li><br>
       <li><code>pathString &lt;Zeichenkette&gt;</code>

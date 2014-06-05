@@ -7,7 +7,7 @@
 # Prof. Dr. Peter A. Henning
 # Norbert Truchsess
 #
-# $Id: OWX_SER.pm 2013-04 - ntruchsess $
+# $Id$
 #
 ########################################################################################
 #
@@ -58,7 +58,7 @@ sub new() {
 	$self->{LastFamilyDiscrepancy} = 0;
 	$self->{LastDeviceFlag} = 0;
 	#-- module version
-	$self->{version} = 4.0;
+	$self->{version} = 4.1;
 	$self->{alarmdevs} = [];
 	$self->{devs} = [];
 	$self->{pt_alarms} = PT_THREAD(\&pt_alarms);
@@ -128,7 +128,7 @@ sub pt_alarms () {
     PT_WAIT_UNTIL($self->response_ready());
     PT_EXIT unless $self->next_response("alarm");
   } while( $self->{LastDeviceFlag}==0 );
-  main::Log3($self->{name},1, " Alarms = ".join(' ',@{$self->{alarmdevs}}));
+  main::Log3($self->{name},5, " Alarms = ".join(' ',@{$self->{alarmdevs}}));
   PT_EXIT($self->{alarmdevs});
   PT_END;
 }
@@ -148,7 +148,7 @@ sub pt_alarms () {
 ########################################################################################
 
 sub pt_execute($$$$$$$) {
-  my ($thread, $self, $hash, $context, $reset, $address, $writedata, $numread) = @_;
+  my ($thread, $self, $hash, $context, $reset, $dev, $writedata, $numread) = @_;
 
   PT_BEGIN($thread);
   
@@ -160,52 +160,46 @@ sub pt_execute($$$$$$$) {
 
   $self->reset() if ($reset);
 
-  my $dev = $address;
-  my $data = $writedata;
-  
-  my $select;
-  my $res2 = "";
-  my ($i,$j,$k);
-  
-  #-- has match ROM part
-  if( $dev ){#		command   => EXECUTE,
-#		context   => $context,
-#		reset     => $reset,
-#		address   => $owx_dev,
-#		writedata => $data,
-#		numread   => $numread,
-#		delay     => $delay
+  if (defined $writedata or $numread) {
 
-    
-    #-- ID of the device
-    my $owx_rnf = substr($dev,3,12);
-    my $owx_f   = substr($dev,0,2);
-
-    #-- 8 byte 1-Wire device address
-    my @rom_id  =(0,0,0,0 ,0,0,0,0); 
-    #-- from search string to byte id
-    $dev=~s/\.//g;
-    for(my $i=0;$i<8;$i++){
-       $rom_id[$i]=hex(substr($dev,2*$i,2));
+    my $select;
+  
+    #-- has match ROM part
+    if( $dev ) {
+          
+      #-- ID of the device
+      my $owx_rnf = substr($dev,3,12);
+      my $owx_f   = substr($dev,0,2);
+  
+      #-- 8 byte 1-Wire device address
+      my @rom_id  =(0,0,0,0 ,0,0,0,0); 
+      #-- from search string to byte id
+      $dev=~s/\.//g;
+      for(my $i=0;$i<8;$i++){
+         $rom_id[$i]=hex(substr($dev,2*$i,2));
+      }
+      $select=sprintf("\x55%c%c%c%c%c%c%c%c",@rom_id); 
+    #-- has no match ROM part, issue skip ROM command (0xCC:)
+    } else {
+      $select="\xCC";
     }
-    $select=sprintf("\x55%c%c%c%c%c%c%c%c",@rom_id).$data; 
-  #-- has no match ROM part
-  } else {
-    $select=$data;
+    if (defined $writedata) {
+      $select.=$writedata;
+    }
+    #-- has receive data part
+    if( $numread ) {
+      #$numread += length($data);
+      for( my $i=0;$i<$numread;$i++){
+        $select .= "\xFF";
+      };
+    }
+    
+    #-- for debugging
+    if( $main::owx_async_debug > 1){
+      main::Log3($self->{name},5,"OWX_SER::Execute: Sending out ".unpack ("H*",$select));
+    }
+    $self->block($select);
   }
-  #-- has receive data part
-  if( $numread >0 ){
-    #$numread += length($data);
-    for( my $i=0;$i<$numread;$i++){
-      $select .= "\xFF";
-    };
-  }
-  
-  #-- for debugging
-  if( $main::owx_async_debug > 1){
-    main::Log3($self->{name},3,"OWX_SER::Execute: Sending out ".unpack ("H*",$select));
-  }
-  $self->block($select);
   
   PT_WAIT_UNTIL($self->response_ready());
   
@@ -214,7 +208,7 @@ sub pt_execute($$$$$$$) {
   my $res = $self->{string_in};
   #-- for debugging
   if( $main::owx_async_debug > 1){
-    main::Log3($self->{name},3,"OWX_SER::Execute: Receiving ".unpack ("H*",$res));
+    main::Log3($self->{name},5,"OWX_SER::Execute: Receiving ".unpack ("H*",$res));
   }
 
   PT_EXIT($res);
@@ -266,7 +260,7 @@ sub initialize($) {
   if(!defined($hwdevice)){
     die $msg." not defined: $!";
   } else {
-    main::Log3($hash->{NAME},1,$msg." defined");
+    main::Log3($hash->{NAME},2,$msg." defined");
   }
 
   $hwdevice->reset_error();
@@ -344,7 +338,7 @@ sub initialize($) {
       $k=ord(substr($res,$i,1))%16;
       $ress.=sprintf "0x%1x%1x ",$j,$k;
     }
-    main::Log3($hash->{NAME},1, $ress);
+    main::Log3($hash->{NAME},4, $ress);
     $ress = $ress0;
     #-- sleeping for some time
     select(undef,undef,undef,0.5);
@@ -359,7 +353,7 @@ sub initialize($) {
     }
   }
   $self->{interface} = $interface;
-  main::Log3($hash->{NAME},1, $ress);
+  main::Log3($hash->{NAME},3, $ress);
   if ($interface eq "DS2480") {
     return $ds2480;
   } elsif ($interface eq "DS9097") {

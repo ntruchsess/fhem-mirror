@@ -3,6 +3,9 @@ var FW_pollConn;
 var FW_curLine; // Number of the next line in FW_pollConn.responseText to parse
 var FW_widgets = new Object(); // to be filled by fhemweb_*.js
 var FW_leaving;
+var isIE = (navigator.appVersion.indexOf("MSIE") > 0);
+var isiOS = navigator.userAgent.match(/(iPad|iPhone|iPod)/);
+
 
 function
 log(txt)
@@ -187,16 +190,17 @@ FW_delayedStart()
 function
 FW_selChange(sel, list, elName)
 {
-  var value;
+  var cmd, value;
   var l = list.split(" ");
   for(var i=0; i < l.length; i++) {
     cmd = l[i];
-    var off = l[i].indexOf(":");
+    var off = cmd.indexOf(":");
     if(off >= 0)
-      cmd = l[i].substring(0, off);
+      cmd = cmd.substring(0, off);
     if(cmd == sel) {
       if(off >= 0)
         value = l[i].substring(off+1);
+      break;
     }
   }
   var el = document.getElementsByName(elName)[0];
@@ -309,15 +313,28 @@ loadScript(sname, callback)
   script.src = sname;
   script.async = script.defer = false;
   script.type = "text/javascript";
-  script.onload = callback;
+
+
   log("Loading "+sname);
-  script.onreadystatechange = function() {
-    if(script.readyState == 'loaded' || script.readyState == 'complete') {
-      script.onreadystatechange = null;
+  if(isIE) {
+    script.onreadystatechange = function() {
+      if(script.readyState == 'loaded' || script.readyState == 'complete') {
+        script.onreadystatechange = null;
+        if(callback)
+          callback();
+      }
+    }
+  } else {
+    if(isiOS)
+      FW_pollConn.abort();
+    script.onload = function(){
       if(callback)
         callback();
+      if(isiOS)
+        FW_longpoll();
     }
   }
+  
   h.appendChild(script);
 }
 
@@ -345,7 +362,8 @@ scriptAttribute(sname)
 {
   var attr="";
   $("head script").each(function(){
-    if($(this).attr("src").indexOf(sname) >= 0)
+    var src = $(this).attr("src");
+    if(src && src.indexOf(sname) >= 0)
       attr = $(this).attr("attr");
   });
 

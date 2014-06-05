@@ -125,6 +125,7 @@ sub HMLAN_Define($$) {#########################################################
   $hash->{assignedIDs} = "";
   HMLAN_condUpdate($hash,253);#set disconnected
   $hash->{STATE} = "disconnected";
+  $hash->{owner} = "";
 
   my $ret = DevIo_OpenDev($hash, 0, "HMLAN_DoInit");
   return $ret;
@@ -216,6 +217,8 @@ sub HMLAN_Attr(@) {############################################################
   }
   elsif($aName eq "hmId"){
     if ($cmd eq "set"){
+      my $owner = InternalVal($name,"owner_CCU",undef);
+      return "device owned by $owner" if ($owner);
       return "wrong syntax: hmId must be 6-digit-hex-code (3 byte)"
         if ($aVal !~ m/^[A-F0-9]{6}$/i);
     }
@@ -398,13 +401,13 @@ sub HMLAN_Write($$$) {#########################################################
                              substr($msg, 16, 6));
 
     if (   $mtype eq "02" && $src eq $hash->{owner} && length($msg) == 24
-        && $hash->{assignedIDs} =~ m/$dst/){
+        && defined $hash->{assIDs}{$dst}){
       # Acks are generally send by HMLAN autonomously
       # Special
       Log3 $hash, 5, "HMLAN: Skip ACK";
       return;
     }
-#   my $IDHM  = '+'.$dst.',01,00,F1EF'; #used by HMconfig - meanning??
+#   my $IDHM  = '+'.$dst.',01,00,F1EF'; # used by HMconfig - meaning??
 #   my $IDadd = '+'.$dst;               # guess: add ID?
 #   my $IDack = '+'.$dst.',02,00,';     # guess: ID acknowledge
 #   my $IDack = '+'.$dst.',FF,00,';     # guess: ID acknowledge
@@ -416,14 +419,34 @@ sub HMLAN_Write($$$) {#########################################################
       HMLAN_SimpleWrite($hash, $IDadd);
       $hash->{helper}{$dst}{name} = CUL_HM_id2Name($dst);
       $hash->{assIDs}{$dst} = 1;
-      $hash->{assignedIDs}=join(',',keys %{$hash->{assIDs}});
-      $hash->{assignedIDsCnt}=scalar(keys %{$hash->{assIDs}});
+      my @asId = HMLAN_noDup(keys %{$hash->{assIDs}});
+      $hash->{assignedIDs}=join(',',@asId);
+      $hash->{assignedIDsCnt}=scalar(@asId);
     }
   }
   elsif($msg =~ m /init:(......)/){
-    if ($modules{CUL_HM}{defptr}{$1} &&
-        $modules{CUL_HM}{defptr}{$1}{helper}{io}{newChn} ){
-      HMLAN_SimpleWrite($hash,$modules{CUL_HM}{defptr}{$1}{helper}{io}{newChn});
+    my $dst = $1;
+    if ($modules{CUL_HM}{defptr}{$dst} &&
+        $modules{CUL_HM}{defptr}{$dst}{helper}{io}{newChn} ){
+      HMLAN_SimpleWrite($hash,$modules{CUL_HM}{defptr}{$dst}{helper}{io}{newChn});
+      $hash->{helper}{$dst}{name} = CUL_HM_id2Name($dst);
+      $hash->{assIDs}{$dst} = 1;
+      my @asId = HMLAN_noDup(keys %{$hash->{assIDs}});
+      $hash->{assignedIDs}=join(',',@asId);
+      $hash->{assignedIDsCnt}=scalar(@asId);
+    }
+    return;
+  }
+  elsif($msg =~ m /remove:(......)/){
+    my $dst = $1;
+    if ($modules{CUL_HM}{defptr}{$dst} &&
+        $modules{CUL_HM}{defptr}{$dst}{helper}{io}{newChn} ){
+      HMLAN_SimpleWrite($hash,"-$dst");
+      delete $hash->{helper}{$dst};
+      delete $hash->{assIDs}{$dst};
+      my @asId = HMLAN_noDup(keys %{$hash->{assIDs}});
+      $hash->{assignedIDs}=join(',',@asId);
+      $hash->{assignedIDsCnt}=scalar(@asId);
     }
     return;
   }
@@ -517,7 +540,7 @@ sub HMLAN_Parse($$) {##########################################################
     #    00 30= should: AES response failed
     #    00 4x= AES response accepted
     #    00 50= ??(seen with 'R')
-    #    00 8x= first AES-response for this device?
+    #    00 8x= response to a message send autonomous by HMLAN (e.g. A112 -> wakeup)
     #    01 xx= ?? 0100 AES response send (gen autoMsgSent)
     #    02 xx= prestate to 04xx. Message is still sent. This is a warning
     #    04 xx= nothing sent anymore. Any restart unsuccessful except power
@@ -529,11 +552,9 @@ sub HMLAN_Parse($$) {##########################################################
     #     2 Warning-HighLoad
     #     4 Overload condition - no send anymore
     #
-    my $stat = hex($mFld[1]);
-    my $HMcnd =$stat >>8; #high = HMLAN cond
-    $stat &= 0xff;        # low byte related to message format
+    my ($HMcnd,$stat) = map{hex($_)} unpack('A2A2',($mFld[1]));
 
-    if ($HMcnd == 0x01){#HMLAN responded to AES request
+    if ($HMcnd == 0x01 && $mFld[3] ne "FF"){#HMLAN responded to AES request
       $CULinfo = "AESKey-".$mFld[3];
     }
 
@@ -567,7 +588,8 @@ sub HMLAN_Parse($$) {##########################################################
       HMLAN_UpdtMsgLoad($name,(21))
             if (   $letter eq "E"
                 && (hex($flg)&0x60) == 0x20 # ack but not from repeater
-                && $dst eq $attr{$name}{hmId});
+                && $dst eq $attr{$name}{hmId}
+                && $hash->{assignedIDs} =~ m/$src/);
     }
 
     my $rssi = hex($mFld[4])-65536;
@@ -746,6 +768,7 @@ sub HMLAN_SimpleWrite(@) {#####################################################
   $msg .= "\r\n" unless($nonl);
   syswrite($hash->{TCPDev}, $msg)     if($hash->{TCPDev});
 }
+
 sub HMLAN_DoInit($) {##########################################################
   my ($hash) = @_;
   my $name = $hash->{NAME};
@@ -754,7 +777,7 @@ sub HMLAN_DoInit($) {##########################################################
   delete $hash->{READINGS}{state};
 
   HMLAN_SimpleWrite($hash, "A$id") if($id ne "999999");
-  HMLAN_SimpleWrite($hash, "C");
+  HMLAN_assignIDs($hash);
   HMLAN_writeAesKey($name);
   my $s2000 = sprintf("%02X", HMLAN_secSince2000());
   HMLAN_SimpleWrite($hash, "T$s2000,04,00,00000000");
@@ -764,8 +787,6 @@ sub HMLAN_DoInit($) {##########################################################
   HMLAN_condUpdate($hash,255);
   $hash->{helper}{q}{cap}{$_}=0 foreach (keys %{$hash->{helper}{q}{cap}});
 
-  foreach (keys %{$hash->{assIDs}}){delete ($hash->{assIDs}{$_})};# clear IDs - HMLAN might have a reset
-  delete ($hash->{assIDs}{$_}) foreach (keys %{$hash->{assIDs}});# clear IDs - HMLAN might have a reset
   $hash->{helper}{q}{keepAliveRec} = 1; # ok for first time
   $hash->{helper}{q}{keepAliveRpt} = 0; # ok for first time
 
@@ -782,6 +803,15 @@ sub HMLAN_DoInit($) {##########################################################
 
   return undef;
 }
+sub HMLAN_assignIDs($){
+  # remove all assigned IDs and assign the ones from list
+  my ($hash) = @_;
+  HMLAN_SimpleWrite($hash, "C"); #clear all assigned IDs
+
+  my @ids = split",",InternalVal($hash->{NAME},"assignedIDs","");
+  HMLAN_Write($hash,"","init:$_") foreach(@ids);
+}
+
 sub HMLAN_writeAesKey($) {#####################################################
   my ($name) = @_;
 
@@ -929,7 +959,7 @@ sub HMLAN_condUpdate($$) {#####################################################
   elsif ($HMcnd == 255) {#reset counter after init
     $hashQ->{answerPend} = 0;
     @{$hashQ->{apIDs}} = ();       #clear Q-status
-    $hash->{XmitOpen} = 1;         #allow transmit
+    $hash->{XmitOpen} = 0;         #deny transmit
   }
   else{
     $hash->{XmitOpen} = 1
@@ -1093,6 +1123,7 @@ sub HMLAN_getVerbLvl ($$$$){#get verboseLevel for message
 
 =end html
 =begin html_DE
+
 <a name="HMLAN"></a>
 <h3>HMLAN</h3>
 <ul>

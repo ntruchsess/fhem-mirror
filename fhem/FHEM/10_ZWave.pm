@@ -51,7 +51,18 @@ my %zwave_class = (
     parse => { "032603(.*)"=> '($1 eq "00" ? "state:off" : 
                                ($1 eq "ff" ? "state:on" : 
                                              "state:dim ".hex($1)))',}, },
-  SWITCH_ALL               => { id => '27', },
+  SWITCH_ALL               => { id => '27',
+    set   => { swaIncludeNone  => "0100",
+               swaIncludeOff   => "0101",
+               swaIncludeOn    => "0102",
+               swaIncludeOnOff => "01ff",
+               swaOn           => "04",
+               swaOff          => "05", },
+    get   => { swaInclude      => "02", },
+    parse => { "03270300"      => "swa:none",
+               "03270301"      => "swa:off",
+               "03270302"      => "swa:on",
+               "032703ff"      => "swa:on off", }, },
   SWITCH_TOGGLE_BINARY     => { id => '28', },
   SWITCH_TOGGLE_MULTILEVEL => { id => '29', },
   CHIMNEY_FAN              => { id => '2a', },
@@ -73,6 +84,7 @@ my %zwave_class = (
     get   => { smStatus    => "04" },
     parse => { "..3105(..)(..)(.*)" => 'ZWave_ParseMultilevel($1,$2,$3)'},},
   METER                    => { id => '32',
+    get   => { meter       => "01", },
     parse => { "..3202(.*)"=> 'ZWave_ParseMeter($1)' }, },
   ZIP_ADV_SERVER           => { id => '33', },
   ZIP_ADV_CLIENT           => { id => '34', },
@@ -123,18 +135,31 @@ my %zwave_class = (
                "0340031f"  => "state:manual",  }, } ,
   THERMOSTAT_OPERATING_STATE=>{ id => '42', },
   THERMOSTAT_SETPOINT      => { id => '43',
+    set   => { setpointHeating => "010101%02x",
+               setpointCooling => "010201%02x"},
     get   => { setpoint => "02" },
     parse => { "064303(..)(..)(....)" => 'sprintf("temperature:%0.1f %s %s", '.
                  'hex($3)/(10**int(hex($2)/32)), '.
                  'hex($2)&8 ? "F":"C", $1==1 ? "heating":"cooling")' }, },
   THERMOSTAT_FAN_MODE      => { id => '44', },
   THERMOSTAT_FAN_STATE     => { id => '45', },
-  CLIMATE_CONTROL_SCHEDULE => { id => '46', },
+  CLIMATE_CONTROL_SCHEDULE => { id => '46',
+    get   => { ccsOverride  => "07", },
+    parse => { "0446080079" => "ccsOverride:no, frost protection",
+               "044608007a" => "ccsOverride:no, energy saving",
+               "044608007f" => "ccsOverride:no, unused",
+               "0446080179" => "ccsOverride:temporary, frost protection",
+               "044608017a" => "ccsOverride:temporary, energy saving",
+               "044608017f" => "ccsOverride:temporary, unused",
+               "0446080279" => "ccsOverride:permanent, frost protection",
+               "044608027a" => "ccsOverride:permanent, energy saving",
+               "044608027f" => "ccsOverride:permanent, unused", }, },
   THERMOSTAT_SETBACK       => { id => '47', },
   DOOR_LOCK_LOGGING        => { id => '4c', },
   SCHEDULE_ENTRY_LOCK      => { id => '4e', },
   BASIC_WINDOW_COVERING    => { id => '50', },
   MTP_WINDOW_COVERING      => { id => '51', },
+  CRC_16_ENCAP             => { id => '56', },
   MULTI_CHANNEL            => { id => '60',  # Version 2, aka MULTI_INSTANCE
     get   => { mcEndpoints => "07",     # Endpoints
                mcCapability=> "09%02x"},
@@ -154,9 +179,20 @@ my %zwave_class = (
   ALARM                    => { id => '71', 
     get   => { alarm       => "04%02x", },
     parse => { "..7105(..)(..)" => '"alarm_type_$1:level $2"',}, },
-  MANUFACTURER_SPECIFIC    => { id => '72', },
+  MANUFACTURER_SPECIFIC    => { id => '72',
+    get   => { manufacturer         => "04", },
+    parse => { "087205(....)(....)(....)" => '"mfs:0x".$1.'.
+                                             '" 0x".$2.'.
+                                             '" 0x".$3', }, },
   POWERLEVEL               => { id => '73', },
-  PROTECTION               => { id => '75', },
+  PROTECTION               => { id => '75',
+    set   => { protectionOff => "0100",
+               protectionSeq => "0101",
+               protectionOn  => "0102", },
+    get   => { protection    => "02", },
+    parse => { "03750300"      => "protection:off",
+               "03750301"      => "protection:seq",
+               "03750302"      => "protection:on", }, },
   LOCK                     => { id => '76', },
   NODE_NAMING              => { id => '77', },
   FIRMWARE_UPDATE_MD       => { id => '7a', },
@@ -186,7 +222,14 @@ my %zwave_class = (
     parse => { "078612(..)(..)(..)(..)(..)" =>
     'sprintf("version:Lib %d Prot %d.%d App %d.%d",'.
         'hex($1),hex($2),hex($3),hex($4),hex($5))', } },
-  INDICATOR                => { id => '87', },
+  INDICATOR                => { id => '87',
+    set   => { indicatorOff    => "0100",
+               indicatorOn     => "01FF",
+               indicatorDim    => "01%02x", },
+    get   => { indicatorStatus => "02",     }, 
+    parse => { "038703(..)"    => '($1 eq "00" ? "indState:off" : 
+                               ($1 eq "ff" ? "indState:on" : 
+                                             "indState:dim ".hex($1)))',}, },
   PROPRIETARY              => { id => '88', },
   LANGUAGE                 => { id => '89', },
   TIME                     => { id => '8a', },
@@ -218,7 +261,8 @@ my %zwave_class = (
   NON_INTEROPERABLE        => { id => 'f0', },
   );
 my %zwave_cmdArgs = (
-  dim => "slider,0,1,99",
+  dim          => "slider,0,1,99",
+  indicatorDim => "slider,0,1,99",
   );
 
 
@@ -707,6 +751,8 @@ ZWave_Parse($$@)
         push @event, $val;
       }
     }
+    Log3 $hash, 4, "$hash->{NAME}: $className $arg generated no event"
+        if(!@event);
   }
 
   my $wu = $baseHash->{WakeUp};
@@ -828,6 +874,39 @@ s2Hex($)
     Reset the configuration parameter for the cfgAddress parameter to its
     default value.  See the device documentation to determine this value.</li>
 
+  <br><br><b>Class INDICATOR</b>
+  <li>indicatorOn<br>
+    switch the indicator on</li>
+  <li>indicatorOff<br>
+    switch the indicator off</li>
+  <li>indicatorDim value<br>
+    takes values from 1 to 99.
+    If the indicator does not support dimming. It is interpreted as on.</li>
+
+  <br><br><b>Class PROTECTION</b>
+  <li>protectionOff<br>
+    device is unprotected</li>
+  <li>protectionOn<br>
+    device is protected</li>
+  <li>protectionSeq<br>
+    device can be operated, if a certain sequence is keyed.</li>
+
+  <br><br><b>Class SWITCH_ALL</b>
+  <li>swaIncludeNone<br>
+    the device does not react to swaOn and swaOff commands</li>
+  <li>swaIncludeOff<br>
+    the device reacts to the swaOff command
+    but does not react to the swaOn command</li>
+  <li>swaIncludeOn<br>
+    the device reacts to the swaOn command
+    but does not react to the swaOff command</li>
+  <li>swaIncludeOnOff<br>
+    the device reacts to the swaOn and swaOff commands</li>
+  <li>swaOn<br>
+    sends the all on command to the device</li>
+  <li>swaOff<br>
+    sends the all off command to the device.</li>
+
   <br><br><b>Class SWITCH_BINARY</b>
   <li>on<br>
     switch the device on</li>
@@ -850,6 +929,16 @@ s2Hex($)
   <li>tmManual<br>
     set the thermostat mode to off, cooling, heating or manual.
     </li>
+
+  <br><br><b>Class THERMOSTAT_SETPOINT</b>
+  <li>setpointHeating value<br>
+    set the thermostat to heat to the given value.
+    The value is a whole number and read as celsius.
+  </li>
+  <li>setpointCooling value<br>
+    set the thermostat to heat to the given value.
+    The value is a whole number and read as celsius.
+  </li>
 
   <br><br><b>Class WAKE_UP</b>
   <li>wakeupInterval value<br>
@@ -901,6 +990,23 @@ s2Hex($)
     report the supported status fields as a bitfield.
     </li>
 
+  <br><br><b>Class INDICATOR</b>
+  <li>indicatorStatus<br>
+    return the indicator status of the node, as indState:on, indState:off or indState:dim value.
+    </li>
+
+  <br><br><b>Class MANUFACTURER_SPECIFIC</b>
+  <li><br>
+    return the manufacturer specific id (16bit),
+    the product type (16bit)
+    and the product specific id (16bit).
+    </li>
+
+  <br><br><b>Class METER</b>
+  <li>meter<br>
+    request the meter report.
+    </li>
+
   <br><br><b>Class MULTI_CHANNEL</b>
   <li>mcEndpoints<br>
     return the list of endpoints available, e.g.:<br>
@@ -913,6 +1019,10 @@ s2Hex($)
     <b>Note:</b> This is the best way to create the secondary nodes of a
     MULTI_CHANNEL device. The device is only created for channel 2 or greater.
     </li>
+
+  <br><br><b>Class PROTECTION</b>
+  <li>protection<br>
+    returns the protection state. It can be on, off or seq.</li>
 
   <br><br><b>Class SENSOR_ALARM</b>
   <li>alarm alarmType<br>
@@ -929,6 +1039,11 @@ s2Hex($)
   <br><br><b>Class SENSOR_MULTILEVEL</b>
   <li>smStatus<br>
     request data from the node (temperature/humidity/etc)
+    </li>
+
+  <br><br><b>Class SWITCH_ALL</b>
+  <li>swaInclude<br>
+    return the switch-all mode of the node.
     </li>
 
   <br><br><b>Class SWITCH_BINARY</b>
@@ -949,6 +1064,11 @@ s2Hex($)
   <br><br><b>Class THERMOSTAT_SETPOINT</b>
   <li>setpoint<br>
     request the setpoint
+    </li>
+
+  <br><br><b>Class CLIMATE_CONTROL_SCHEDULE</b>
+  <li>ccsOverride<br>
+    request the climate control schedule override report
     </li>
 
   <br><br><b>Class VERSION</b>
@@ -1016,6 +1136,12 @@ s2Hex($)
   <li>remainingFilterLife: %s %</li>
   <li>supportedStatus: <list of supported stati></li>
 
+  <br><br><b>Class INDICATOR</b>
+  <li>indState:[on|off|dim value]</li>
+
+  <br><br><b>Class MANUFACTURER_SPECIFIC</b>
+  <li>mfs:hexValue hexValue hexValue</li>
+
   <br><br><b>Class METER</b>
   <li>energy:val [kWh|kVAh|pulseCount]</li>
   <li>gas:val [m3|feet3|pulseCount]</li>
@@ -1025,6 +1151,9 @@ s2Hex($)
   <br><br><b>Class MULTI_CHANNEL</b>
   <li>endpoints:total X $dynamic $identical</li>
   <li>mcCapability_X:class1 class2 ...</li>
+
+  <br><br><b>Class PROTECTION</b>
+  <li>protection:[on|off|seq]</li>
 
   <br><br><b>Class SENSOR_ALARM</b>
   <li>alarm_type_X:level Y node $nodeID seconds $seconds</li>
@@ -1059,6 +1188,9 @@ s2Hex($)
   <li>distance $val [m|cm|feet]</li>
   <li>anglePosition $val [%|relN|relS]</li>
 
+  <br><br><b>Class SWITCH_ALL</b>
+  <li>swa:[none|on|off|on off]</li>
+
   <br><br><b>Class SWITCH_BINARY</b>
   <li>state:on</li>
   <li>state:off</li>
@@ -1076,6 +1208,9 @@ s2Hex($)
 
   <br><br><b>Class THERMOSTAT_SETPOINT</b>
   <li>temperature:$temp [C|F] [heating|cooling]</li>
+
+  <br><br><b>Class CLIMATE_CONTROL_SCHEDULE</b>
+  <li>ccsOverride:[no|temporary|permanent], [frost protection|energy saving|unused]</li>
 
   <br><br><b>Class VERSION</b>
   <li>version:Lib A Prot x.y App a.b</li>

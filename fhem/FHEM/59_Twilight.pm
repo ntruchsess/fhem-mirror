@@ -74,7 +74,7 @@ sub Twilight_Initialize($)
   $hash->{DefFn}   = "Twilight_Define";
   $hash->{UndefFn} = "Twilight_Undef";
   $hash->{GetFn}   = "Twilight_Get";
-  $hash->{AttrList}= $readingFnAttributes;
+  $hash->{AttrList}= "$readingFnAttributes " ."useExtWeather";
 }
 #
 #
@@ -146,7 +146,7 @@ sub Twilight_Define($$)
   $hash->{LATITUDE}       = $latitude;
   $hash->{LONGITUDE}      = $longitude;
   $hash->{WEATHER}        = $weather;
-  $hash->{SUNPOS_OFFSET}  = 30;
+  $hash->{SUNPOS_OFFSET}  = 1;
  
   Twilight_sunposTimerSet($hash);
   myRemoveInternalTimer("Midnight", $hash);
@@ -298,16 +298,18 @@ sub myGetHashIndirekt ($$) {
 }
 ################################################################################
 sub Twilight_Midnight($) {
-   my ($myHash) = @_;
-   my $hash     = $myHash->{HASH};
+  my ($myHash) = @_;
+  my $hash = myGetHashIndirekt($myHash, (caller(0))[3]);
+  return if (!defined($hash));
 
   Twilight_TwilightTimes      ($hash, "Mid");
   Twilight_StandardTimerSet   ($hash);
 }
 ################################ ################################################
 sub Twilight_WeatherTimerUpdate($) {
-   my ($myHash) = @_;
-   my $hash     = $myHash->{HASH};
+  my ($myHash) = @_;
+  my $hash = myGetHashIndirekt($myHash, (caller(0))[3]);
+  return if (!defined($hash));
 
   Twilight_TwilightTimes      ($hash, "Wea");
   Twilight_StandardTimerSet   ($hash);
@@ -347,7 +349,9 @@ sub Twilight_sunposTimerSet($) {
 sub Twilight_fireEvent($)
 {
    my ($myHash) = @_;
-   my $hash     = $myHash->{HASH};
+   my $hash = myGetHashIndirekt($myHash, (caller(0))[3]);
+   return if (!defined($hash));
+
    my $name     = $hash->{NAME};
    my $sx       = $myHash->{MODIFIER};
 
@@ -357,8 +361,10 @@ sub Twilight_fireEvent($)
 
    my $nextEvent      = $hash->{TW}{$sx}{NEXTE};
    my $nextEventTime  = "undefined";
-      $nextEventTime  = strftime("%H:%M:%S",localtime($hash->{TW}{$nextEvent}{TIME})) if ($hash->{TW}{$nextEvent}{TIME} ne "nan");
-   Log3 $hash, 4, "[".$hash->{NAME}."] " . sprintf  ("%-10s state=%-2s light=%-2s nextEvent=%-10s %-14s  deg=%+.1f°",$sx, $state, $light, $nextEvent, strftime("%d.%m.%Y  %H:%M:%S",localtime($hash->{TW}{$nextEvent}{TIME})), $deg);
+   if ($hash->{TW}{$nextEvent}{TIME} ne "nan") {
+      $nextEventTime  = strftime("%H:%M:%S",localtime($hash->{TW}{$nextEvent}{TIME}));
+      Log3 $hash, 4, "[".$hash->{NAME}."] " . sprintf  ("%-10s state=%-2s light=%-2s nextEvent=%-10s %-14s  deg=%+.1f°",$sx, $state, $light, $nextEvent, strftime("%d.%m.%Y  %H:%M:%S",localtime($hash->{TW}{$nextEvent}{TIME})), $deg);
+   }
 
    my $eventTime  = $hash->{TW}{$sx}{TIME};
    my $now        = time();
@@ -452,7 +458,9 @@ sub Twilight_getWeatherHorizon($)
 sub Twilight_sunpos($)
 {
   my ($myHash) = @_;
-  my $hash = $myHash->{HASH};
+  my $hash = myGetHashIndirekt($myHash, (caller(0))[3]);
+  return if (!defined($hash));
+
   my $hashName = $hash->{NAME};
 
   return "" if(AttrVal($hashName, "disable", undef));
@@ -461,7 +469,6 @@ sub Twilight_sunpos($)
   my ($dSeconds,$dMinutes,$dHours,$iDay,$iMonth,$iYear,$wday,$yday,$isdst) = gmtime(time);
   $iMonth++;
   $iYear += 100;
-  $dSeconds = 0;
 
   my $dLongitude = $hash->{LONGITUDE};
   my $dLatitude  = $hash->{LATITUDE};
@@ -470,14 +477,14 @@ sub Twilight_sunpos($)
   my $pi=3.14159265358979323846;
   my $twopi=(2*$pi);
   my $rad=($pi/180);
-  my $dEarthMeanRadius=6371.01;    # In km
+  my $dEarthMeanRadius=6371.01;       # In km
   my $dAstronomicalUnit=149597890;    # In km
 
   # Calculate difference in days between the current Julian Day
   # and JD 2451545.0, which is noon 1 January 2000 Universal Time
 
   # Calculate time of the day in UT decimal hours
-  my $dDecimalHours=$dHours + ($dMinutes + $dSeconds / 60.0 ) / 60.0;
+  my $dDecimalHours=$dHours + $dMinutes/60.0 + $dSeconds/3600.0;
 
   # Calculate current Julian Day
   my $iYfrom2000=$iYear;#expects now as YY ;
@@ -530,17 +537,34 @@ sub Twilight_sunpos($)
   $dZenithAngle=($dZenithAngle + $dParallax) / $rad;
   my $dElevation=90 - $dZenithAngle;
 
-  # set readings
-  $dAzimuth   = int(100*$dAzimuth  )/100;
-  $dElevation = int(100*$dElevation)/100;
-
   my $twilight = int(($dElevation+12.0)/18.0 * 1000)/10;
      $twilight = 100 if ($twilight>100);
      $twilight = 0   if ($twilight<  0);
+	 
+  my $twilight_weather	 ;
 
-  my $twilight_weather = int(($dElevation-$hash->{WEATHER_HORIZON}+12.0)/18.0 * 1000)/10;
-     $twilight_weather = 100 if ($twilight_weather>100);
-     $twilight_weather = 0   if ($twilight_weather<  0);
+  if( (my $ExtWeather = AttrVal($hashName, "useExtWeather", "")) eq "") {
+     $twilight_weather = int(($dElevation-$hash->{WEATHER_HORIZON}+12.0)/18.0 * 1000)/10;
+	    Log3 $hash, 5, "[$hash->{NAME}] " . "Original weather readings";
+  } else {
+	   my($extDev,$extReading) = split(":",$ExtWeather);
+	   my $extWeatherHorizont = ReadingsVal($extDev,$extReading,-1); 
+	   if ($extWeatherHorizont >= 0){
+		     $extWeatherHorizont = 100 if ($extWeatherHorizont > 100);
+		     Log3 $hash, 5, "[$hash->{NAME}] " . "New weather readings from: ".$extDev.":".$extReading.":".$extWeatherHorizont;	
+		     $twilight_weather = $twilight - int(0.007 * ($extWeatherHorizont ** 2)); ## SCM: 100% clouds => 30% light (rough estimation)
+	   } else {
+		     $twilight_weather = int(($dElevation-$hash->{WEATHER_HORIZON}+12.0)/18.0 * 1000)/10;
+		     Log3 $hash, 3, "[$hash->{NAME}] " . "Error with external readings from: ".$extDev.":".$extReading." , taking original weather readings";	 
+	   }
+  } 
+  
+  $twilight_weather = 100 if ($twilight_weather>100);
+  $twilight_weather = 0   if ($twilight_weather<  0);
+
+  #  set readings
+  $dAzimuth   = int(100*$dAzimuth  )/100;
+  $dElevation = int(100*$dElevation)/100;
 
   my $compassPoint   = Twilight_CompassPoint($dAzimuth);
 
@@ -722,6 +746,10 @@ sub twilight($$$$) {
   <b>Attributes</b>
   <ul>
     <li><a href="#readingFnAttributes">readingFnAttributes</a></li>
+	<li><b>useExtWeather &lt;device&gt;:&lt;reading&gt;</b></li>
+	use data from other devices to calculate <b>twilight_weather</b>.<br/>
+	The reading used shoud be in the range of 0 to 100 like the reading <b>c_clouds</b>	in an <b><a href="#openweathermap">openweathermap</a></b> device, where 0 is clear sky and 100 are overcast clouds.<br/>
+	With the use of this attribute weather effects like heavy rain or thunderstorms are neglegted for the calculation of the <b>twilight_weather</b> reading.<br/>
   </ul>
   <br>
 
@@ -743,6 +771,7 @@ sub twilight($$$$) {
 =end html
 
 =begin html_DE
+
 <a name="Twilight"></a>
 <h3>Twilight</h3>
 <ul>
@@ -848,6 +877,10 @@ Wissenswert dazu ist, dass die Sonne, abh&auml;gnig vom Breitengrad, bestimmte E
   <b>Attributes</b>
   <ul>
     <li><a href="#readingFnAttributes">readingFnAttributes</a></li>
+	<li><b>useExtWeather &lt;device&gt;:&lt;reading&gt;</b></li>
+	Nutzt Daten von einem anderen Device um <b>twilight_weather</b> zu berechnen.<br/>
+	Das Reading sollte sich im Intervall zwischen 0 und 100 bewegen, z.B. das Reading <b>c_clouds</b> in einem<b><a href="#openweathermap">openweathermap</a></b> device, bei dem 0 heiteren und 100 bedeckten Himmel bedeuten.
+	Wird diese Attribut genutzt , werden Wettereffekte wie Starkregen oder Gewitter fuer die Berechnung von <b>twilight_weather</b> nicht mehr herangezogen.   
   </ul>
   <br>
 

@@ -13,118 +13,8 @@ my @pathname;
 
 sub configdb_Initialize($$) {
   my %hash = (  Fn => "CommandConfigdb",
-               Hlp => "info|list|diff|uuid|
-          reorg|recover|backup     ,access additional functions from configDB" );
+               Hlp => "help     ,access additional functions from configDB" );
   $cmds{configdb} = \%hash;
-}
-
-#####################################
-
-sub _configdb_rM($$) {
-  my ($modpath,$backupdir) = @_;
-  my $msg;
-  my $ret;
-
-  if (!opendir(DH, $modpath)) {
-    $msg = "Can't open $modpath: $!";
-    Log 1, "backup $msg";
-    return $msg;
-  }
-  my @files = <$modpath/*>;
-  foreach my $file (@files) {
-    if ($file eq $backupdir && (-d $file || -l $file)) {
-      Log 4, "backup exclude: '$file'";
-    } else {
-      Log 4, "backup include: '$file'";
-      push @pathname, $file;
-    }
-  }
-  return $ret;
-}
-
-sub _configdb_cA($) {
-  my $backupdir = shift;
-  my $backupcmd = (!defined($attr{global}{backupcmd}) ? undef : $attr{global}{backupcmd});
-  my $symlink = (!defined($attr{global}{backupsymlink}) ? "no" : $attr{global}{backupsymlink});
-  my $tarOpts;
-  my $msg;
-  my $ret;
-
-  my $dateTime = TimeNow();
-  $dateTime =~ s/ /_/g;
-  $dateTime =~ s/(:|-)//g;
-
-  my $cmd="";
-  if (!defined($backupcmd)) {
-    if (lc($symlink) eq "no") {
-      $tarOpts = "cf";
-    } else {
-      $tarOpts = "chf";
-    }
-
-    # prevents tar's output of "Removing leading /" and return total bytes of archive
-    $cmd = "tar -$tarOpts - @pathname |gzip > $backupdir/FHEM-$dateTime.tar.gz";
-
-  } else {
-    $cmd = "$backupcmd \"@pathname\"";
-
-  }
-  Log 2, "Backup with command: $cmd";
-  $ret = `($cmd) 2>&1`;
-
-  if($ret) {
-    chomp $ret;
-    Log 1, "backup $ret";
-  }
-  if (!defined($backupcmd) && -e "$backupdir/FHEM-$dateTime.tar.gz") {
-    my $size = -s "$backupdir/FHEM-$dateTime.tar.gz";
-    $msg = "backup done: FHEM-$dateTime.tar.gz ($size Bytes)";
-    Log 1, $msg;
-    $ret .= "\n".$msg;
-  }
-  return $ret;
-}
-
-sub _configdb_backup {
-  my $modpath = $attr{global}{modpath};
-  my $msg;
-  my $ret;
-
-  # set backupdir
-  my $backupdir;
-  if (!defined($attr{global}{backupdir})) {
-    $backupdir = "$modpath/backup";
-  } else {
-    if ($attr{global}{backupdir} =~ m/^\/.*/) {
-      $backupdir = $attr{global}{backupdir};
-    } elsif ($attr{global}{backupdir} =~ m/^\.+\/.*/) {
-      $backupdir = "$modpath/$attr{global}{backupdir}";
-    } else {
-      $backupdir = "$modpath/$attr{global}{backupdir}";
-    }
-  }
-
-  # create backupdir if not exists
-  if (!-d $backupdir) {
-    Log 4, "backup create backupdir: '$backupdir'";
-    $ret = `(mkdir -p $backupdir) 2>&1`;
-    if ($ret) {
-      chomp $ret;
-      $msg = "backup: $ret";
-      return $msg;
-    }
-  }
-
-  # get pathnames to archiv
-  $ret = _configdb_rM($modpath,$backupdir);
-
-  # create archiv
-  $ret = _configdb_cA($backupdir);
-
-  @pathname = [];
-  undef @pathname;
-
-  return $ret;
 }
 
 sub CommandConfigdb($$) {
@@ -162,16 +52,6 @@ sub CommandConfigdb($$) {
 			# set attribute
 				$attr{configdb}{$param1} = $param2;
 				$ret = " attribute $param1 set to value $param2";
-			}
-		}
-
-		when ('backup') {
-			if($^O =~ m/Win/) {
-				Log3('configdb', 4, "configdb: error: backup requested on MS platform.");
-				$ret = "\n error: backup not supported for Windows";
-			} else {
-				Log3('configdb', 4, "configdb: backup requested.");
-				$ret = _configdb_backup;
 			}
 		}
 
@@ -215,24 +95,6 @@ sub CommandConfigdb($$) {
 				$filename .= "/$param1";
 			}
 			if ( -r $filename ) {
-				$ret = _cfgDB_Fileimport $filename;
-			} elsif ( -e $filename) {
-				$ret = "\n Read error on file $filename";
-			} else {
-				$ret = "\n File $filename not found.";
-			}
-		}
-
-		when ('binfileimport') {
-			return "\n Syntax: configdb fileimport <pathToFile>" if @a != 2;
-			my $filename;
-			if($param1 =~ m,^[./],) {
-				$filename = $param1;
-			} else {
-				$filename  = $attr{global}{modpath};
-				$filename .= "/$param1";
-			}
-			if ( -r $filename ) {
 				my $filesize = -s $filename;
 				$ret = _cfgDB_binFileimport($filename,$filesize);
 			} elsif ( -e $filename) {
@@ -256,7 +118,8 @@ sub CommandConfigdb($$) {
 				$filename .= "/$param1";
 			}
 			if ( -r $filename ) {
-				$ret  = _cfgDB_Fileimport ($filename,1);
+				my $filesize = -s $filename;
+				$ret  = _cfgDB_binFileimport ($filename,$filesize,1);
 				$ret .= "\nFile $filename deleted from local filesystem.";
 			} elsif ( -e $filename) {
 				$ret = "\n Read error on file $filename";
@@ -280,7 +143,7 @@ sub CommandConfigdb($$) {
 			$param1 = $param1 ? $param1 : '%';
 			$param2 = $param2 ? $param2 : 0;
 			Log3('configdb', 4, "configdb: list requested for device: $param1 in version $param2.");
-			$ret = _cfgDB_List($param1,$param2);
+			$ret = _cfgDB_Search($param1,$param2,1);
 		}
 
 		when ('migrate') {
@@ -318,8 +181,6 @@ sub CommandConfigdb($$) {
 		default { 	
 			$ret =	"\n Syntax:\n".
 					"         configdb attr [attribute] [value]\n".
-					"         configdb backup\n".
-					"         configDB binfileimport <pathToFilename>\n".
 					"         configdb diff <device> <version>\n".
 					"         configDB filedelete <pathToFilename>\n".
 					"         configDB fileimport <pathToFilename>\n".
@@ -496,15 +357,6 @@ sub CommandConfigdb($$) {
 			will not be shown in 'configdb info' output.<br/>
 <br/>
 
-		<li><code>configdb backup</code></li><br/>
-			Replaces fhem's default backup process, since backup is no longer supported <br/>
-			with activated configDB.<br/>
-			<br/>
-			<b>Important:</b><br/>
-			Please be aware you are responsible for data backup of your database yourself!<br/>
-			The backup command can and will not do this job for you!<br/>
-<br/>
-
 		<li><code>configdb diff &lt;device&gt; &lt;version&gt;</code></li><br/>
 			Compare configuration dataset for device &lt;device&gt; 
 			from current version 0 with version &lt;version&gt;<br/>
@@ -538,14 +390,6 @@ compare device: telnetPort in current version 0 (left) to version: 1 (right)
 			Example:<br/>
 			<br/>
 			<code>configdb fileimport FHEM/99_myUtils.pm</code><br/>
-			<br/>
-<br/>
-
-		<li><code>configdb binfileimport &lt;sourceFilename&gt;</code></li><br/>
-			Imports specified binary file from from filesystem into database.<br/>
-			Example:<br/>
-			<br/>
-			<code>configdb binfileimport www/images/bla.png</code><br/>
 			<br/>
 <br/>
 
@@ -830,17 +674,6 @@ attr Melder_FAr peerIDs 00000000,2286BC03,
 			<br/>
 <br/>
 
-		<li><code>configdb backup</code></li><br/>
-			Ersetzt den Standard-Backup-Befehl von fhem, da dieser bei Verwendung von configDB nicht mehr<br/>
-			zur Verf&uuml;gung steht.<br/>
-			<br/>
-			<b>Wichtig:</b><br/>
-			F&uuml;r die Sicherung der Datenbank ist der Anwender selbst verantwortlich!<br/>
-			Der backup Befehl kann diese Aufgabe nicht &uuml;bernehmen.<br/>
-			Ausnahme: Nutzer einer im fhem Verzeichnis liegenden sqlite Datenbank profitieren von der Einfachheit<br/>
-			dieser Datenbank, denn das fhem Verzeichnis wird ohnehin komplett gesichert.<br/>
-		<br/>
-
 		<li><code>configdb diff &lt;device&gt; &lt;version&gt;</code></li><br/>
 			Vergleicht die Konfigurationsdaten des Ger&auml;tes &lt;device&gt; aus der aktuellen Version 0 mit den Daten aus Version &lt;version&gt;<br/>
 			Beispielaufruf:<br/>
@@ -873,14 +706,6 @@ compare device: telnetPort in current version 0 (left) to version: 1 (right)
 			Beispiel:<br/>
 			<br/>
 			<code>configdb fileimport FHEM/99_myUtils.pm</code><br/>
-			<br/>
-<br/>
-
-		<li><code>configdb binfileimport &lt;quellDatei&gt;</code></li><br/>
-			Liest die angegbene Bin&auml;rdatei aus dem Dateisystem und schreibt den Inhalt in die Datenbank.<br/>
-			Beispiel:<br/>
-			<br/>
-			<code>configdb binfileimport www/images/bla.png</code><br/>
 			<br/>
 <br/>
 

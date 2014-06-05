@@ -1,4 +1,5 @@
 ###############################################################
+# $Id$
 #
 #  23_LUXTRONIK2.pm
 #
@@ -39,15 +40,15 @@ use IO::Socket;
 use Time::HiRes qw/ time /;
 use Net::Telnet;
 
-sub LUXTRONIK2_doStatisticThermalPower ($$$$$$$$);
+sub LUXTRONIK2_doStatisticThermalPower ($$$$$$$$$);
 sub LUXTRONIK2_doStatisticMinMax ($$$);
 sub LUXTRONIK2_doStatisticMinMaxSingle ($$$$);
 sub LUXTRONIK2_storeReadings ($$$$$$);
 sub LUXTRONIK2_doStatisticDelta ($$$$$) ;
-sub LUXTRONIK2_doStatisticDeltaSingle ($$$$$$);
+sub LUXTRONIK2_doStatisticDeltaSingle ($$$$$$$);
 
 # Modul Version for remote debugging
-  my $modulVersion = "2014-04-30";
+  my $modulVersion = "2014-05-10";
 
 #List of firmware versions that are known to be compatible with this modul
   my $testedFirmware = "#V1.51#V1.54C#V1.60#V1.69#V1.70#";
@@ -67,10 +68,10 @@ LUXTRONIK2_Initialize($)
                  "allowSetParameter:0,1 ".
                  "autoSynchClock:slider,10,5,300 ".
                  "boilerVolumn ".
-                 "heatPumpElectricalPowerWatt:slider,1000,16000,100 ".
-                 "heatPumpHotWaterElectricalPowerWatt:slider,1000,16000,100 ".
-                 "heatRodElectricalPowerWatt:slider,1000,16000,100 ".
-                 "compressor2ElectricalPowerWatt:slider,1000,16000,100 ".
+                 "heatPumpElectricalPowerFactor ".
+                 "heatPumpElectricalPowerWatt ".
+                 "heatRodElectricalPowerWatt ".
+                 "compressor2ElectricalPowerWatt ".
                  "doStatistics:0,1 ".
                  "ignoreFirmwareCheck:0,1 ".
                  "statusHTML ".
@@ -246,6 +247,9 @@ LUXTRONIK2_Set($$@)
    elsif($cmd eq 'activeTariff' && int(@_)==4 ) {
       $val = 0 if( $val < 1 || $val > 9 );
       readingsSingleUpdate($hash,"activeTariff",$val, 1);
+      $hash->{LOCAL} = 1;
+      LUXTRONIK2_GetUpdate($hash);
+      $hash->{LOCAL} = 0;
       return "$name: activeTariff set to $val.";
    }
 
@@ -291,11 +295,11 @@ LUXTRONIK2_Set($$@)
   my $list = "statusRequest:noArg"
           ." activeTariff:0,1,2,3,4,5,6,7,8,9"
           ." resetStatistics:all,statBoilerGradientCoolDownMin,statAmbientTemp...,statElectricity...,statHours...,statHeatQ..."
-          ." hotWaterTemperatureTarget:slider,30.0,0.5,65.0"
-          ." returnTemperatureSetBack:slider,-5,0.5,5"
+          ." hotWaterTemperatureTarget "
+          ." returnTemperatureSetBack "
           ." opModeHotWater:Auto,Party,Off"
           ." synchronizeClockHeatPump:noArg"
-          ." INTERVAL:slider,30,30,1800";
+          ." INTERVAL ";
           
   return "Unknown argument $cmd, choose one of $list";
 }
@@ -310,13 +314,10 @@ LUXTRONIK2_GetUpdate($)
   if(!$hash->{LOCAL}) {
     RemoveInternalTimer($hash);
     InternalTimer(gettimeofday()+$hash->{INTERVAL}, "LUXTRONIK2_GetUpdate", $hash, 1);
+    return undef if( AttrVal($name, "disable", 0 ) == 1 );
   }
 
   my $host = $hash->{HOST};
-
-  if( !$hash->{LOCAL} ) {
-    return undef if( AttrVal($name, "disable", 0 ) == 1 );
-  }
 
   $hash->{helper}{RUNNING_PID} = BlockingCall("LUXTRONIK2_DoUpdate", $name."|".$host, "LUXTRONIK2_UpdateDone", 25, "LUXTRONIK2_UpdateAborted", $hash) unless(exists($hash->{helper}{RUNNING_PID}));
 }
@@ -748,6 +749,24 @@ LUXTRONIK2_UpdateDone($)
    my $returnTemperature = LUXTRONIK2_CalcTemp($a[16]);
    my $returnTemperatureTarget = LUXTRONIK2_CalcTemp($a[17]);
    
+   my $heatPumpPower = 0;
+   my $heatRodPower = AttrVal($name, "heatRodElectricalPowerWatt", 0);
+
+   #WM[kW] = delta_Temp [K] * Durchfluss [l/h] / ( 3.600 [kJ/kWh] / ( 4,179 [kJ/(kg*K)] (H2O Wärmekapazität bei 30 & 40°C) * 0,994 [kg/l] (H2O Dichte bei 35°C) )  
+   my $thermalPower = 0;
+   # 0=Heizen, 5=Brauchwasser, 7=Abtauen, 16=Durchflussüberwachung 
+   if ($a[3] =~ /^(0|5|16)$/ ) { 
+      $thermalPower = abs($flowTemperature - $returnTemperature) * $a[19] / 866.65; 
+      $heatPumpPower = AttrVal($name, "heatPumpElectricalPowerWatt", -1);
+      $heatPumpPower *= (1 + ($flowTemperature-35) * AttrVal($name, "heatPumpElectricalPowerFactor", 0));
+   }
+   readingsBulkUpdate( $hash, "thermalPower", sprintf "%.1f", $thermalPower);
+   if ($heatPumpPower >-1 ) {    readingsBulkUpdate( $hash, "heatPumpElectricalPowerEstimated", sprintf "%.0f", $heatPumpPower); }
+   if ($heatPumpPower > 0) {
+     $cop = $thermalPower * 1000 / $heatPumpPower;
+     readingsBulkUpdate( $hash, "COP", sprintf "%.2f", $cop);
+   }
+
    # if selected, do all the statistic calculations
    if ( $doStatistic == 1) { 
       #LUXTRONIK2_doStatisticBoilerHeatUp $hash, $currOpHours, $currHQ, $currTemp, $opState, $target
@@ -762,23 +781,23 @@ LUXTRONIK2_UpdateDone($)
       if ($value ne "") {
          readingsBulkUpdate($hash,"statBoilerGradientCoolDown",$value); 
          Log3 $name,3,"$name: statBoilerGradientCoolDown set to $value";
+         my @new = split / /, $value;
          if ( exists( $hash->{READINGS}{statBoilerGradientCoolDownMin} ) ) {
-            my @new = split / /, $value;
             my @old = split / /, $hash->{READINGS}{statBoilerGradientCoolDownMin}{VAL};
             if ($new[5]>6 && $new[1]>$old[1] && $new[1] < 0) {
-               readingsBulkUpdate($hash,"statBoilerGradientCoolDownMin",$value); 
-               Log3 $name,3,"$name: statBoilerGradientCoolDownMin set to $value";
+               readingsBulkUpdate($hash,"statBoilerGradientCoolDownMin",$value,1); 
+               Log3 $name,3,"$name: statBoilerGradientCoolDownMin set to '$value'";
             }
-         } else {
-            readingsBulkUpdate($hash,"statBoilerGradientCoolDownMin",$value); 
-            Log3 $name,3,"$name: statBoilerGradientCoolDownMin set to $value";
+         } elsif ($new[5]>6 && $new[1] < 0) {
+            readingsBulkUpdate($hash,"statBoilerGradientCoolDownMin",$value,1); 
+            Log3 $name,3,"$name: statBoilerGradientCoolDownMin set to '$value'";
          }
       }
       
-   # LUXTRONIK2_doStatisticThermalPower: $hash, $MonitoredOpState, $currOpState, $currHeatQuantity, $currOpHours,  $currAmbTemp, $currHeatSourceIn, $TargetTemp
-      $value = LUXTRONIK2_doStatisticThermalPower ($hash, 5, $a[3], $a[37]/10, $a[35], $ambientTemperature, $heatSourceIN,$hotWaterTemperatureTarget);
+   # LUXTRONIK2_doStatisticThermalPower: $hash, $MonitoredOpState, $currOpState, $currHeatQuantity, $currOpHours,  $currAmbTemp, $currHeatSourceIn, $TargetTemp, $electricalPower
+      $value = LUXTRONIK2_doStatisticThermalPower ($hash, 5, $a[3], $a[37]/10, $a[35], $ambientTemperature, $heatSourceIN,$hotWaterTemperatureTarget, $heatPumpPower);
       if ($value ne "") { readingsBulkUpdate($hash,"statThermalPowerBoiler",$value); }
-      $value = LUXTRONIK2_doStatisticThermalPower ($hash, 0, $a[3], $a[36]/10, $a[34], $ambientTemperature, $heatSourceIN, $returnTemperatureTarget);
+      $value = LUXTRONIK2_doStatisticThermalPower ($hash, 0, $a[3], $a[36]/10, $a[34], $ambientTemperature, $heatSourceIN, $returnTemperatureTarget, $heatPumpPower);
       if ($value ne "") { readingsBulkUpdate($hash,"statThermalPowerHeating",$value); }
 
     # LUXTRONIK2_doStatisticMinMax $hash, $readingName, $value
@@ -836,9 +855,9 @@ LUXTRONIK2_UpdateDone($)
            && $a[11] == 1
           && $averageAmbientTemperature >= $thresholdHeatingLimit) {
           if ($ambientTemperature>=10 ) {
-            $value = "Heizungsgrenze (Soll 15&deg;C)";
+            $value = "Heizungsgrenze (Soll 15 C)";
           } else {
-            $value = "Frostschutz (Soll 20&deg;C)";
+            $value = "Frostschutz (Soll 20 C)";
           }
      } else {
        $value = $heatingState{$a[46]};
@@ -846,9 +865,9 @@ LUXTRONIK2_UpdateDone($)
      # Consider heating reduction limit
       if ($a[46] == 0) {
         if ($thresholdTemperatureSetBack <= $ambientTemperature) { 
-          $value .= " ".LUXTRONIK2_CalcTemp($a[47])." C"; 
+          $value .= " ".LUXTRONIK2_CalcTemp($a[47])." C"; #° &deg; &#176; &#x00B0; 
         } else {
-          $value = "Normal da < $thresholdTemperatureSetBack C"; 
+          $value = "Normal da < ".$thresholdTemperatureSetBack." C"; 
         }
       }
      }
@@ -886,18 +905,18 @@ LUXTRONIK2_UpdateDone($)
      readingsBulkUpdate( $hash, "heatSourceIN",$heatSourceIN);
      readingsBulkUpdate( $hash, "heatSourceOUT",LUXTRONIK2_CalcTemp($a[24]));
      readingsBulkUpdate( $hash, "hotGasTemperature",LUXTRONIK2_CalcTemp($a[26]));
-     
+
     # Operating hours (seconds->hours) and heat quantities   
-     # LUXTRONIK2_storeReadings: $hash, $readingName, $value, $factor, $doStatistic, $tariffType
-     LUXTRONIK2_storeReadings $hash, "counterHours2ndHeatSource1", $a[32], 3600, $doStatistic, 4;
-     LUXTRONIK2_storeReadings $hash, "counterHours2ndHeatSource2", $a[38], 3600, $doStatistic, 4;
-     LUXTRONIK2_storeReadings $hash, "counterHours2ndHeatSource3", $a[39], 3600, $doStatistic, 4;
-     LUXTRONIK2_storeReadings $hash, "counterHoursHeatPump", $a[33], 3600, $doStatistic, 1;
-     LUXTRONIK2_storeReadings $hash, "counterHoursHeating", $a[34], 3600, $doStatistic, 2;
-     LUXTRONIK2_storeReadings $hash, "counterHoursHotWater", $a[35], 3600, $doStatistic, 3;
-     LUXTRONIK2_storeReadings $hash, "counterHeatQHeating", $a[36], 10, ($a[19] !~ /no/ ? $doStatistic : 0), 0;
-     LUXTRONIK2_storeReadings $hash, "counterHeatQHotWater", $a[37], 10, ($a[19] !~ /no/ ? $doStatistic : 0), 0;
-     LUXTRONIK2_storeReadings $hash, "counterHeatQTotal", $a[36] + $a[37], 10, ($a[19] !~ /no/ ? $doStatistic : 0), 0;
+     # LUXTRONIK2_storeReadings: $hash, $readingName, $value, $factor, $doStatistic, $electricalPower
+     LUXTRONIK2_storeReadings $hash, "counterHours2ndHeatSource1", $a[32], 3600, $doStatistic, $heatRodPower;
+     LUXTRONIK2_storeReadings $hash, "counterHours2ndHeatSource2", $a[38], 3600, $doStatistic, $heatRodPower;
+     LUXTRONIK2_storeReadings $hash, "counterHours2ndHeatSource3", $a[39], 3600, $doStatistic, $heatRodPower;
+     LUXTRONIK2_storeReadings $hash, "counterHoursHeatPump", $a[33], 3600, $doStatistic, $heatPumpPower;
+     LUXTRONIK2_storeReadings $hash, "counterHoursHeating", $a[34], 3600, $doStatistic, $heatPumpPower;
+     LUXTRONIK2_storeReadings $hash, "counterHoursHotWater", $a[35], 3600, $doStatistic, $heatPumpPower;
+     LUXTRONIK2_storeReadings $hash, "counterHeatQHeating", $a[36], 10, ($a[19] !~ /no/ ? $doStatistic : 0), -1;
+     LUXTRONIK2_storeReadings $hash, "counterHeatQHotWater", $a[37], 10, ($a[19] !~ /no/ ? $doStatistic : 0), -1;
+     LUXTRONIK2_storeReadings $hash, "counterHeatQTotal", $a[36] + $a[37], 10, ($a[19] !~ /no/ ? $doStatistic : 0), -1;
       
      
    # Input / Output status
@@ -923,24 +942,7 @@ LUXTRONIK2_UpdateDone($)
      $value = "unbekannt (".$a[31].")" unless $value;
      readingsBulkUpdate($hash,"typeHeatpump",$value);
 
-  # Monitored operation: 5=Hot Water, 0=Heating
-     my $devicePower=0;
-     if ($a[3] == 5) {$devicePower = AttrVal($hash->{NAME}, "heatPumpHotWaterElectricalPowerWatt", 0);}
-     if ($devicePower == 0) {$devicePower = AttrVal($hash->{NAME}, "heatPumpElectricalPowerWatt", 0);}
-  
-     #WM[kW] = delta_Temp [K] * Durchfluss [l/h] / ( 3.600 [kJ/kWh] / ( 4,179 [kJ/(kg*K)] (H2O Wärmekapazität bei 30 & 40°C) * 0,994 [kg/l] (H2O Dichte bei 35°C) )  
-     my $thermalPower = 0;
-     # 0=Heizen, 5=Brauchwasser, 7=Abtauen, 16=Durchflussüberwachung 
-     if ($a[3] =~ /^(0|5|16)$/ ) { 
-         $thermalPower = abs($flowTemperature - $returnTemperature) * $a[19] / 866.65; 
-     }
-     readingsBulkUpdate( $hash, "thermalPower", sprintf "%.1f", $thermalPower);
-     if ($devicePower > 0) {
-        $cop = $thermalPower *1000 / $devicePower;
-        readingsBulkUpdate( $hash, "COP", sprintf "%.2f", $cop);
-     }
-
-     # Solar
+   # Solar
      if ($a[50] !~ /no/) {readingsBulkUpdate($hash, "solarCollectorTemperature", LUXTRONIK2_CalcTemp($a[50]));}
      if ($a[51] !~ /no/) {readingsBulkUpdate($hash, "solarBufferTemperature", LUXTRONIK2_CalcTemp($a[51]));}
      if ($a[52] !~ /no/) {readingsBulkUpdate($hash, "counterHoursSolar", sprintf("%.1f", $a[52]/3600));}
@@ -951,14 +953,14 @@ LUXTRONIK2_UpdateDone($)
         $value .= "$opStateHeatPump1<br>\n";
         $value .= "$opStateHeatPump2<br>\n";
         $value .= "$opStateHeatPump3<br>\n";
-        $value .= "Brauchwasser: $hotWaterTemperature&deg;C";
+        $value .= "Brauchwasser: ".$hotWaterTemperature."&deg;C";
         readingsBulkUpdate($hash,"floorplanHTML",$value);
      }
     # State update
       $value = "$opStateHeatPump1 $opStateHeatPump2 - $opStateHeatPump3";
       if ($thermalPower != 0) { 
-         $value .= " (".sprintf ("%.1f", $thermalPower)." kW";
-         if ($devicePower>0) {$value .= ", COP: ".sprintf ("%.2f", $cop);}
+         $value .= sprintf (" (%.1f kW", $thermalPower);
+         if ($heatPumpPower>0) {$value .= sprintf (", COP: %.2f", $cop);}
          $value .= ")"; }
       readingsBulkUpdate($hash, "state", $value);
      
@@ -1201,57 +1203,56 @@ LUXTRONIK2_checkFirmware ($)
 
 # Calculate heat-up gradients of boiler based on hotWaterTemperature and counterHeatQHeating
 sub ######################################## 
-LUXTRONIK2_doStatisticThermalPower ($$$$$$$$)
+LUXTRONIK2_doStatisticThermalPower ($$$$$$$$$)
 {
-   my ($hash, $MonitoredOpState, $currOpState, $currHeatQuantity, $currOpHours,  $currAmbTemp, $currHeatSourceIn, $targetTemp) = @_;
+   my ($hash, $MonitoredOpState, $currOpState, $currHeatQuantity, $currOpHours,  $currAmbTemp, $currHeatSourceIn, $targetTemp, $electricalPower) = @_;
    my @last = split / /, $hash->{fhem}{"statThermalPowerOpState_".$MonitoredOpState} || "1";
-   my $saveCurrent = 0;
    my $returnStr = "";
    my $value1;
    my $value2;
    my $value3;
-   $last[3] += $currAmbTemp;
-   $last[4] += $currHeatSourceIn;
-   $last[5]++;
-   
-   # Monitored operation: 5=Hot Water, 0=Heating
-   my $devicePower = 0;
-   if ($MonitoredOpState == 5) {$devicePower = AttrVal($hash->{NAME}, "heatPumpHotWaterElectricalPowerWatt", 0);}
-   if ($devicePower == 0) {$devicePower = AttrVal($hash->{NAME}, "heatPumpElectricalPowerWatt", 0);}
+   my $save = 0;
 
-   if ($last[0] != $MonitoredOpState && $currOpState == $MonitoredOpState ) {
+   if ( $last[0] != $MonitoredOpState && $currOpState == $MonitoredOpState ) {
    # Save start values at the beginning of the monitored operation (5=Hot Water, 0=Heating)
-      $saveCurrent = 1;
-      $last[6] = $targetTemp;
-   
-   } elsif ($last[0] == $MonitoredOpState && $currOpState != $MonitoredOpState && $currOpState != 16 ) { #16=Durchflussüberwachung
-   # Do statistics at the end of the monitored operation
-      $saveCurrent = 1;
-      $value2 = ($currOpHours - $last[2])/60;
-      if ($value2 > 9.5) {
-         $value1 = $last[3] / $last[5];
-         $returnStr = "aT: " . sprintf "%.1f", $value1;
-         $value1 = $last[4] / $last[5];
-         $returnStr .= " iT: " . sprintf "%.1f", $value1;
-         $returnStr .= " tT: " . sprintf "%.1f", $targetTemp;
-         $value1 = $currHeatQuantity -  $last[1];
-         $value3 = $value1 * 60 / $value2;
-         $returnStr .= " thP: " . sprintf "%.1f", $value3;
-         $returnStr .= " DQ: " . sprintf "%.1f", $value1;
-         $returnStr .= " t: " . sprintf "%.0f", $value2;
-         if ($devicePower>0) {
-            $value1 = $value3 *1000 / $devicePower;
-            $returnStr .= " COP: " . sprintf "%.2f", $value1;
-         }
-         if ($last[6] > $targetTemp) { $returnStr .= " tTStart: " . sprintf "%.1f", $last[6]; }
-      }
-   }
-   if ($saveCurrent == 1) {
+      $save = 1;
       $last[0] = $currOpState;
       $last[1] = $currHeatQuantity;
       $last[2] = $currOpHours;
-      $hash->{fhem}{"statThermalPowerOpState_".$MonitoredOpState} = join( " ", @last);
+      $last[3] = $currAmbTemp;
+      $last[4] = $currHeatSourceIn;
+      $last[5] = 1;
+      $last[6] = $targetTemp;
+      $last[7] = $electricalPower;
+   
+   } elsif ($last[0] == $MonitoredOpState && ($currOpState == $MonitoredOpState || $currOpState == 16) ) { #16=Durchflussüberwachung
+   # Store intermediate values as long as the correct opMode runs
+      $save = 1;
+      $last[3] += $currAmbTemp;
+      $last[4] += $currHeatSourceIn;
+      $last[5]++;
+      $last[7] += $electricalPower;
+
+   } elsif ($last[0] == $MonitoredOpState && $currOpState != $MonitoredOpState && $currOpState != 16 ) { #16=Durchflussüberwachung
+   # Do statistics at the end of the monitored operation if it run at least 9.5 minutes
+      $save = 1;
+      $last[0] = $currOpState;
+      $value2 = ($currOpHours - $last[2])/60;
+      if ($value2 >= 6) {
+         $returnStr = sprintf "aT: %.1f iT: %.1f tT: %.1f", $last[3]/$last[5], $last[4]/$last[5], $targetTemp;
+         $value1 = $currHeatQuantity -  $last[1];
+         $value3 = $value1 * 60 / $value2;
+         $returnStr .= sprintf " thP: %.1f DQ: %.1f t: %.0f", $value3, $value1, $value2;
+         if ($last[7]>0) {
+            $value1 = $value3 *1000 / $last[7] * $last[5];;
+            $returnStr .= sprintf " COP: %.2f", $value1;
+         }
+         if ($last[6] > $targetTemp) { $returnStr .= " tTStart: " . $last[6]; }
+      }
    }
+
+   if ($save == 1) { $hash->{fhem}{"statThermalPowerOpState_".$MonitoredOpState} = join( " ", @last);}
+
    return $returnStr;
 }
 
@@ -1335,21 +1336,16 @@ LUXTRONIK2_doStatisticBoilerHeatUp ($$$$$$)
         Log3 $name, 4, "$name: Statistic Boiler Heat-Up step 3->1: Boiler heat-up measurement finished";
         $value1 =  ( int(10 * $maxTemp) - int(10 * $minTemp) ) / 10; # delta hot water temperature
         $value2 = ( $currOpHours - $lastOpHours ) / 60; # delta time (minutes)
-        $returnStr = "DT/min: ".sprintf("%.2f", $value1/$value2)." DT: ".sprintf("%.2f", $value1)." Dmin: ".sprintf("%.0f", $value2);
-
-        $value3 = $currHQ - $lastHQ; # delta heat quantity
-        # Delta Heat Quantity
-        $returnStr .= " DQ: ".sprintf("%.1f",$value3);
-        # Average thermal power
-        $returnStr .= " thP: ".sprintf("%.1f",$value3 * 60 / $value2);
-        
+        $value3 = $currHQ - $lastHQ; # delta heat quantity, average thermal power
+ 
+        $returnStr = sprintf "DT/min: %.2f DT: %.2f Dmin: %.0f DQ: %.1f thP: %.1f", $value1/$value2, $value1, $value2, $value3, $value3*60/$value2;
         
         #real (mixed) Temperature-Difference
         my $boilerVolumn = AttrVal($name, "boilerVolumn", 0);
         if ($boilerVolumn >0 ) {
            # (delta T) [K] = Wärmemenge [kWh] / #Volumen [l] * ( 3.600 [kJ/kWh] / ( 4,179 [kJ/(kg*K)] (H2O Wärmekapazität bei 40°C) * 0,992 [kg/l] (H2O Dichte bei 40°C) ) [K/(kWh*l)] )  
            $value2 = 868.4 * $value3 / $boilerVolumn ;  
-           $returnStr .= " realDT: ".sprintf("%.0f", $value2);
+           $returnStr .= sprintf " realDT: %.0f", $value2;
         }
         
         $step = 1; 
@@ -1412,10 +1408,7 @@ LUXTRONIK2_doStatisticBoilerCoolDown ($$$$$$)
             $value1 =  $currTemp - $maxTemp; # delta hot water temperature
             $value2 = ( $time - $startTime ) / 3600; # delta time (hours)
          }
-         $value3 = sprintf("%.2f", $value1 / $value2 );  # Temperature gradient over time rounded to 1/100th
-         $value2 = sprintf("%.2f", $value2 ); # rounded to 1/100th
-         $value1 = sprintf("%.1f", $value1 ); # rounded to 1/10th
-         $returnStr = "DT/h: $value3 DT: $value1 Dh: $value2";
+         $returnStr = sprintf "DT/h: %.2f DT: %.1f Dh: %.2f", $value1/$value2, $value1, $value2;
          $step = 0;
       } 
    }   
@@ -1457,7 +1450,7 @@ LUXTRONIK2_doStatisticMinMax ($$$)
       $yearLast += 1900;
       $monthLast ++;
    }
-   ($dummy, $dummy, $dummy, $dayNow, $monthNow, $yearNow) = localtime;
+   ($dummy, $dummy, $dummy, $dayNow, $monthNow, $yearNow) = localtime ( gettimeofday() + $hash->{INTERVAL});
    $yearNow += 1900;
    $monthNow ++;
 
@@ -1505,7 +1498,7 @@ LUXTRONIK2_doStatisticMinMaxSingle ($$$$)
       $a[1]++; # Count
       $a[3] += $value; # Sum
       if ($value < $b[1]) { $b[1]=$value; } # Min
-      $b[3] = sprintf "%.1f" , $a[3] / $a[1]; # Avg
+      if ($a[1]>0) {$b[3] = sprintf "%.1f" , $a[3] / $a[1] ;} # Avg
       if ($value > $b[5]) { $b[5]=$value; } # Max
 
       # in case of period change, save "last" values and reset counters
@@ -1534,7 +1527,7 @@ LUXTRONIK2_doStatisticMinMaxSingle ($$$$)
 sub ########################################
 LUXTRONIK2_storeReadings($$$$$$)
 {
-   my ($hash, $readingName, $value, $factor, $doStatistics, $tariffType) = @_;
+   my ($hash, $readingName, $value, $factor, $doStatistics, $electricalPower) = @_;
    
    if ($value eq "no" || $value == 0 ) { return; }
 
@@ -1542,15 +1535,15 @@ LUXTRONIK2_storeReadings($$$$$$)
    
    $readingName =~ s/counter//;
  
-   # LUXTRONIK2_doStatisticDelta: $hash, $readingName, $value, $factor, $tariffType
-   if ( $doStatistics == 1) { LUXTRONIK2_doStatisticDelta $hash, "stat".$readingName, $value, $factor, $tariffType; }
+   # LUXTRONIK2_doStatisticDelta: $hash, $readingName, $value, $factor, $electricalPower
+   if ( $doStatistics == 1) { LUXTRONIK2_doStatisticDelta $hash, "stat".$readingName, $value, $factor, $electricalPower; }
 }
 
 # Calculates deltas for day, month and year
 sub ######################################## 
 LUXTRONIK2_doStatisticDelta ($$$$$) 
 {
-   my ($hash, $readingName, $value, $factor, $tariffType) = @_;
+   my ($hash, $readingName, $value, $factor, $electricalPower) = @_;
    my $name = $hash->{NAME};
    my $dummy;
    my $result;
@@ -1575,7 +1568,7 @@ LUXTRONIK2_doStatisticDelta ($$$$$)
       $previousTariff = 0; 
       $showDate = 6;
    }
-   ($dummy, $dummy, $dummy, $dayNow, $monthNow, $yearNow) = localtime;
+   ($dummy, $dummy, $dummy, $dayNow, $monthNow, $yearNow) = localtime (gettimeofday() + $hash->{INTERVAL});
    if ($yearNow != $yearLast) { $periodSwitch = 3; }
    elsif ($monthNow != $monthLast) { $periodSwitch = 2; }
    elsif ($dayNow != $dayLast) { $periodSwitch = 1; }
@@ -1595,27 +1588,23 @@ LUXTRONIK2_doStatisticDelta ($$$$$)
    }
 
    # LUXTRONIK2_doStatisticDeltaSingle; $hash, $readingName, $deltaValue, $periodSwitch, $showDate, $firstCall
-   LUXTRONIK2_doStatisticDeltaSingle ($hash, $readingName, $deltaValue, $factor, $periodSwitch, $showDate);
+   LUXTRONIK2_doStatisticDeltaSingle ($hash, $readingName, $deltaValue, $factor, $periodSwitch, $showDate, 0);
 
    my $activeTariff = ReadingsVal($name,"activeTariff",0);
 
-   if ( $tariffType != 0 ) {
+   if ( $electricalPower >=0 ) {
       my $readingNamePower = $readingName;
          $readingNamePower =~ s/Hours/Electricity/ ;
-      my $powerValue;
-      if ( $tariffType == 1 || $tariffType == 2 ) { $powerValue = AttrVal($name,"heatPumpElectricalPowerWatt",0); 
-      } elsif ( $tariffType == 3 ) { 
-         $powerValue = AttrVal($name,"heatPumpHotWaterElectricalPowerWatt",0);
-         if ($powerValue == 0) { $powerValue = AttrVal($name,"heatPumpElectricalPowerWatt",0); }
-      } elsif ( $tariffType == 4 ) { $powerValue = AttrVal($name,"heatRodElectricalPowerWatt",0); }
-      if ($powerValue > 0) {
+      if ($activeTariff > 0) {
          foreach (1,2,3,4,5,6,7,8,9) {
             if ( $previousTariff == $_ ) {
-               LUXTRONIK2_doStatisticDeltaSingle ($hash, $readingNamePower."Tariff".$_, $deltaValue * $powerValue, $factor, $periodSwitch, $showDate);
+               LUXTRONIK2_doStatisticDeltaSingle ($hash, $readingNamePower."Tariff".$_, $deltaValue * $electricalPower, $factor, $periodSwitch, $showDate, 1);
             } elsif ($activeTariff == $_ || ($periodSwitch > 0 && exists($hash->{READINGS}{$readingNamePower . "Tariff".$_}))) {
-               LUXTRONIK2_doStatisticDeltaSingle ($hash, $readingNamePower."Tariff".$_, 0, $factor, $periodSwitch, $showDate);
+               LUXTRONIK2_doStatisticDeltaSingle ($hash, $readingNamePower."Tariff".$_, 0, $factor, $periodSwitch, $showDate, 1);
             }
          }
+      } else {
+         LUXTRONIK2_doStatisticDeltaSingle ($hash, $readingNamePower, $deltaValue * $electricalPower, $factor, $periodSwitch, $showDate, 1);
       }
    }
  # Hidden storage of current values for next call(before values)
@@ -1626,11 +1615,11 @@ LUXTRONIK2_doStatisticDelta ($$$$$)
 }
 
 sub ######################################## 
-LUXTRONIK2_doStatisticDeltaSingle ($$$$$$) 
+LUXTRONIK2_doStatisticDeltaSingle ($$$$$$$) 
 {
-   my ($hash, $readingName, $deltaValue, $factor, $periodSwitch, $showDate) = @_;
+   my ($hash, $readingName, $deltaValue, $factor, $periodSwitch, $showDate, $specMonth) = @_;
    my $dummy;
-   my $result; 
+   my $result;   
 
  # get existing statistic reading
    my @curr;
@@ -1638,7 +1627,8 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
       @curr = split / /, $hash->{READINGS}{".".$readingName}{VAL} || "";
    } else {
       $curr[1] = 0; $curr[3] = 0;  $curr[5] = 0;
-      $curr[7] = strftime "%Y-%m-%d_%H:%M:%S", localtime(); # start
+      if ($showDate>5) {$curr[7] = strftime "%Y-%m-%d_%H:%M:%S", localtime();} # start
+      else {$curr[7] = strftime "%Y-%m-%d", localtime();} # start
    }
    
  # get statistic values of previous period
@@ -1658,14 +1648,16 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
 
  # If change of year, change yearly statistic
    if ($periodSwitch == 3){
-      $last[5] = sprintf("%.0f",$curr[5] / $factor);
+      if ($specMonth) { $last[5] = sprintf("%.3f",$curr[5] / $factor/ 1000); }
+      else {$last[5] = sprintf("%.0f",$curr[5] / $factor);}
       $curr[5] = 0;
       if ($showDate == 1) { $last[7] = $curr[7]; }
    }
 
  # If change of month, change monthly statistic 
    if ($periodSwitch >= 2){
-      $last[3] = sprintf("%.0f",$curr[3] / $factor);
+      if ($specMonth) { $last[3] = sprintf("%.3f",$curr[3] / $factor/ 1000); }
+      else {$last[3] = sprintf("%.0f",$curr[3] / $factor);}
       $curr[3] = 0;
       if ($showDate == 3) { $last[7] = $curr[7];}
    }
@@ -1689,9 +1681,8 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
    readingsBulkUpdate($hash,".".$readingName,$result);
    
  # Store visible statistic readings (delta values)
-   $result = "Day: ".sprintf("%.1f",$curr[1]/$factor);
-   $result .= " Month: ".sprintf("%.0f",$curr[3]/$factor);
-   $result .= " Year: ".sprintf("%.0f",$curr[5]/$factor);
+   if ($specMonth) { $result = sprintf "Day: %.1f Month: %.3f Year: %.3f", $curr[1]/$factor, $curr[3]/$factor/1000, $curr[5]/$factor/1000; }
+   else { $result = sprintf "Day: %.1f Month: %.0f Year: %.0f", $curr[1]/$factor, $curr[3]/$factor, $curr[5]/$factor; }
    if ( $showDate >=2 ) { $result .= " (since: $curr[7] )"; }
    readingsBulkUpdate($hash,$readingName,$result);
    
@@ -1711,7 +1702,7 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
 
 <a name="LUXTRONIK2"></a>
 <h3>LUXTRONIK2</h3>
-<ul>
+<ul style="width:800px">
   Luxtronik 2.0 is a heating controller used in <a href="http://www.alpha-innotec.de">Alpha Innotec</a>, Siemens Novelan (WPR NET) and Wolf Heiztechnik (BWL/BWS) heat pumps.
   <br>
   It has a built-in ethernet port, so it can be directly integrated into a local area network (LAN).
@@ -1751,9 +1742,9 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
       <li><code>hotWaterTemperatureTarget &lt;temperature&gt;</code><br>
          Target temperature of domestic hot water boiler in &deg;C
          </li><br>
-     <li><code>resetStatistics &lt;all|statBoilerGradientCoolDownMin|statAmbientTemp...|statElectricity...|statHours...|statHeatQ...&gt;</code>
+     <li><code>resetStatistics &lt;statReadings&gt;</code>
          <br>
-         Deletes the selected statistic values.
+         Deletes the selected statistic values <i>all, statBoilerGradientCoolDownMin, statAmbientTemp..., statElectricity..., statHours..., statHeatQ...</i>
          </li><br>
      <li><code>returnTemperatureSetBack &lt;Temperatur&gt;</code>
          <br>
@@ -1799,10 +1790,10 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
          Logging and visualisation of the statistic should be done with readings of type 'stat<i>ReadingName</i><b>Last</b>'.
          </li><br>
       <li><code>heatPumpElectricalPowerWatt</code><br>
-         Electrical power of the heat pump to calculated coefficency factor and estimate electrical consumption
+         Electrical power of the heat pump by a flow temperature of 35&deg;C to calculated coefficency factor and estimate electrical consumption
          </li><br>
-      <li><code>heatPumpHotWaterElectricalPowerWatt</code><br>
-         Electrical power of the heat pump during hot water preparation to calculated coefficency factor and estimate electrical consumption
+      <li><code>heatPumpElectricalPowerFactor</code><br>
+         Change of electrical power consumption per 1 K flow temperature differenz to 35&deg;C (e.g. 2% per 1 K = 0,02) 
          </li><br>
       <li><code>heatHeatRodElectricalPowerWatt</code><br>
          Electrical power of the heat rods (2nd heat source) to estimate electrical consumption
@@ -1829,10 +1820,9 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
 
 <a name="LUXTRONIK2"></a>
 <h3>LUXTRONIK2</h3>
-<ul>
+<ul style="width:800px">
   Die Luxtronik 2.0 ist eine Heizungssteuerung, welche in W&auml;rmepumpen von <a href="http://www.alpha-innotec.de">Alpha Innotec</a>, 
   Siemens Novelan (WPR NET) und Wolf Heiztechnik (BWL/BWS) verbaut ist.
-  <br>
   Sie besitzt einen Ethernet Anschluss, so dass sie direkt in lokale Netzwerke (LAN) integriert werden kann.
   <br>
   <i>Das Modul wurde bisher mit folgender Steuerungs-Firmware getestet: V1.51, V1.54C, V1.60, V1.69, V1.70.</i>
@@ -1856,9 +1846,10 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
   <b>Set</b><br>
   <ul>
      Durch einen Firmware-Test wird vor jeder Set-Operation sichergestellt, dass W&auml;rmepumpen mit ungetester Firmware nicht unabsichtlich besch&auml;digt werden.
+     <br>&nbsp;
        <li><code>activeTariff &lt; 0 - 9 &gt;</code>
          <br>
-         Erlaubt die gezielte, separate Erfassung der statistischen Verbrauchswerte (doStatistics = 1) für verschiedene Tarife (Doppelstromz&auml;hler)<br>
+         Erlaubt die gezielte, separate Erfassung der statistischen Verbrauchswerte (doStatistics = 1) f&uuml;r verschiedene Tarife (Doppelstromz&auml;hler)<br>
          Dieser Wert muss entsprechend des vorhandenen oder geplanten Tarifes zum jeweiligen Zeitpunkt z.B. durch den FHEM-Befehl "at" gesetzt werden.<br>
          0 = tariflos 
       </li><br>
@@ -1870,9 +1861,9 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
          <br>
          Soll-Temperatur des Hei&szlig;wasserboilers in &deg;C
          </li><br>
-     <li><code>resetStatistics &lt;all|statBoilerGradientCoolDownMin|statAmbientTemp...|statElectricity...|statHours...|statHeatQ...&gt;</code>
+     <li><code>resetStatistics &lt;statWerte&gt;</code>
          <br>
-         Löscht die ausgewählten statisischen Werte.
+         L&ouml;scht die ausgew&auml;hlten statisischen Werte: <i>all, statBoilerGradientCoolDownMin, statAmbientTemp..., statElectricity..., statHours..., statHeatQ...</i>
          </li><br>
      <li><code>returnTemperatureSetBack &lt;Temperatur&gt;</code>
          <br>
@@ -1915,7 +1906,7 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
       W&auml;rmepumpensteuerung zur&uuml;ckzuf&uuml;hren.)</i>
       </li><br>
     <li><code>compressor2ElectricalPowerWatt</code><br>
-      Betriebsleistung des zweiten Kompressors zur Berechung der Arbeitszahl (erzeugte Wärme pro elektrische Energieeinheit)
+      Betriebsleistung des zweiten Kompressors zur Berechung der Arbeitszahl (erzeugte W&auml;rme pro elektrische Energieeinheit)
       und Absch&auml;tzung des elektrischen Verbrauches (Auswertungen noch nicht implementiert)
       </li><br>
     <li><code>doStatistics &lt; 0 | 1 &gt;</code>
@@ -1927,15 +1918,16 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
       F&uuml;r grafische Auswertungen k&ouml;nnen die Werte der Form 'stat<i>ReadingName</i><b>Last</b>' genutzt werden.
       </li><br>
     <li><code>heatPumpElectricalPowerWatt</code><br>
-      Betriebsleistung der W&auml;remepumpe zur Berechung der Arbeitszahl (erzeugte Wärme pro elektrische Energieeinheit)
+      Betriebsleistung der W&auml;remepumpe bei einer Vorlauftemperatur von 35 &deg;C zur Berechung der Arbeitszahl (erzeugte W&auml;rme pro elektrische Energieeinheit)
       und Absch&auml;tzung des elektrischen Verbrauches
       </li><br>
-    <li><code>heatPumpHotWaterElectricalPowerWatt</code><br>
-      Betriebsleistung der W&auml;remepumpe während der Warmwasserbereitung zur Berechung der Arbeitszahl (erzeugte Wärme pro elektrische Energieeinheit)
-      und Absch&auml;tzung des elektrischen Verbrauches
-      </li><br>
+    <li><code>heatPumpElectricalPowerFactor</code><br>
+         &Auml;nderung der elektrischen Leistungsaufnahme per 1 K Vorlauftemperaturdifferenz zu 35 &deg;C
+         <br>
+         (z.B. 2% pro 1 K = 0,02)
+         </li><br>
     <li><code>heatHeatRodElectricalPowerWatt</code><br>
-      Betriebsleistung der Heizstäbe zur Absch&auml;tzung des elektrischen Verbrauches
+      Betriebsleistung der Heizst&auml;be zur Absch&auml;tzung des elektrischen Verbrauches
       </li><br>
    <li><code>ignoreFirmwareCheck &lt; 0 | 1 &gt;</code>
       <br>
@@ -1944,7 +1936,8 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$)
       gesetzt ist, dann wird der Firmware-Test ignoriert und neue Firmware kann getestet werden.
       Dieses Attribut wird jedoch ignoriert, wenn die Steuerungs-Firmware bereits als nicht kompatibel berichtet wurde.
       </li><br>
-    <li><code>statusHTML</code><br>
+    <li><code>statusHTML</code>
+      <br>
       wenn gesetzt, dann wird ein HTML-formatierter Wert "floorplanHTML" erzeugt, 
       welcher vom Modul <a href="#FLOORPLAN">FLOORPLAN</a> genutzt werden kann.<br>
       Momentan wird nur gepr&uuml;ft, ob der Wert dieses Attributes ungleich NULL ist, 

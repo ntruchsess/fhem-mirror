@@ -182,8 +182,22 @@ SYSMON_updateCurrentReadingsMap($) {
   $rMap->{"idletime"}        = "Idle time";
   $rMap->{"idletime_text"}   = "Idle time";
   $rMap->{"loadavg"}         = "Load average";
+  $rMap->{"loadavg_1"}       = "Load average 1";
+  $rMap->{"loadavg_5"}       = "Load average 5";
+  $rMap->{"loadavg_15"}      = "Load average 15";
+  
   $rMap->{"ram"}             = "RAM";
+  $rMap->{"ram_total"}       = "RAM total";
+  $rMap->{"ram_used"}        = "RAM used";
+  $rMap->{"ram_free"}        = "RAM free";
+  $rMap->{"ram_free_percent"}= "RAM free %";
+  
   $rMap->{"swap"}            = "swap";
+  $rMap->{"swap_total"}      = "swap total";
+  $rMap->{"swap_used"}       = "swap used";
+  $rMap->{"swap_free"}       = "swap free";
+  $rMap->{"swap_used_percent"}= "swap used %";
+  
   $rMap->{"uptime"}          = "System up time";
   $rMap->{"uptime_text"}     = "System up time";
 
@@ -192,6 +206,15 @@ SYSMON_updateCurrentReadingsMap($) {
   $rMap->{"stat_cpu_diff"}     = "CPU statistics (diff)";
   $rMap->{"stat_cpu_percent"}  = "CPU statistics (diff, percent)";
   $rMap->{"stat_cpu_text"}     = "CPU statistics (text)";
+  
+  $rMap->{"stat_cpu_user_percent"} = "CPU statistics user %";
+  $rMap->{"stat_cpu_nice_percent"} = "CPU statistics nice %";
+  $rMap->{"stat_cpu_sys_percent"}  = "CPU statistics sys %";
+  $rMap->{"stat_cpu_idle_percent"} = "CPU statistics idle %";
+  $rMap->{"stat_cpu_io_percent"}   = "CPU statistics io %";
+  $rMap->{"stat_cpu_irq_percent"}  = "CPU statistics irq %";
+  $rMap->{"stat_cpu_sirq_percent"} = "CPU statistics sirq %";
+  
   # CPU 0-7 (sollte reichen)
   for my $i (0..7) { 
     $rMap->{"stat_cpu".$i}            = "CPU".$i." statistics";
@@ -206,17 +229,24 @@ SYSMON_updateCurrentReadingsMap($) {
     my @filesystem_list = split(/,\s*/, trim($filesystems));
     foreach (@filesystem_list) {
       my($fName, $fDef, $nComment) = split(/:/, $_);
+      my $fPt; 
       if(defined $nComment) {
-      	$rMap->{$fName}       =  $nComment;
+      	$fPt = $nComment;
       } else {
 	      if(defined $fDef) {
 	    	  # Benannte
-		      $rMap->{$fName}     = "Filesystem ".$fDef;
+	    	  $fPt = "Filesystem ".$fDef;
 	      } else {
 	    	  # Unbenannte
-	    	  $rMap->{$fName}     = "Mount point ".$fName;
+	    	  $fPt = "Mount point ".$fName;
 	      }
 	    }
+	    
+	    $rMap->{$fName}         =  $fPt;
+	    $rMap->{$fName."_used"} =  $fPt." (used)";
+	    $rMap->{$fName."_used_percent"} =  $fPt." (used %)";
+	    $rMap->{$fName."_free"} =  $fPt." (free)";
+	    
     }
   } else {
   	$rMap->{"root"}     = "Filesystem /";
@@ -228,20 +258,24 @@ SYSMON_updateCurrentReadingsMap($) {
   	my @networkadapters_list = split(/,\s*/, trim($networkadapters));
     foreach (@networkadapters_list) {
       my($nName, $nDef, $nComment) = split(/:/, $_);
+      my $nPt; 
       if(defined $nComment) {
-      	$rMap->{$nName}           =  $nComment;
-      	$rMap->{$nName."_diff"}   =  $nComment." (diff)";
+      	$nPt = $nComment;
       } else {
 	      if(defined $nDef) {
 	    	  # Benannte
-		      $rMap->{$nName}         = "Network ".$nDef;
-		      $rMap->{$nName."_diff"} = "Network ".$nDef." (diff)";
+	    	  $nPt = "Network ".$nDef;
 	      } else {
 	    	  # Unbenannte
-	    	  $rMap->{$nName}         = "Network adapter ".$nName;
-	    	  $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
+	    	  $nPt = "Network adapter ".$nName;
 	      }
 	    }
+	    
+	    $rMap->{$nName}           =  $nPt;
+      $rMap->{$nName."_diff"}   =  $nPt." (diff)";
+	    $rMap->{$nName."_rx"}     =  $nPt." (RX)";
+	    $rMap->{$nName."_tx"}     =  $nPt." (TX)";
+	    
     }
   } else {
   	# Default Networkadapters
@@ -250,47 +284,69 @@ SYSMON_updateCurrentReadingsMap($) {
   		my $nName = "ath0";
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
+	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
 	    
 	    $nName = "ath1";
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
+	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
 	    
 	    $nName = "cpmac0";
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
+	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
 	    
 	    $nName = "dsl";
       $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
+	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
 	    
 	    $nName = ETH0;
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
+	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
 	    
 	    $nName = "guest";
 	  	$rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
+	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
 	    
 	    $nName = "hotspot";
     	$rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
+	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
 	    
 	    $nName = "lan";
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
+	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
 	    
 	    $nName = "vdsl";
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
-	   
+	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    
 	  } else {
 	  	my $nName = ETH0;
 	  	$rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
-      
+      $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    
       $nName = WLAN0;
       $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
+	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
+	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
     }
   }
   
@@ -569,6 +625,8 @@ SYSMON_Update($@)
   readingsEndUpdate($hash,defined($hash->{LOCAL}) ? 0 : 1);
 }
 
+# Schattenmap mit den zuletzt gesammelten Werten (merged)
+my %shadow_map;
 sub
 SYSMON_obtainParameters($$)
 {
@@ -577,11 +635,13 @@ SYSMON_obtainParameters($$)
 
 	my $map;
 
-	my $base=0;
+	my $base=$DEFAULT_INTERVAL_BASE; 
 	my $im = "1 1 1 10";
-	# Wenn wesentliche Parameter nicht definiert sind, soll ktualisierung immer vorgenommen werden
-	if((defined $hash->{INTERVAL_BASE}) && (defined $hash->{INTERVAL_MULTIPLIERS})) {
+	# Wenn wesentliche Parameter nicht definiert sind, soll aktualisierung immer vorgenommen werden
+	if((defined $hash->{INTERVAL_BASE})) {
   	$base = $hash->{INTERVAL_BASE};
+  }
+  if((defined $hash->{INTERVAL_MULTIPLIERS})) {
   	$im = $hash->{INTERVAL_MULTIPLIERS};
   }
 
@@ -721,8 +781,34 @@ SYSMON_obtainParameters($$)
 	    }
     }
   }
+  
+  # Aktuelle Werte in ShattenHash mergen
+  my %hashT = %{$map};
+  @shadow_map{ keys %hashT } = values %hashT;
 
   return $map;
+}
+
+#------------------------------------------------------------------------------
+# Liefert gesammelte Werte ( = Readings)
+# Parameter: array der gewuenschten keys (Readings names)
+# Beispiele:
+#   {(SYSMON_getValues())->{'fs_root'}}
+#   {(SYSMON_getValues(("cpu_freq","cpu_temp")))->{"cpu_temp"}}
+#   {join(" ", keys (SYSMON_getValues()))}
+#   {join(" ", keys (SYSMON_getValues(("cpu_freq","cpu_temp"))))}
+#------------------------------------------------------------------------------
+sub
+SYSMON_getValues(;@)
+{
+	my @filter_keys = @_;
+	if(scalar(@filter_keys)>0) {
+		my %clean_hash;
+    @clean_hash{ @filter_keys } = @shadow_map{ @filter_keys };
+    return \%clean_hash;
+	}
+	# alles liefern
+  return \%shadow_map;
 }
 
 #------------------------------------------------------------------------------
@@ -894,7 +980,7 @@ SYSMON_getCPUBogoMIPS($$)
 # Interessant sind eigentlich "nur" Feld 2 (readin), Feld 5 (write)
 # Wenn es eher "um die zeit" geht, Feld 4 (reading), Feld 8 (writing), Feld 10 (Komplett)
 # Kleiner Hinweis, Fled 1 ist das 4. der Liste, das 3. Giebt den Namen an. 
-# Es giebt für jedes Devine und jede Partition ein Eintrag. 
+# Es giebt fuer jedes Devine und jede Partition ein Eintrag. 
 # A /proc/diskstats continuously updated and all that is necessary for us - 
 # make measurements for "second field" and "fourth field" in two different moment of time, 
 # receiving a difference of values and dividing it into an interval of time, 
@@ -1055,7 +1141,7 @@ SYSMON_getDiskStat_intern($$$)
 # Werte:
 #   neuCPUuser, neuCPUnice, neuCPUsystem, neuCPUidle, neuCPUiowait, neuCPUirq, neuCPUsoftirq
 # Differenzberechnung:
-#   CPUuser = neuCPUuser - altCPUuser (für alle anderen analog)
+#   CPUuser = neuCPUuser - altCPUuser (fuer alle anderen analog)
 #   GesammtCPU = CPUuser + CPUnice + CPUsystem + CPUidle + CPUiowait + CPUirq + CPUsoftirq
 # Belastung in %:
 #   ProzCPUuser = (CPUuser / GesammtCPU) * 100
@@ -1073,7 +1159,7 @@ SYSMON_getCPUProcStat($$)
     $map = SYSMON_getCPUProcStat_intern($hash, $map, $entry);
   }
   
-  # Wenn nur eine CPU vorhanden ist, löschen Werte für CPU0 (nur Gesamt belassen)
+  # Wenn nur eine CPU vorhanden ist, loeschen Werte fuer CPU0 (nur Gesamt belassen)
   if(!defined($map->{"stat_cpu1"})){
   	delete $map->{"stat_cpu0"};
   	delete $map->{"stat_cpu0_diff"};
@@ -1322,7 +1408,7 @@ sub SYSMON_getNetworkInfo ($$$)
     #           UP BROADCAST RUNNING MULTICAST  MTU:1500  Metrik:1
     #           RX packets:339826 errors:0 dropped:45 overruns:0 frame:0
     #           TX packets:533293 errors:0 dropped:0 overruns:0 carrier:0
-    #           Kollisionen:0 Sendewarteschlangenlänge:1000
+    #           Kollisionen:0 Sendewarteschlangenlaenge:1000
     #           RX bytes:25517384 (24.3 MiB)  TX bytes:683970999 (652.2 MiB)
 
     foreach (@dataThroughput) {
@@ -1473,7 +1559,7 @@ sub SYSMON_getFBNightTimeControl($$)
 }
 
 #------------------------------------------------------------------------------
-# Liefert Anzahl der nicht abgehörten Nachrichten auf dem Anrufbeantworter (nur FritzBox)
+# Liefert Anzahl der nicht abgehoerten Nachrichten auf dem Anrufbeantworter (nur FritzBox)
 # Parameter: HASH; MAP
 #------------------------------------------------------------------------------
 sub SYSMON_getFBNumNewMessages($$)
@@ -1503,6 +1589,7 @@ sub SYSMON_acquireInfo_intern($$;$)
 	if(!defined($art)) { $art= 0; }
 
   $ret = $str;
+  no warnings;
   if($art == 1) {
     if($str+0 == 1) {
 	   $ret="on";
@@ -1514,6 +1601,7 @@ sub SYSMON_acquireInfo_intern($$;$)
 	    }
     }
   }
+  use warnings;
 	return $ret;
 }
 
@@ -1587,12 +1675,12 @@ sub SYSMON_ShowValuesFmt ($$;@)
     
     my $hash = $main::defs{$name};
     
-    if(!defined($cur_readings_map)) {
-	    SYSMON_updateCurrentReadingsMap($hash);
-    }
+    #if(!defined($cur_readings_map)) {
+	  #  SYSMON_updateCurrentReadingsMap($hash);
+    #}
   
     SYSMON_updateCurrentReadingsMap($hash);
-#Log 3, "SYSMON $>name, @data<";
+  #Log 3, "SYSMON $>name, @data<";
   my @dataDescription = @data;
   if(scalar(@data)<=0) {
 	  # Array mit anzuzeigenden Parametern (Prefix, Name (in Map), Postfix)
@@ -1640,7 +1728,7 @@ sub SYSMON_ShowValuesFmt ($$;@)
   
   my $map = SYSMON_obtainParameters($hash, 1);
 
-  my $div_class="";
+  my $div_class="sysmon";
 
   my $htmlcode;
   if($format == 1) {
@@ -2164,6 +2252,11 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     <ul>
     According to SYSMON_ShowValuesHTML, but formatted as plain text.<br>
     </ul><br>
+    
+  <b>Reading values with perl: SYSMON_getValues([&lt;array of desired keys&gt;])</b><br><br>
+    <ul>
+    Returns a hash ref with desired values. If no array is passed, all values are returned.<br>
+    </ul><br>
 
   <b>Examples:</b><br><br>
     <ul>
@@ -2639,9 +2732,14 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     <code>define sysv2 weblink htmlCode {SYSMON_ShowValuesHTML('sysmon', ('date:Datum', 'cpu_temp:CPU Temperatur: &deg;C', 'cpu_freq:CPU Frequenz: MHz'))}</code>
     </ul><br>
     
-    <b>Text output method (see Weblink): SYSMON_ShowValuesText(&lt;SYSMON-Instance&gt;[,&lt;Liste&gt;])</b><br><br>
+    <b>Text-Ausgabe-Methode (see Weblink): SYSMON_ShowValuesText(&lt;SYSMON-Instance&gt;[,&lt;Liste&gt;])</b><br><br>
     <ul>
     Analog SYSMON_ShowValuesHTML, jedoch formatiert als reines Text.<br>
+    </ul><br>
+    
+    <b>Readings-Werte mit Perl lesen: SYSMON_getValues([&lt;Liste der gew&uuml;nschten Schl&uuml;ssel&gt;])</b><br><br>
+    <ul>
+    Liefert ein Hash-Ref mit den gew&uuml;nschten Werten. Wenn keine Liste (array) &uuml;bergeben wird, werden alle Werte geliefert.<br>
     </ul><br>
 
   <b>Beispiele:</b><br><br>

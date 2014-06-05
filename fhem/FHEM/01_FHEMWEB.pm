@@ -44,6 +44,7 @@ sub FW_textfield($$$);
 sub FW_textfieldv($$$$);
 sub FW_updateHashes();
 sub FW_visibleDevices(;$);
+sub FW_widgetOverride($$);
 
 use vars qw($FW_dir);     # base directory for web server
 use vars qw($FW_icondir); # icon base directory
@@ -81,6 +82,8 @@ $FW_formmethod = "post";
 my $FW_zlib_checked;
 my $FW_use_zlib = 1;
 my $FW_activateInform = 0;
+my $FW_lastWebName = "";  # Name of last FHEMWEB instance, for caching
+my $FW_lastHashUpdate = 0;
 
 #########################
 # As we are _not_ multithreaded, it is safe to use global variables.
@@ -92,6 +95,8 @@ my %FW_icons;      # List of icons
 my @FW_iconDirs;   # Directory search order for icons
 my $FW_RETTYPE;    # image/png or the like
 my %FW_rooms;      # hash of all rooms
+my @FW_roomsArr;   # ordered list of rooms
+my %FW_groups;     # hash of all groups
 my %FW_types;      # device types, for sorting
 my %FW_hiddengroup;# hash of hidden groups
 my $FW_inform;
@@ -161,7 +166,7 @@ FHEMWEB_Initialize($)
   ###############
   # Initialize internal structures
   map { addToAttrList($_) } ( "webCmd", "icon", "devStateIcon",
-                                "sortby", "devStateStyle");
+                              "widgetOverride",  "sortby", "devStateStyle");
   InternalTimer(time()+60, "FW_closeOldClients", 0, 0);
 
   $FW_dir      = "$attr{global}{modpath}/www";
@@ -228,7 +233,9 @@ sub
 FW_Undef($$)
 {
   my ($hash, $arg) = @_;
-  return TcpServer_Close($hash);
+  my $ret = TcpServer_Close($hash);
+  %FW_visibleDeviceHash = FW_visibleDevices() if($hash->{inform});
+  return $ret;
 }
 
 #####################################
@@ -276,7 +283,7 @@ FW_Read($)
   }
 
   $hash->{BUF} .= $buf;
-  if($defs{$FW_wname}{SSL}) {
+  if($defs{$FW_wname}{SSL} && $c->can('pending')) {
     while($c->pending()) {
       sysread($c, $buf, 1024);
       $hash->{BUF} .= $buf;
@@ -568,6 +575,9 @@ FW_answerCall($)
     if($cmd =~ m/^define +([^ ]+) /) { # "redirect" after define to details
       $FW_detail = $1;
     }
+    elsif($cmd =~ m/^copy +([^ ]+) +([^ ]+)/) { # "redirect" after define to details
+      $FW_detail = $2;
+    }
   }
 
   # Redirect after a command, to clean the browser URL window
@@ -583,7 +593,11 @@ FW_answerCall($)
     return -1;
   }
 
-  FW_updateHashes();
+  if($FW_lastWebName ne $FW_wname || $FW_lastHashUpdate != $lastDefChange) {
+    FW_updateHashes();
+    $FW_lastWebName = $FW_wname;
+    $FW_lastHashUpdate = $lastDefChange;
+  }
 
   my $t = AttrVal("global", "title", "Home, Sweet Home");
 
@@ -765,27 +779,36 @@ FW_digestCgi($)
 sub
 FW_updateHashes()
 {
-  #################
-  # Make a room  hash
-  %FW_rooms = ();
+  %FW_rooms = ();  # Make a room  hash
+  %FW_groups = (); # Make a group  hash
+  %FW_types = ();  # Needed for type sorting
+
   foreach my $d (keys %defs ) {
     next if(IsIgnored($d));
+
     foreach my $r (split(",", AttrVal($d, "room", "Unsorted"))) {
       $FW_rooms{$r}{$d} = 1;
     }
-  }
-
-  ###############
-  # Needed for type sorting
-  %FW_types = ();
-  foreach my $d (sort keys %defs ) {
-    next if(IsIgnored($d));
+    foreach my $r (split(",", AttrVal($d, "group", ""))) {
+      $FW_groups{$r}{$d} = 1;
+    }
     my $t = AttrVal($d, "subType", $defs{$d}{TYPE});
     $t = AttrVal($d, "model", $t) if($t && $t eq "unknown"); # RKO: ???
     $FW_types{$d} = $t;
   }
 
   $FW_room = AttrVal($FW_detail, "room", "Unsorted") if($FW_detail);
+
+  if(AttrVal($FW_wname, "sortRooms", "")) { # Slow!
+    my @sortBy = split( " ", AttrVal( $FW_wname, "sortRooms", "" ) );
+    my %sHash;                                                       
+    map { $sHash{$_} = FW_roomIdx(\@sortBy,$_) } keys %FW_rooms;
+    @FW_roomsArr = sort { $sHash{$a} cmp $sHash{$b} } keys %FW_rooms;
+
+  } else {
+    @FW_roomsArr = sort keys %FW_rooms;
+
+  }
 }
 
 ##############################
@@ -941,8 +964,8 @@ FW_doDetail($)
   FW_pO "<form method=\"$FW_formmethod\" action=\"$FW_ME\">";
   FW_pO FW_hidden("detail", $d);
 
-  FW_makeSelect($d, "set", getAllSets($d), "set");
-  FW_makeSelect($d, "get", getAllGets($d), "get");
+  FW_makeSelect($d, "set", FW_widgetOverride($d, getAllSets($d)), "set");
+  FW_makeSelect($d, "get", FW_widgetOverride($d, getAllGets($d)), "get");
 
   FW_makeTable("Internals", $d, $h);
   FW_makeTable("Readings", $d, $h->{READINGS});
@@ -950,7 +973,13 @@ FW_doDetail($)
   my $attrList = getAllAttr($d);
   my $roomList = "multiple,".join(",", 
                 sort map { $_ =~ s/ /#/g ;$_} keys %FW_rooms);
+  my $groupList = "multiple,".join(",", 
+                sort map { $_ =~ s/ /#/g ;$_} keys %FW_groups);				
   $attrList =~ s/room /room:$roomList /;
+  $attrList =~ s/group /group:$groupList /;
+  $attrList = FW_widgetOverride($d, $attrList);
+  $attrList =~ s/\\/\\\\/g;
+  $attrList =~ s/'/\\'/g;
   FW_makeSelect($d, "attr", $attrList,"attr");
 
   FW_makeTable("Attributes", $d, $attr{$d}, "deleteattr");
@@ -998,7 +1027,7 @@ FW_makeTableFromArray($$@) {
 }
 
 sub
-FW_roomIdx(\@$)
+FW_roomIdx($$)
 {
   my ($arr,$v) = @_; 
   my ($index) = grep { $v =~ /^$arr->[$_]$/ } 0..$#$arr;
@@ -1073,20 +1102,18 @@ FW_roomOverview($)
   }
   $FW_room = "" if(!$FW_room);
 
-  my @sortBy = split( " ", AttrVal( $FW_wname, "sortRooms", "" ) );
-  @sortBy = sort keys %FW_rooms if( scalar @sortBy == 0 );
 
   ##########################
   # Rooms and other links
-  foreach my $r ( sort { FW_roomIdx(@sortBy,$a) cmp
-                         FW_roomIdx(@sortBy,$b) } keys %FW_rooms ) {
+  foreach my $r (@FW_roomsArr) {
     next if($r eq "hidden" || $FW_hiddenroom{$r});
     $FW_room = $r if(!$FW_room && $FW_ss);
-    $r =~ s/</&lt;/g;
-    $r =~ s/>/&lt;/g;
-    push @list1, $r;
-    $r =~ s/ /%20/g;
-    push @list2, "$FW_ME?room=$r";
+    my $lr = $r;
+    $lr =~ s/</&lt;/g;
+    $lr =~ s/>/&lt;/g;
+    push @list1, $lr;
+    $lr =~ s/ /%20/g;
+    push @list2, "$FW_ME?room=$lr";
   }
   my @list = (
      "Everything",    "$FW_ME?room=all",
@@ -1258,6 +1285,7 @@ FW_showRoom()
         $row++;
 
         my ($allSets, $cmdlist, $txt) = FW_devState($d, $rf, \%extPage);
+        $allSets = FW_widgetOverride($d, $allSets);
 
         my $colSpan = ($usuallyAtEnd{$d} ? ' colspan="2"' : '');
         FW_pO "<td informId=\"$d\"$colSpan>$txt</td>";
@@ -1340,8 +1368,9 @@ FW_fileList($)
   my ($fname) = @_;
   $fname =~ m,^(.*)/([^/]*)$,; # Split into dir and file
   my ($dir,$re) = ($1, $2);
-  return if(!$re);
-  $dir =~ s/%L/$attr{global}{logdir}/g if($dir =~ m/%/ && $attr{global}{logdir}); # %L present and log directory defined
+  return $fname if(!$re);
+  $dir =~ s/%L/$attr{global}{logdir}/g # %L present and log directory defined
+        if($dir =~ m/%/ && $attr{global}{logdir});
   $re =~ s/%./[A-Za-z0-9]*/g;    # logfile magic (%Y, etc)
   my @ret;
   return @ret if(!opendir(DH, $dir));
@@ -1606,19 +1635,15 @@ FW_style($$)
     my $fileName = $a[2]; 
     my $data = "";
     my $cfgDB = defined($a[3]) ? $a[3] : "";
-    if ($cfgDB eq 'configDB') {
-      my $filePath = FW_fileNameToPath($fileName);
-      $data = _cfgDB_Readfile($filePath);
-    } else {
-      $fileName =~ s,.*/,,g;        # Little bit of security
-      my $filePath = FW_fileNameToPath($fileName);
-      if(!open(FH, $filePath)) {
-        FW_pO "<div id=\"content\">$filePath: $!</div>";
-        return;
-      }
-      $data = join("", <FH>);
-      close(FH);
+    my $forceType = ($cfgDB eq 'configDB') ? $cfgDB : "file";
+    $fileName =~ s,.*/,,g;        # Little bit of security
+    my $filePath = FW_fileNameToPath($fileName);
+    my($err, @content) = FileRead({FileName=>$filePath, ForceType=>$forceType} );
+    if($err) {
+      FW_pO "<div id=\"content\">$err</div>";
+      return;
     }
+    $data = join("\n", @content);
 
     $data =~ s/&/&amp;/g;
 
@@ -1639,35 +1664,23 @@ FW_style($$)
   } elsif($a[1] eq "save") {
     my $fileName = $a[2];
     my $cfgDB = defined($a[3]) ? $a[3] : "";
+    my $forceType = ($cfgDB eq 'configDB') ? $cfgDB : "file";
     $fileName = $FW_webArgs{saveName}
         if($FW_webArgs{saveAs} && $FW_webArgs{saveName});
     $fileName =~ s,.*/,,g;        # Little bit of security
     my $filePath = FW_fileNameToPath($fileName);
 
-    if($cfgDB ne 'configDB') { # save file to filesystem
-      if(!open(FH, ">$filePath")) {
-        FW_pO "<div id=\"content\">$filePath: $!</div>";
-        return;
-      }
-      $FW_data =~ s/\r//g if($^O !~ m/Win/);
-      binmode (FH);
-      print FH $FW_data;
-      close(FH);
-      my $ret = FW_fC("rereadcfg") if($filePath eq $attr{global}{configfile});
-      $ret = FW_fC("reload $fileName") if($fileName =~ m,\.pm$,);
-      $ret = ($ret ? "<h3>ERROR:</h3><b>$ret</b>" : "Saved the file $fileName");
-      FW_style("style list", $ret);
-      $ret = "";
-
-    } else { # save file to configDB
-      $FW_data =~ s/\r//g if($^O !~ m/Win/);
-      _cfgDB_Writefile($filePath, $FW_data);
-      my $ret = FW_fC("reload $fileName") if($fileName =~ m,\.pm$,);
-      $ret = ($ret ? "<h3>ERROR:</h3><b>$ret</b>" :
-                        "Saved the file $fileName to configDB");
-      FW_style("style list", $ret);
-      $ret = "";
+    $FW_data =~ s/\r//g;
+    my $err = FileWrite({FileName=>$filePath, ForceType=>$forceType}, split("\n", $FW_data));
+    if($err) {
+      FW_pO "<div id=\"content\">$filePath: $!</div>";
+      return;
     }
+    my $ret = FW_fC("rereadcfg") if($filePath eq $attr{global}{configfile});
+    $ret = FW_fC("reload $fileName") if($fileName =~ m,\.pm$,);
+    $ret = ($ret ? "<h3>ERROR:</h3><b>$ret</b>" : "Saved the file $fileName to $forceType");
+    FW_style("style list", $ret);
+    $ret = "";
 
   } elsif($a[1] eq "iconFor") {
     FW_iconTable("iconFor", "icon", "style setIF $a[2] %s", undef);
@@ -2141,9 +2154,11 @@ FW_Notify($$)
       FW_readIcons($h->{iconPath});
     }
 
-    my ($allSet, $cmdlist, $txt) = FW_devState($dn, "", \%extPage);
-    ($FW_wname, $FW_ME, $FW_ss, $FW_tp, $FW_subdir) = @old;
-    push @data, "$dn<<$dev->{STATE}<<$txt";
+    if( !$modules{$defs{$dn}{TYPE}}{FW_atPageEnd} ) {
+      my ($allSet, $cmdlist, $txt) = FW_devState($dn, "", \%extPage);
+      ($FW_wname, $FW_ME, $FW_ss, $FW_tp, $FW_subdir) = @old;
+      push @data, "$dn<<$dev->{STATE}<<$txt";
+    }
 
     #Add READINGS
     if($events) {    # It gets deleted sometimes (?)
@@ -2471,7 +2486,7 @@ sub
 FW_visibleDevices(;$)
 {
   my($FW_wname) = @_; 
- 
+
   my %devices = (); 
   foreach my $d (sort keys %defs) {
     next if(!defined($defs{$d}));
@@ -2493,6 +2508,28 @@ FW_ActivateInform()
 {
   $FW_activateInform = 1;
 }
+
+sub
+FW_widgetOverride($$)
+{
+  my ($d, $str) = @_;
+
+  return $str if(!$str);
+
+  my $da = AttrVal($d, "widgetOverride", "");
+  my $fa = AttrVal($FW_wname, "widgetOverride", "");
+  return $str if(!$da && !$fa);
+
+  my @list;
+  push @list, split(" ", $fa) if($fa);
+  push @list, split(" ", $da) if($da);
+  foreach my $na (@list) {
+    my ($n,$a) = split(":", $na);
+    $str =~ s/\b($n)\b(:[^ ]*)?/$1:$a/g;
+  }
+  return $str;
+}
+
 
 1;
 
@@ -2934,7 +2971,30 @@ FW_ActivateInform()
         The first specified command is looked up in the "set device ?" list
         (see the <a href="#setList">setList</a> attribute for dummy devices).
         If <b>there</b> it contains some known modifiers (colon, followed
-        by a comma separated list), then a different widget will be displayed:
+        by a comma separated list), then a different widget will be displayed.
+        See also the widgetOverride attribute below. Examples:
+        <ul>
+          define d1 dummy<br>
+          attr d1 webCmd state<br>
+          attr d1 setList state:on,off<br>
+          define d2 dummy<br>
+          attr d2 webCmd state<br>
+          attr d2 setList state:slider,0,1,10<br>
+          define d3 dummy<br>
+          attr d3 webCmd state<br>
+          attr d3 setList state:time<br>
+        </ul>
+        If the command is state, then the value will be used as a command.<br>
+        Note: this is an attribute for the displayed device, not for the FHEMWEB
+        instance.
+        </li>
+        <br>
+
+
+    <a name="widgetOverride"></a>
+    <li>widgetOverride<br>
+        Space spearate list of name:modifier pairs, to override the widget
+        for a set/get/attribute specified by the module author.
         <ul>
           <li>if the modifier is ":noArg", then no further input field is
             displayed </li>
@@ -2948,21 +3008,12 @@ FW_ActivateInform()
             multiple values can be selected, the result is comma separated.</li>
           <li>else a dropdown with all the modifier values is displayed</li>
         </ul>
-        If the command is state, then the value will be used as a command.<br>
-        Examples for the modifier:
+        If this attribute is specified for a FHEMWEB instance, then it is
+        applied to all devices shown. Examples:
         <ul>
-          define d1 dummy<br>
-          attr d1 webCmd state<br>
-          attr d1 setList state:on,off<br>
-          define d2 dummy<br>
-          attr d2 webCmd state<br>
-          attr d2 setList state:slider,0,1,10<br>
-          define d3 dummy<br>
-          attr d3 webCmd state<br>
-          attr d3 setList state:time<br>
+          attr FS20dev widgetOverride on-till:time<br>
+          attr WEB widgetOverride room:textField<br>
         </ul>
-        Note: this is an attribute for the displayed device, not for the FHEMWEB
-        instance.
         </li>
         <br>
 
@@ -3441,7 +3492,30 @@ FW_ActivateInform()
         Der erste angegebene Befehl wird in der "set device ?" list
         nachgeschlagen (Siehe das <a href="#setList">setList</a> Attrib
         f&uuml;r Dummy Ger&auml;te).  Wenn <b>dort</b> bekannte Modifier sind,
-        wird ein anderes Widget angezeigt:
+        wird ein anderes Widget angezeigt. Siehe auch widgetOverride.<br>
+        Wenn der Befehl state ist, wird der Wert als Kommando interpretiert.<br>
+        Beispiele:
+        <ul>
+          define d1 dummy<br>
+          attr d1 webCmd state<br>
+          attr d1 setList state:on,off<br>
+          define d2 dummy<br>
+          attr d2 webCmd state<br>
+          attr d2 setList state:slider,0,1,10<br>
+          define d3 dummy<br>
+          attr d3 webCmd state<br>
+          attr d3 setList state:time<br>
+        </ul>
+        Anmerkung: dies ist ein Attribut f&uuml;r das anzuzeigende Ger&auml;t,
+        nicht f&uuml;r die FHEMWEBInstanz.
+        </li><br>
+
+
+    <a name="widgetOverride"></a>
+    <li>widgetOverride<br>
+        Leerzeichen separierte Liste von Name/Modifier Paaren, mit dem man den
+        vom Modulautor fuer einen bestimmten Parameter (Set/Get/Attribut)
+        vorgesehene Widgets aendern kann.
         <ul>
           <li>Ist der Modifier ":noArg", wird kein weiteres Eingabefeld
               angezeigt.</li>
@@ -3457,28 +3531,19 @@ FW_ActivateInform()
             JavaScript programmierter Slider angezeigt</li>
 
           <li>Ist der Modifier ":multiple,val1,val2,...", dann ein
-            Mehrfachauswahl ist m&ouml;glich, das Ergebnis ist Komma-separiert.</li>
+            Mehrfachauswahl ist m&ouml;glich, das Ergebnis ist
+            Komma-separiert.</li>
 
           <li>In allen anderen F&auml;llen erscheint ein Dropdown mit allen
             Modifier Werten.</li>
         </ul>
-
-        Wenn der Befehl state ist, wird der Wert als Kommando interpretiert.<br>
-        Beispiele f&uuml;r modifier:
+        Falls das Attribut f&uuml;r eine WEB Instanz gesetzt wurde, dann wird
+        es bei allen von diesem Web-Instan angezeigten Ger&auml;ten angewendet.
+        Beispiele:
         <ul>
-          define d1 dummy<br>
-          attr d1 webCmd state<br>
-          attr d1 setList state:on,off<br>
-          define d2 dummy<br>
-          attr d2 webCmd state<br>
-          attr d2 setList state:slider,0,1,10<br>
-          define d3 dummy<br>
-          attr d3 webCmd state<br>
-          attr d3 setList state:time<br>
+          attr FS20dev widgetOverride on-till:time<br>
+          attr WEB widgetOverride room:textField<br>
         </ul>
-
-        Anmerkung: dies ist ein Attribut f&uuml;r das anzuzeigende Ger&auml;t,
-        nicht f&uuml;r die FHEMWEBInstanz.
         </li><br>
 
      <a name="column"></a>

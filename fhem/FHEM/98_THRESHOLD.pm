@@ -35,7 +35,7 @@ THRESHOLD_Initialize($)
   $hash->{SetFn}   = "THRESHOLD_Set";
   $hash->{AttrFn}   = "THRESHOLD_Attr";
   $hash->{NotifyFn} = "THRESHOLD_Notify";
-  $hash->{AttrList} = "disable:0,1 loglevel:0,1,2,3,4,5,6 state_format state_cmd1_gt state_cmd2_lt";
+  $hash->{AttrList} = "disable:0,1 loglevel:0,1,2,3,4,5,6 state_format state_cmd1_gt state_cmd2_lt target_func number_format setOnDeactivated:cmd1_gt,cmd2_lt";
 }
 
 
@@ -54,8 +54,8 @@ THRESHOLD_Define($$$)
   my $target_sensor;
   my $target_reading;
   my $offset=0;
-  my $pn = $a[0]; 
-  
+  my $pn = $a[0];
+    
   if (@b > 6 || @a < 3 || @a > 6) {
     my $msg = "wrong syntax: define <name> THRESHOLD " .
                "<sensor>:<reading1>:<hysteresis>:<target_value>:<offset> AND|OR <sensor2>:<reading2>:<state> ".
@@ -184,6 +184,7 @@ THRESHOLD_Define($$$)
       $attr{$pn}{state_cmd2_lt} = "on";
       $cmd_default = 2;
       $attr{$pn}{state_format} = "_m _dv _sc";
+      $attr{$pn}{number_format} = "%.1f";
     }
   } else { # actor parameters 
     $cmd1_gt = $b[1] if (defined($b[1]));
@@ -207,6 +208,7 @@ THRESHOLD_Define($$$)
        $attr{$pn}{state_format} = "_sc";
       } else {
           $attr{$pn}{state_format} = "_m _dv";
+          $attr{$pn}{number_format} = "%.1f";
         }
     
   }
@@ -241,7 +243,7 @@ THRESHOLD_Define($$$)
     {
       my $mode="external";
       readingsBulkUpdate   ($hash, "cmd", "wait for next cmd");
-      readingsBulkUpdate   ($hash, "mode", "external");
+      readingsBulkUpdate   ($hash, "mode",$mode);
     }
     readingsEndUpdate    ($hash, 1);
 #    my $msg = THRESHOLD_Check($hash);
@@ -267,6 +269,7 @@ THRESHOLD_Set($@)
   my $offset = $hash->{offset};
   my $mode;
   my $state_format = AttrVal($pn, "state_format", "_m _dv");
+  my $cmd = AttrVal($pn, "setOnDeactivated", "");
  
   if ($arg eq "desired" ) {
     return "$pn: set desired value:$value, desired value needs a numeric parameter" if(@a != 3 || $value !~ m/^[-\d\.]*$/);
@@ -291,6 +294,22 @@ THRESHOLD_Set($@)
     readingsEndUpdate    ($hash, 1);
     return THRESHOLD_Check($hash);
   } elsif ($arg eq "deactivated" ) {
+      $cmd = $value if ($value ne "");
+      if ($cmd ne "") {
+        if ($cmd eq "cmd1_gt" ) {
+            readingsBeginUpdate  ($hash);
+            THRESHOLD_setValue   ($hash,1);
+            THRESHOLD_set_state  ($hash);
+            readingsEndUpdate    ($hash, 1);
+        } elsif ($cmd eq "cmd2_lt" ) {
+            readingsBeginUpdate  ($hash);
+            THRESHOLD_setValue   ($hash,2);
+            THRESHOLD_set_state  ($hash);
+            readingsEndUpdate    ($hash, 1);
+          } else {
+            return "$pn: set deactivated: $cmd, unknown command, use: cmd1_gt or cmd2_lt";
+          }
+      } 
       $ret=CommandAttr(undef, "$pn disable 1");   
   } elsif ($arg eq "active" ) {
       return "$pn: set active, set desired value first" if ($desired_value eq "");
@@ -442,6 +461,18 @@ THRESHOLD_Check($)
       my $instr = $defs{$target_sensor}{READINGS}{$target_reading}{VAL};
       $instr =~  /[^\d^\-^.]*([-\d.]*)/;
       $t_value = $1;
+      my $target_func = AttrVal($pn, "target_func", "");
+      if ($target_func)
+      {
+        $target_func =~ s/\_tv/$t_value/g;
+        my $ret = eval $target_func;
+        if ($@) {
+          my $msg = "$pn: error in target_func: $target_func, ".$@;
+          Log3 $pn,2, $msg;
+          return"";
+        }
+        $t_value=$ret;
+      }
       $sensor_max = $t_value+$hash->{offset};
       $sensor_min = $t_value-$hash->{hysteresis}+$hash->{offset};
     }  
@@ -549,6 +580,11 @@ THRESHOLD_set_state($)
 #	my %h_state_cmd = (cmd1_gt=>state_cmd1_gt, cmd2_lt=>state_cmd2_lt);
     my $state_cmd = AttrVal ($pn, "state_".$cmd,"");
     my $state_format = AttrVal($pn, "state_format", "_m _dv");
+    my $number_format = AttrVal($pn, "number_format", "");
+    if ($number_format ne "") {
+      $desired_value =sprintf($number_format,$desired_value) if ($desired_value ne "");
+      $sensor_value =sprintf($number_format,$sensor_value) if ($sensor_value ne "");
+    }     
     $state_format =~ s/\_m/$mode/g;
     $state_format =~ s/\_dv/$desired_value/g;
     $state_format =~ s/\_s1v/$sensor_value/g;
@@ -825,8 +861,9 @@ THRESHOLD_setValue($$)
       Set the desired value. If no desired value is set, the module is not active.
       </li>
       <br>
-      <li> <code>set &lt;name&gt; deactivated &lt;value&gt;<br></code>
-      Module is disabled.
+      <li><code>set &lt;name&gt; deactivated &lt;command&gt;<br></code>
+      Module is disabled.<br>
+      &lt;command&gt; is optional. It can be "cmd1_gt" or "cmd2_lt" passed in order to achieve a defined state before disabling the module.
       </li>
       <br>
       <li> <code>set &lt;name&gt; active &lt;value&gt;<br></code>
@@ -871,6 +908,17 @@ THRESHOLD_setValue($$)
     <li>state_cmd1_gt</li>
     <li>state_cmd2_lt</li>
     <li>state_format</li>
+    <li>number_format</li>
+    The specified format is used in the state for formatting desired_value (_dv) and Sensor_value (_s1v) using the sprintf function.<br>
+    The default value is "% .1f" to one decimal place. Other formatting, see Formatting in the sprintf function in the Perldokumentation.<br>
+    If the attribute is deleted, numbers are not formatted in the state.<br>
+    <li>target_func</li>
+    Here, a Perl expression used to calculate a target value from a value of the external sensor.<br>
+    The sensor value is given as "_tv" in the expression.<br>
+    Example:<br>
+    <code>attr TH_heating target_func -0.578*_tv+33.56</code><br>
+    <li>setOnDeactivated</li>
+    Command to be executed before deactivating. Possible values: cmd1_gt, cmd2_lt<br>
   </ul>
   <br>
     
@@ -951,6 +999,18 @@ THRESHOLD_setValue($$)
   <code>define TH_outdoor THRESHOLD outdoor:temperature:0:15</code><br>
   <code>define TH_room THRESHOLD indoor OR TH_outdoor:state:off heating</code><br>
   <code>set TH_room desired 21</code><br>
+  <br>
+  <b>Steuerung einer Heizung nach einer Heizkennlinie:</b><br>
+  <br>
+  Berechnung der Solltemperatur für die Vorlauftemperatur für Fußbodenheizung mit Hilfe der 0,8-Heizkennlinie anhand der Außentemperatur :<br>
+  <br>
+  <code>define TH_heating THRESHOLD flow:temperature:2:outdoor:temperature heating</code><br>
+  <code>attr TH_heating target_func -0.578*_tv+33.56</code><br>
+  <br>
+  Nachtabsenkung lässt sich zeitgesteuert durch das Setzen von "offset" realisieren.<br>
+  Von 22:00 bis 5:00 Uhr soll die Vorlauftemperatur um 10 Grad herabgesetzt werden:<br>
+  <br>
+  <code>define W_heating weekdaytimer TH_heating 05:00|0 22:00|-10 set @ offset %</code><br>
   <br>
   <br>
   <b><u>Beispiele für Belüftungssteuerung:</u></b><br>
@@ -1179,8 +1239,9 @@ THRESHOLD_setValue($$)
       Sollwert-Vorgabe durch einen Sensor wird hiermit übersteuert, solange bis "set external" gesetzt wird.
       </li>
       <br>
-      <li><code>set &lt;name&gt; deactivated &lt;value&gt;<br></code>
-      Modul wird deaktiviert.
+      <li><code>set &lt;name&gt; deactivated &lt;command&gt;<br></code>
+      Modul wird deaktiviert.<br>
+      &lt;command&gt; ist optional. Es kann "cmd1_gt" oder "cmd2_lt" übergeben werden, um vor dem Deaktivieren des Moduls einen definierten Zustand zu erreichen.
       </li>
       <br>
       <li><code>set &lt;name&gt; active<br></code>
@@ -1224,7 +1285,16 @@ THRESHOLD_setValue($$)
     <li>state_cmd1_gt</li>
     <li>state_cmd2_lt</li>
     <li>state_format</li>
-  </ul>
+    <li>number_format</li>
+    Das angegebene Format wird im Status für die Formatierung von desired_value (_dv) und sensor_value (_s1v) über die sprintf-Funktion benutzt.<br>
+    Voreingestellt ist "%.1f" für eine Nachkommastelle. Für weiter Formatierungen - siehe Formatierung in der sprintf-Funktion in der Perldokumentation.<br>
+    Wenn das Attribut gelöscht wird, werden Zahlen im Status nicht formatiert.<br>
+    <li>target_func</li>
+    Hier kann ein Perlausdruck angegeben werden, um aus dem Vorgabewert eines externen Sensors (target_value) einen Sollwert zu berechnen.<br>
+    Der Sensorwert wird mit "_tv" im Ausdruck angegeben. Siehe dazu Beispiele oben zur Steuerung der Heizung nach einer Heizkennlinie.<br>
+    <li>setOnDeactivated</li>
+    Kommando, welches vor dem Deaktivieren ausgeführt werden soll. Mögliche Angaben: cmd1_gt, cmd2_lt<br>
+    </ul>
   <br>
     
 =end html_DE

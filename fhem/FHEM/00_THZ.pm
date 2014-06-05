@@ -1,8 +1,8 @@
 ##############################################
 # 00_THZ
 # $Id$
-# by immi 04/2014
-# v. 0.093
+# by immi 05/2014
+my $thzversion = "0.105";
 # this code is based on the hard work of Robert; I just tried to port it
 # http://robert.penz.name/heat-pump-lwz/
 # http://heatpumpmonitor.penz.name/heatpumpmonitorwiki/
@@ -37,8 +37,8 @@ sub THZ_Read($);
 sub THZ_ReadAnswer($);
 sub THZ_Ready($);
 sub THZ_Write($$);
-sub THZ_Parse($);
-sub THZ_Parse1($);
+sub THZ_Parse($$);
+#sub THZ_Parse1($);
 sub THZ_checksum($);
 sub THZ_replacebytes($$$);
 sub THZ_decode($);
@@ -52,6 +52,10 @@ sub THZ_GetRefresh($);
 sub THZ_Refresh_all_gets($);
 sub THZ_Get_Comunication($$);
 sub THZ_PrintcurveSVG;
+sub THZ_RemoveInternalTimer($);
+
+#new by Jakob
+sub mysubstr($$$$);
 
 
 
@@ -62,174 +66,184 @@ sub THZ_PrintcurveSVG;
 ########################################################################################
 
 my %sets = (
-	"pOpMode"			=> {cmd2=>"0A0112"  },  # 1 Standby bereitschaft; 11 in Automatic; 3 DAYmode; SetbackMode; DHWmode; Manual; Emergency 
-	"p01RoomTempDayHC1"		=> {cmd2=>"0B0005", argMin => "13", argMax => "28"  },   
-	"p02RoomTempNightHC1"		=> {cmd2=>"0B0008", argMin => "13", argMax => "28"  },
-	"p03RoomTempStandbyHC1"		=> {cmd2=>"0B013D", argMin => "13", argMax => "28"  },
-	"p13GradientHC1"		=> {cmd2=>"0B010E", argMin => "0",  argMax =>  "5"  }, # 0..5 rappresentato/100
-	"p14LowEnDHC1"			=> {cmd2=>"0B059E", argMin => "0",  argMax => "20"  },   #in °K 0..20°K rappresentato/10
-	"p15RoomInfluenceHC1"		=> {cmd2=>"0B010F", argMin => "0",  argMax => "10"  },   # 0..10 rappresentato/10
-	"p19FlowProportionHC1"		=> {cmd2=>"0B059D", argMin => "0",  argMax => "100"  }, #in % 0..100%
-	"p01RoomTempDayHC2"		=> {cmd2=>"0C0005", argMin => "13", argMax => "28"  },
-	"p02RoomTempNightHC2"		=> {cmd2=>"0C0008", argMin => "13", argMax => "28"  },
-	"p03RoomTempStandbyHC2"		=> {cmd2=>"0C013D", argMin => "13", argMax => "28"  },
-	"p16GradientHC2"		=> {cmd2=>"0C010E", argMin => "0",  argMax =>  "5"  }, # /100
-	"p17LowEndHC2"			=> {cmd2=>"0C059E", argMin => "0",  argMax => "20"  },
-	"p18RoomInfluenceHC2"		=> {cmd2=>"0C010F", argMin => "0",  argMax => "10"  },   #in °C 0..10°C rappresentato/10
-	"p04DHWsetDay"			=> {cmd2=>"0A0013", argMin => "13", argMax => "48"  },
-	"p05DHWsetNight"		=> {cmd2=>"0A05BF", argMin => "13", argMax => "48"  },
-	"p06DHWsetStandby"		=> {cmd2=>"0A0581", argMin => "13", argMax => "48"  },
-	"p11DHWsetManual"		=> {cmd2=>"0A0580", argMin => "13", argMax => "54"  },
-	"p07FanStageDay"		=> {cmd2=>"0A056C", argMin =>  "0", argMax =>  "3"  },
-	"p08FanStageNight"		=> {cmd2=>"0A056D", argMin =>  "0", argMax =>  "3"  },
-	"p09FanStageStandby"		=> {cmd2=>"0A056F", argMin =>  "0", argMax =>  "3"  },
-	"p99FanStageParty"		=> {cmd2=>"0A0570", argMin =>  "0", argMax =>  "3"  },
-	"p75passiveCooling"		=> {cmd2=>"0A0575", argMin =>  "0", argMax =>  "2"  },
-	"p33BoosterTimeoutDHW"		=> {cmd2=>"0A0588", argMin =>  "0", argMax =>  "200" }, #during DHW heating
-	"p79BoosterTimeoutHC"		=> {cmd2=>"0A05A0", argMin =>  "0", argMax =>  "60" }, #delayed enabling of booster heater
-	"p46UnschedVent0"		=> {cmd2=>"0A0571", argMin =>  "0", argMax =>  "900"},	 #in min
-	"p45UnschedVent1"		=> {cmd2=>"0A0572", argMin =>  "0", argMax =>  "900"},	 #in min
-	"p44UnschedVent2"		=> {cmd2=>"0A0573", argMin =>  "0", argMax =>  "900"},	 #in min
-	"p43UnschedVent3"		=> {cmd2=>"0A0574", argMin =>  "0", argMax =>  "900"},	 #in min
-	"p37Fanstage1AirflowInlet"	=> {cmd2=>"0A0576", argMin =>  "50", argMax =>  "300"},		#zuluft 
-	"p38Fanstage2AirflowInlet"	=> {cmd2=>"0A0577", argMin =>  "50", argMax =>  "300" },	#zuluft 
-	"p39Fanstage3AirflowInlet"	=> {cmd2=>"0A0578", argMin =>  "50", argMax =>  "300" },	#zuluft 
-	"p40Fanstage1AirflowOutlet"	=> {cmd2=>"0A0579", argMin =>  "50", argMax =>  "300" },	#abluft extrated
-	"p41Fanstage2AirflowOutlet"	=> {cmd2=>"0A057A", argMin =>  "50", argMax =>  "300" },	#abluft extrated
-	"p42Fanstage3AirflowOutlet"	=> {cmd2=>"0A057B", argMin =>  "50", argMax =>  "300" },	#abluft extrated
-	"p49SummerModeTemp"		=> {cmd2=>"0A0116", argMin =>  "11", argMax =>  "24" },		#threshold for summer mode !! 
-	"p50SummerModeHysteresis"	=> {cmd2=>"0A05A2", argMin =>  "0.5", argMax =>  "5" },		#Hysteresis for summer mode !! 
-	"p78DualModePoint"		=> {cmd2=>"0A01AC", argMin =>  "-10", argMax =>  "20" },		
-	
-	"pHolidayBeginDay"		=> {cmd2=>"0A011B", argMin =>  "1", argMax =>  "31"  }, 
-	"pHolidayBeginMonth"		=> {cmd2=>"0A011C", argMin =>  "1", argMax =>  "12"  },
-	"pHolidayBeginYear"		=> {cmd2=>"0A011D", argMin =>  "12", argMax => "20"  },
-	"pHolidayBeginTime"		=> {cmd2=>"0A05D3", argMin =>  "00:00", argMax =>  "23:59"},
-	"pHolidayEndDay"		=> {cmd2=>"0A011E", argMin =>  "1", argMax =>  "31"  }, 
-	"pHolidayEndMonth"		=> {cmd2=>"0A011F", argMin =>  "1", argMax =>  "12"  },
-	"pHolidayEndYear"		=> {cmd2=>"0A0120", argMin =>  "12", argMax => "20"  }, 
-	"pHolidayEndTime"		=> {cmd2=>"0A05D4", argMin =>  "00:00", argMax =>  "23:59"}, # the answer look like  0A05D4-0D0A05D40029 for year 41 which is 10:15
-	#"party-time"			=> {cmd2=>"0A05D1", argMin =>  "00:00", argMax =>  "23:59"}, # value 1Ch 28dec is 7 ; value 1Eh 30dec is 7:30
-	"programHC1_Mo_0"		=> {cmd2=>"0B1410", argMin =>  "00:00", argMax =>  "23:59"},  #1 is monday 0 is first prog; start and end; value 1Ch 28dec is 7 ; value 1Eh 30dec is 7:30
-	"programHC1_Mo_1"		=> {cmd2=>"0B1411", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Mo_2"		=> {cmd2=>"0B1412", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Tu_0"		=> {cmd2=>"0B1420", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Tu_1"		=> {cmd2=>"0B1421", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Tu_2"		=> {cmd2=>"0B1422", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_We_0"		=> {cmd2=>"0B1430", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_We_1"		=> {cmd2=>"0B1431", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_We_2"		=> {cmd2=>"0B1432", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Th_0"		=> {cmd2=>"0B1440", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Th_1"		=> {cmd2=>"0B1441", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Th_2"		=> {cmd2=>"0B1442", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Fr_0"		=> {cmd2=>"0B1450", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Fr_1"		=> {cmd2=>"0B1451", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Fr_2"		=> {cmd2=>"0B1452", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Sa_0"		=> {cmd2=>"0B1460", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Sa_1"		=> {cmd2=>"0B1461", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Sa_2"		=> {cmd2=>"0B1462", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_So_0"		=> {cmd2=>"0B1470", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_So_1"		=> {cmd2=>"0B1471", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_So_2"		=> {cmd2=>"0B1472", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Mo-Fr_0"		=> {cmd2=>"0B1480", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Mo-Fr_1"		=> {cmd2=>"0B1481", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Mo-Fr_3"		=> {cmd2=>"0B1482", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Sa-So_0"		=> {cmd2=>"0B1490", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Sa-So_1"		=> {cmd2=>"0B1491", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Sa-So_3"		=> {cmd2=>"0B1492", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Mo-So_0"		=> {cmd2=>"0B14A0", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Mo-So_1"		=> {cmd2=>"0B14A1", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC1_Mo-So_3"		=> {cmd2=>"0B14A2", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Mo_0"		=> {cmd2=>"0C1510", argMin =>  "00:00", argMax =>  "23:59"},  #1 is monday 0 is first prog; start and end; value 1Ch 28dec is 7 ; value 1Eh 30dec is 7:30
-	"programHC2_Mo_1"		=> {cmd2=>"0C1511", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Mo_2"		=> {cmd2=>"0C1512", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Tu_0"		=> {cmd2=>"0C1520", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Tu_1"		=> {cmd2=>"0C1521", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Tu_2"		=> {cmd2=>"0C1522", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_We_0"		=> {cmd2=>"0C1530", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_We_1"		=> {cmd2=>"0C1531", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_We_2"		=> {cmd2=>"0C1532", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Th_0"		=> {cmd2=>"0C1540", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Th_1"		=> {cmd2=>"0C1541", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Th_2"		=> {cmd2=>"0C1542", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Fr_0"		=> {cmd2=>"0C1550", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Fr_1"		=> {cmd2=>"0C1551", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Fr_2"		=> {cmd2=>"0C1552", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Sa_0"		=> {cmd2=>"0C1560", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Sa_1"		=> {cmd2=>"0C1561", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Sa_2"		=> {cmd2=>"0C1562", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_So_0"		=> {cmd2=>"0C1570", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_So_1"		=> {cmd2=>"0C1571", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_So_2"		=> {cmd2=>"0C1572", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Mo-Fr_0"		=> {cmd2=>"0C1580", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Mo-Fr_1"		=> {cmd2=>"0C1581", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Mo-Fr_3"		=> {cmd2=>"0C1582", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Sa-So_0"		=> {cmd2=>"0C1590", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Sa-So_1"		=> {cmd2=>"0C1591", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Sa-So_3"		=> {cmd2=>"0C1592", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Mo-So_0"		=> {cmd2=>"0C15A0", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Mo-So_1"		=> {cmd2=>"0C15A1", argMin =>  "00:00", argMax =>  "23:59"},
-	"programHC2_Mo-So_3"		=> {cmd2=>"0C15A2", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Mo_0"		=> {cmd2=>"0A1710", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Mo_1"		=> {cmd2=>"0A1711", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Mo_2"		=> {cmd2=>"0A1712", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Tu_0"		=> {cmd2=>"0A1720", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Tu_1"		=> {cmd2=>"0A1721", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Tu_2"		=> {cmd2=>"0A1722", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_We_0"		=> {cmd2=>"0A1730", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_We_1"		=> {cmd2=>"0A1731", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_We_2"		=> {cmd2=>"0A1732", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Th_0"		=> {cmd2=>"0A1740", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Th_1"		=> {cmd2=>"0A1741", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Th_2"		=> {cmd2=>"0A1742", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Fr_0"		=> {cmd2=>"0A1750", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Fr_1"		=> {cmd2=>"0A1751", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Fr_2"		=> {cmd2=>"0A1752", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Sa_0"		=> {cmd2=>"0A1760", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Sa_1"		=> {cmd2=>"0A1761", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Sa_2"		=> {cmd2=>"0A1762", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_So_0"		=> {cmd2=>"0A1770", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_So_1"		=> {cmd2=>"0A1771", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_So_2"		=> {cmd2=>"0A1772", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Mo-Fr_0"		=> {cmd2=>"0A1780", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Mo-Fr_1"		=> {cmd2=>"0A1781", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Mo-Fr_2"		=> {cmd2=>"0A1782", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Sa-So_0"		=> {cmd2=>"0A1790", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Sa-So_1"		=> {cmd2=>"0A1791", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Sa-So_2"		=> {cmd2=>"0A1792", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Mo-So_0"		=> {cmd2=>"0A17A0", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Mo-So_1"		=> {cmd2=>"0A17A1", argMin =>  "00:00", argMax =>  "23:59"},
-	"programDHW_Mo-So_2"		=> {cmd2=>"0A17A2", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Mo_0"		=> {cmd2=>"0A1D10", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Mo_1"		=> {cmd2=>"0A1D11", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Mo_2"		=> {cmd2=>"0A1D12", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Tu_0"		=> {cmd2=>"0A1D20", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Tu_1"		=> {cmd2=>"0A1D21", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Tu_2"		=> {cmd2=>"0A1D22", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_We_0"		=> {cmd2=>"0A1D30", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_We_1"		=> {cmd2=>"0A1D31", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_We_2"		=> {cmd2=>"0A1D32", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Th_0"		=> {cmd2=>"0A1D40", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Th_1"		=> {cmd2=>"0A1D41", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Th_2"		=> {cmd2=>"0A1D42", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Fr_0"		=> {cmd2=>"0A1D50", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Fr_1"		=> {cmd2=>"0A1D51", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Fr_2"		=> {cmd2=>"0A1D52", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Sa_0"		=> {cmd2=>"0A1D60", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Sa_1"		=> {cmd2=>"0A1D61", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Sa_2"		=> {cmd2=>"0A1D62", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_So_0"		=> {cmd2=>"0A1D70", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_So_1"		=> {cmd2=>"0A1D71", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_So_2"		=> {cmd2=>"0A1D72", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Mo-Fr_0"		=> {cmd2=>"0A1D80", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Mo-Fr_1"		=> {cmd2=>"0A1D81", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Mo-Fr_2"		=> {cmd2=>"0A1D82", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Sa-So_0"		=> {cmd2=>"0A1D90", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Sa-So_1"		=> {cmd2=>"0A1D91", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Sa-So_2"		=> {cmd2=>"0A1D92", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Mo-So_0"		=> {cmd2=>"0A1DA0", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Mo-So_1"		=> {cmd2=>"0A1DA1", argMin =>  "00:00", argMax =>  "23:59"},
-	"programFan_Mo-So_2"		=> {cmd2=>"0A1DA2", argMin =>  "00:00", argMax =>  "23:59"}
+    "pOpMode"				=> {cmd2=>"0A0112"  },  # 1 Standby bereitschaft; 11 in Automatic; 3 DAYmode; SetbackMode; DHWmode; Manual; Emergency 
+    "p01RoomTempDayHC1"			=> {cmd2=>"0B0005", argMin => "13", argMax => "28"  },   
+    "p02RoomTempNightHC1"		=> {cmd2=>"0B0008", argMin => "13", argMax => "28"  },
+    "p03RoomTempStandbyHC1"		=> {cmd2=>"0B013D", argMin => "13", argMax => "28"  },
+    "p01RoomTempDayHC1SummerMode"	=> {cmd2=>"0B0569", argMin => "13", argMax => "28"  },  
+    "p02RoomTempNightHC1SummerMode"	=> {cmd2=>"0B056B", argMin => "13", argMax => "28"  },   
+    "p03RoomTempStandbyHC1SummerMode"	=> {cmd2=>"0B056A", argMin => "13", argMax => "28"  },  
+    "p13GradientHC1"			=> {cmd2=>"0B010E", argMin => "0",  argMax =>  "5"  }, # 0..5 rappresentato/100
+    "p14LowEndHC1"			=> {cmd2=>"0B059E", argMin => "0",  argMax => "20"  },   #in °K 0..20°K rappresentato/10
+    "p15RoomInfluenceHC1"		=> {cmd2=>"0B010F", argMin => "0",  argMax => "100"  },  
+    "p19FlowProportionHC1"		=> {cmd2=>"0B059D", argMin => "0",  argMax => "100"  }, #in % 0..100%
+    "p01RoomTempDayHC2"			=> {cmd2=>"0C0005", argMin => "13", argMax => "28"  },
+    "p02RoomTempNightHC2"		=> {cmd2=>"0C0008", argMin => "13", argMax => "28"  },
+    "p03RoomTempStandbyHC2"		=> {cmd2=>"0C013D", argMin => "13", argMax => "28"  },
+    "p01RoomTempDayHC2SummerMode"	=> {cmd2=>"0C0569", argMin => "13", argMax => "28"  }, 
+    "p02RoomTempNightHC2SummerMode"	=> {cmd2=>"0C056B", argMin => "13", argMax => "28"  },   
+    "p03RoomTempStandbyHC2SummerMode"	=> {cmd2=>"0C056A", argMin => "13", argMax => "28"  },  
+    "p16GradientHC2"			=> {cmd2=>"0C010E", argMin => "0",  argMax =>  "5"  }, # /100
+    "p17LowEndHC2"			=> {cmd2=>"0C059E", argMin => "0",  argMax => "20"  },
+    "p18RoomInfluenceHC2"		=> {cmd2=>"0C010F", argMin => "0",  argMax => "100"  },   
+    "p04DHWsetDay"			=> {cmd2=>"0A0013", argMin => "13", argMax => "49"  },
+    "p05DHWsetNight"			=> {cmd2=>"0A05BF", argMin => "13", argMax => "49"  },
+    "p83DHWsetSolarTemp"		=> {cmd2=>"0A05BE", argMin => "13", argMax => "75"  },
+    "p06DHWsetStandby"			=> {cmd2=>"0A0581", argMin => "13", argMax => "49"  },
+    "p11DHWsetManual"			=> {cmd2=>"0A0580", argMin => "13", argMax => "54"  },
+    "p07FanStageDay"			=> {cmd2=>"0A056C", argMin =>  "0", argMax =>  "3"  },
+    "p08FanStageNight"			=> {cmd2=>"0A056D", argMin =>  "0", argMax =>  "3"  },
+    "p09FanStageStandby"		=> {cmd2=>"0A056F", argMin =>  "0", argMax =>  "3"  },
+    "p99FanStageParty"			=> {cmd2=>"0A0570", argMin =>  "0", argMax =>  "3"  },
+    "p75passiveCooling"			=> {cmd2=>"0A0575", argMin =>  "0", argMax =>  "2"  },
+    "p33BoosterTimeoutDHW"		=> {cmd2=>"0A0588", argMin =>  "0", argMax =>  "200" }, #during DHW heating
+    "p79BoosterTimeoutHC"		=> {cmd2=>"0A05A0", argMin =>  "0", argMax =>  "60" }, #delayed enabling of booster heater
+    "p46UnschedVent0"			=> {cmd2=>"0A0571", argMin =>  "0", argMax =>  "900"},	 #in min
+    "p45UnschedVent1"			=> {cmd2=>"0A0572", argMin =>  "0", argMax =>  "900"},	 #in min
+    "p44UnschedVent2"			=> {cmd2=>"0A0573", argMin =>  "0", argMax =>  "900"},	 #in min
+    "p43UnschedVent3"			=> {cmd2=>"0A0574", argMin =>  "0", argMax =>  "900"},	 #in min
+    "p37Fanstage1AirflowInlet"		=> {cmd2=>"0A0576", argMin =>  "50", argMax =>  "300"},		#zuluft 
+    "p38Fanstage2AirflowInlet"		=> {cmd2=>"0A0577", argMin =>  "50", argMax =>  "300" },	#zuluft 
+    "p39Fanstage3AirflowInlet"		=> {cmd2=>"0A0578", argMin =>  "50", argMax =>  "300" },	#zuluft 
+    "p40Fanstage1AirflowOutlet"		=> {cmd2=>"0A0579", argMin =>  "50", argMax =>  "300" },	#abluft extrated
+    "p41Fanstage2AirflowOutlet"		=> {cmd2=>"0A057A", argMin =>  "50", argMax =>  "300" },	#abluft extrated
+    "p42Fanstage3AirflowOutlet"		=> {cmd2=>"0A057B", argMin =>  "50", argMax =>  "300" },	#abluft extrated
+    "p49SummerModeTemp"			=> {cmd2=>"0A0116", argMin =>  "11", argMax =>  "24" },		#threshold for summer mode !! 
+    "p50SummerModeHysteresis"		=> {cmd2=>"0A05A2", argMin =>  "0.5", argMax =>  "5" },		#Hysteresis for summer mode !! 
+    "p78DualModePoint"			=> {cmd2=>"0A01AC", argMin =>  "-10", argMax =>  "20" },
+    "p54MinPumpCycles"			=> {cmd2=>"0A05B8", argMin =>  "1", argMax =>  "24"  },
+    "p55MaxPumpCycles"			=> {cmd2=>"0A05B7", argMin =>  "25", argMax => "200"  },
+    "p56OutTempMaxPumpCycles"		=> {cmd2=>"0A05BA", argMin =>  "0", argMax =>  "25"  },
+    "p57OutTempMinPumpCycles"		=> {cmd2=>"0A05B9", argMin =>  "0", argMax =>  "25"  },
+    "pHolidayBeginDay"			=> {cmd2=>"0A011B", argMin =>  "1", argMax =>  "31"  }, 
+    "pHolidayBeginMonth"		=> {cmd2=>"0A011C", argMin =>  "1", argMax =>  "12"  },
+    "pHolidayBeginYear"			=> {cmd2=>"0A011D", argMin =>  "12", argMax => "20"  },
+    "pHolidayBeginTime"			=> {cmd2=>"0A05D3", argMin =>  "00:00", argMax =>  "23:59"},
+    "pHolidayEndDay"			=> {cmd2=>"0A011E", argMin =>  "1", argMax =>  "31"  }, 
+    "pHolidayEndMonth"			=> {cmd2=>"0A011F", argMin =>  "1", argMax =>  "12"  },
+    "pHolidayEndYear"			=> {cmd2=>"0A0120", argMin =>  "12", argMax => "20"  }, 
+    "pHolidayEndTime"			=> {cmd2=>"0A05D4", argMin =>  "00:00", argMax =>  "23:59"}, # the answer look like  0A05D4-0D0A05D40029 for year 41 which is 10:15
+    #"party-time"			=> {cmd2=>"0A05D1", argMin =>  "00:00", argMax =>  "23:59"}, # value 1Ch 28dec is 7 ; value 1Eh 30dec is 7:30
+    "programHC1_Mo_0"			=> {cmd2=>"0B1410", argMin =>  "00:00", argMax =>  "23:59"},  #1 is monday 0 is first prog; start and end; value 1Ch 28dec is 7 ; value 1Eh 30dec is 7:30
+    "programHC1_Mo_1"			=> {cmd2=>"0B1411", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Mo_2"			=> {cmd2=>"0B1412", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Tu_0"			=> {cmd2=>"0B1420", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Tu_1"			=> {cmd2=>"0B1421", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Tu_2"			=> {cmd2=>"0B1422", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_We_0"			=> {cmd2=>"0B1430", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_We_1"			=> {cmd2=>"0B1431", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_We_2"			=> {cmd2=>"0B1432", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Th_0"			=> {cmd2=>"0B1440", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Th_1"			=> {cmd2=>"0B1441", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Th_2"			=> {cmd2=>"0B1442", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Fr_0"			=> {cmd2=>"0B1450", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Fr_1"			=> {cmd2=>"0B1451", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Fr_2"			=> {cmd2=>"0B1452", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Sa_0"			=> {cmd2=>"0B1460", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Sa_1"			=> {cmd2=>"0B1461", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Sa_2"			=> {cmd2=>"0B1462", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_So_0"			=> {cmd2=>"0B1470", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_So_1"			=> {cmd2=>"0B1471", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_So_2"			=> {cmd2=>"0B1472", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Mo-Fr_0"		=> {cmd2=>"0B1480", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Mo-Fr_1"		=> {cmd2=>"0B1481", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Mo-Fr_3"		=> {cmd2=>"0B1482", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Sa-So_0"		=> {cmd2=>"0B1490", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Sa-So_1"		=> {cmd2=>"0B1491", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Sa-So_3"		=> {cmd2=>"0B1492", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Mo-So_0"		=> {cmd2=>"0B14A0", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Mo-So_1"		=> {cmd2=>"0B14A1", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC1_Mo-So_3"		=> {cmd2=>"0B14A2", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Mo_0"			=> {cmd2=>"0C1510", argMin =>  "00:00", argMax =>  "23:59"},  #1 is monday 0 is first prog; start and end; value 1Ch 28dec is 7 ; value 1Eh 30dec is 7:30
+    "programHC2_Mo_1"			=> {cmd2=>"0C1511", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Mo_2"			=> {cmd2=>"0C1512", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Tu_0"			=> {cmd2=>"0C1520", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Tu_1"			=> {cmd2=>"0C1521", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Tu_2"			=> {cmd2=>"0C1522", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_We_0"			=> {cmd2=>"0C1530", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_We_1"			=> {cmd2=>"0C1531", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_We_2"			=> {cmd2=>"0C1532", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Th_0"			=> {cmd2=>"0C1540", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Th_1"			=> {cmd2=>"0C1541", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Th_2"			=> {cmd2=>"0C1542", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Fr_0"			=> {cmd2=>"0C1550", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Fr_1"			=> {cmd2=>"0C1551", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Fr_2"			=> {cmd2=>"0C1552", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Sa_0"			=> {cmd2=>"0C1560", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Sa_1"			=> {cmd2=>"0C1561", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Sa_2"			=> {cmd2=>"0C1562", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_So_0"			=> {cmd2=>"0C1570", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_So_1"			=> {cmd2=>"0C1571", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_So_2"			=> {cmd2=>"0C1572", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Mo-Fr_0"		=> {cmd2=>"0C1580", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Mo-Fr_1"		=> {cmd2=>"0C1581", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Mo-Fr_3"		=> {cmd2=>"0C1582", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Sa-So_0"		=> {cmd2=>"0C1590", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Sa-So_1"		=> {cmd2=>"0C1591", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Sa-So_3"		=> {cmd2=>"0C1592", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Mo-So_0"		=> {cmd2=>"0C15A0", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Mo-So_1"		=> {cmd2=>"0C15A1", argMin =>  "00:00", argMax =>  "23:59"},
+    "programHC2_Mo-So_3"		=> {cmd2=>"0C15A2", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Mo_0"			=> {cmd2=>"0A1710", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Mo_1"			=> {cmd2=>"0A1711", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Mo_2"			=> {cmd2=>"0A1712", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Tu_0"			=> {cmd2=>"0A1720", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Tu_1"			=> {cmd2=>"0A1721", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Tu_2"			=> {cmd2=>"0A1722", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_We_0"			=> {cmd2=>"0A1730", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_We_1"			=> {cmd2=>"0A1731", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_We_2"			=> {cmd2=>"0A1732", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Th_0"			=> {cmd2=>"0A1740", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Th_1"			=> {cmd2=>"0A1741", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Th_2"			=> {cmd2=>"0A1742", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Fr_0"			=> {cmd2=>"0A1750", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Fr_1"			=> {cmd2=>"0A1751", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Fr_2"			=> {cmd2=>"0A1752", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Sa_0"			=> {cmd2=>"0A1760", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Sa_1"			=> {cmd2=>"0A1761", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Sa_2"			=> {cmd2=>"0A1762", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_So_0"			=> {cmd2=>"0A1770", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_So_1"			=> {cmd2=>"0A1771", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_So_2"			=> {cmd2=>"0A1772", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Mo-Fr_0"		=> {cmd2=>"0A1780", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Mo-Fr_1"		=> {cmd2=>"0A1781", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Mo-Fr_2"		=> {cmd2=>"0A1782", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Sa-So_0"		=> {cmd2=>"0A1790", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Sa-So_1"		=> {cmd2=>"0A1791", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Sa-So_2"		=> {cmd2=>"0A1792", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Mo-So_0"		=> {cmd2=>"0A17A0", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Mo-So_1"		=> {cmd2=>"0A17A1", argMin =>  "00:00", argMax =>  "23:59"},
+    "programDHW_Mo-So_2"		=> {cmd2=>"0A17A2", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Mo_0"			=> {cmd2=>"0A1D10", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Mo_1"			=> {cmd2=>"0A1D11", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Mo_2"			=> {cmd2=>"0A1D12", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Tu_0"			=> {cmd2=>"0A1D20", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Tu_1"			=> {cmd2=>"0A1D21", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Tu_2"			=> {cmd2=>"0A1D22", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_We_0"			=> {cmd2=>"0A1D30", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_We_1"			=> {cmd2=>"0A1D31", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_We_2"			=> {cmd2=>"0A1D32", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Th_0"			=> {cmd2=>"0A1D40", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Th_1"			=> {cmd2=>"0A1D41", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Th_2"			=> {cmd2=>"0A1D42", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Fr_0"			=> {cmd2=>"0A1D50", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Fr_1"			=> {cmd2=>"0A1D51", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Fr_2"			=> {cmd2=>"0A1D52", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Sa_0"			=> {cmd2=>"0A1D60", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Sa_1"			=> {cmd2=>"0A1D61", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Sa_2"			=> {cmd2=>"0A1D62", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_So_0"			=> {cmd2=>"0A1D70", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_So_1"			=> {cmd2=>"0A1D71", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_So_2"			=> {cmd2=>"0A1D72", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Mo-Fr_0"		=> {cmd2=>"0A1D80", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Mo-Fr_1"		=> {cmd2=>"0A1D81", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Mo-Fr_2"		=> {cmd2=>"0A1D82", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Sa-So_0"		=> {cmd2=>"0A1D90", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Sa-So_1"		=> {cmd2=>"0A1D91", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Sa-So_2"		=> {cmd2=>"0A1D92", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Mo-So_0"		=> {cmd2=>"0A1DA0", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Mo-So_1"		=> {cmd2=>"0A1DA1", argMin =>  "00:00", argMax =>  "23:59"},
+    "programFan_Mo-So_2"		=> {cmd2=>"0A1DA2", argMin =>  "00:00", argMax =>  "23:59"}
   );
 
 
@@ -253,8 +267,18 @@ my %getsonly = (
         "sGlobal"	     		=> {cmd2=>"FB"},  #allFB
         "sTimedate" 			=> {cmd2=>"FC"},
         "sFirmware" 			=> {cmd2=>"FD"},
+	"sBoostDHWTotal" 		=> {cmd2=>"0A0924", cmd3=>"0A0925", unit =>"kWh"},
+	"sBoostHCTotal"	 		=> {cmd2=>"0A0928", cmd3=>"0A0929", unit =>"kWh"},
 	"sHeatRecoveredDay" 		=> {cmd2=>"0A03AE", cmd3=>"0A03AF", unit =>"Wh"},
 	"sHeatRecoveredTotal" 		=> {cmd2=>"0A03B0", cmd3=>"0A03B1", unit =>"kWh"},
+	"sHeatDHWDay" 			=> {cmd2=>"0A092A", cmd3=>"0A092B", unit =>"Wh"},
+	"sHeatDHWTotal" 		=> {cmd2=>"0A092C", cmd3=>"0A092D", unit =>"kWh"},
+	"sHeatHCDay" 			=> {cmd2=>"0A092E", cmd3=>"0A092F", unit =>"Wh"},
+	"sHeatHCTotal"	 		=> {cmd2=>"0A0930", cmd3=>"0A0931", unit =>"kWh"},
+	"sElectrDHWDay" 		=> {cmd2=>"0A091A", cmd3=>"0A091B", unit =>"Wh"},
+	"sElectrDHWTotal" 		=> {cmd2=>"0A091C", cmd3=>"0A091D", unit =>"kWh"},
+	"sElectrHCDay" 			=> {cmd2=>"0A091E", cmd3=>"0A091F", unit =>"Wh"},
+	"sElectrHCTotal"		=> {cmd2=>"0A0920", cmd3=>"0A0921", unit =>"kWh"},
 	#"sAllE8"			=> {cmd2=>"E8"},
 	"party-time"			=> {cmd2=>"0A05D1"} # value 1Ch 28dec is 7 ; value 1Eh 30dec is 7:30
   );
@@ -264,6 +288,10 @@ my %OpMode = ("1" =>"standby", "11" => "automatic", "3" =>"DAYmode", "4" =>"setb
 my %Rev_OpMode = reverse %OpMode;
 my %OpModeHC = ("1" =>"normal", "2" => "setback", "3" =>"standby", "4" =>"restart", "5" =>"restart");
 my %SomWinMode = ( "01" =>"winter", "02" => "summer");
+my $firstLoadAll = 0;
+my $noanswerreceived = 0;
+my $internalHash;
+
 ########################################################################################
 #
 # THZ_Initialize($)
@@ -287,7 +315,7 @@ sub THZ_Initialize($)
   $hash->{UndefFn} = "THZ_Undef";
   $hash->{GetFn}   = "THZ_Get";
   $hash->{SetFn}   = "THZ_Set";
-#  $hash->{AttrFn}  = "THZ_Attr"; 
+  $hash->{AttrFn}  = "THZ_Attr"; 
   $hash->{AttrList}= "IODev do_not_notify:1,0  ignore:0,1 dummy:1,0 showtime:1,0 loglevel:0,1,2,3,4,5,6 "
 		    ."interval_sGlobal:0,60,120,180,300,600,3600,7200,43200,86400 "
 		    ."interval_sSol:0,60,120,180,300,600,3600,7200,43200,86400 "
@@ -298,6 +326,16 @@ sub THZ_Initialize($)
 		    ."interval_sLast10errors:0,3600,7200,28800,43200,86400 "
 		    ."interval_sHeatRecoveredDay:0,1200,3600,7200,28800,43200,86400 "
 		    ."interval_sHeatRecoveredTotal:0,3600,7200,28800,43200,86400 "
+		    ."interval_sHeatDHWDay:0,1200,3600,7200,28800,43200,86400 "
+		    ."interval_sHeatDHWTotal:0,3600,7200,28800,43200,86400 "
+		    ."interval_sHeatHCDay:0,1200,3600,7200,28800,43200,86400 "
+		    ."interval_sHeatHCTotal:0,3600,7200,28800,43200,86400 "
+		    ."interval_sElectrDHWDay:0,1200,3600,7200,28800,43200,86400 "
+		    ."interval_sElectrDHWTotal:0,3600,7200,28800,43200,86400 "
+		    ."interval_sElectrHCDay:0,1200,3600,7200,28800,43200,86400 "
+		    ."interval_sElectrHCTotal:0,3600,7200,28800,43200,86400 "
+		    ."interval_sBoostDHWTotal:0,3600,7200,28800,43200,86400 "
+		    ."interval_sBoostDHWTotal:0,3600,7200,28800,43200,86400 " 
 		    . $readingFnAttributes;
   $data{FWEXT}{"/THZ_PrintcurveSVG"}{FUNC} = "THZ_PrintcurveSVG";
 }
@@ -315,7 +353,7 @@ sub THZ_Define($$)
   my ($hash, $def) = @_;
   my @a = split("[ \t][ \t]*", $def);
   my $name = $a[0];
-
+  $hash->{VERSION} = $thzversion;
   return "wrong syntax. Correct is: define <name> THZ ".
   				"{devicename[\@baudrate]|ip:port}"
   				 if(@a != 3);
@@ -343,12 +381,13 @@ sub THZ_Define($$)
 ########################################################################################
 sub THZ_Refresh_all_gets($) {
   my ($hash) = @_;
-  RemoveInternalTimer($hash);
-  my $timedelay= 5;
+  THZ_RemoveInternalTimer("THZ_GetRefresh");
+  my $timedelay= 5; 						#strart after 5 seconds
   foreach  my $cmdhash  (keys %gets) {
-    my %par = ( command => $cmdhash, hash => $hash );
+    my %par = (  hash => $hash, command => $cmdhash );
     RemoveInternalTimer(\%par);
-    InternalTimer(gettimeofday() + ($timedelay++) , "THZ_GetRefresh", \%par, 0); 
+    InternalTimer(gettimeofday() + ($timedelay) , "THZ_GetRefresh", \%par, 0);		#increment 0.6s $timedelay++
+    $timedelay += 0.6;
   }  #refresh all registers; the register with interval_command ne 0 will keep on refreshing
 }
 
@@ -366,11 +405,11 @@ sub THZ_GetRefresh($) {
 	my $command=$par->{command};
 	my $interval = AttrVal($hash->{NAME}, ("interval_".$command), 0);
 	my $replyc = "";
-	if (!($hash->{STATE} eq "disconnected")) {
-	  if ($interval) {
+	if ($interval) {
 			  $interval = 60 if ($interval < 60); #do not allow intervall <60 sec 
 			  InternalTimer(gettimeofday()+ $interval, "THZ_GetRefresh", $par, 1) ;
-	  }		
+	}
+	if (!($hash->{STATE} eq "disconnected")) {
 	  $replyc = THZ_Get($hash, $hash->{NAME}, $command);
 	}
 	return ($replyc);
@@ -432,7 +471,7 @@ sub THZ_Ready($)
 {
   my ($hash) = @_;
   if($hash->{STATE} eq "disconnected")
-  { RemoveInternalTimer($hash);
+  { THZ_RemoveInternalTimer("THZ_GetRefresh");
   select(undef, undef, undef, 0.1); #equivalent to sleep 100ms
   return DevIo_OpenDev($hash, 1, "THZ_Refresh_all_gets")
   }	
@@ -491,44 +530,29 @@ sub THZ_Set($@){
     }
     
   if 	((substr($cmdHex2,0,6) eq "0A0116") or (substr($cmdHex2,0,6) eq "0A05A2") or (substr($cmdHex2,0,6) eq "0A01AC"))	 {$arg=$arg*10} #summermode
-  elsif (substr($cmdHex2,0,4) eq "0A01") 					 {$arg=$arg*256}		        	# shift 2 times -- the answer look like  0A0120-3A0A01200E00  for year 14
+  elsif ((substr($cmdHex2,0,4) eq "0A01") or (substr($cmdHex2,2,4) eq "010F") )			 {$arg=$arg*256}		        	# shift 2 times -- the answer look like  0A0120-3A0A01200E00  for year 14
   elsif  ((substr($cmdHex2,2,2) eq "1D") or (substr($cmdHex2,2,2)  eq "17") or (substr($cmdHex2,2,2) eq "15") or (substr($cmdHex2,2,2)  eq "14")) 	{$arg= time2quaters($arg) *256   + time2quaters($arg1)} # BeginTime-endtime, in the register is represented  begintime endtime
   elsif  (substr($cmdHex2,0,6) eq "0A05D1") 		  			{$arg= time2quaters($arg1) *256 + time2quaters($arg)} # PartyBeginTime-endtime, in the register is represented endtime begintime
   #partytime (0A05D1) non funziona; 
   elsif  ((substr($cmdHex2,0,6) eq "0A05D3") or (substr($cmdHex2,0,6) eq "0A05D4")) 	{$arg= time2quaters($arg)} # holidayBeginTime-endtime
-  elsif  ((substr($cmdHex2,0,5) eq "0A056") or (substr($cmdHex2,0,5) eq "0A057") or (substr($cmdHex2,0,6) eq "0A0588") or (substr($cmdHex2,0,6) eq "0A05A0") or (substr($cmdHex2,0,6) eq "0B059D"))	{ } 				# fann speed and boostetimeout: do not multiply
+  elsif  ((substr($cmdHex2,0,5) eq "0A056") or (substr($cmdHex2,0,5) eq "0A057") or (substr($cmdHex2,0,6) eq "0A0588") or (substr($cmdHex2,0,6) eq "0A05A0") or (substr($cmdHex2,0,6) eq "0B059D")      or (substr($cmdHex2,0,6) eq "0A05B7") or (substr($cmdHex2,0,6) eq "0A05B8")   )	{ } 				# fann speed and boostetimeout: do not multiply
   elsif  (substr($cmdHex2,2,4) eq "010E") 					{$arg=$arg*100} 		#gradientHC1 &HC2
-  elsif  (substr($cmdHex2,2,4) eq "010F") 					{$arg=$arg*256*10} 		#gradientHC1 &HC2
   else 			             						{$arg=$arg*10} 
-  THZ_Write($hash,  "02"); 			# STX start of text
-  ($err, $msg) = THZ_ReadAnswer($hash);		#Expectedanswer1    is  "10"  DLE data link escape
-  my $msgtmp= $msg . " sent" . $arg ."---";
-  if ($msg eq "10") {
-    $cmdHex2=THZ_encodecommand(($cmdHex2 . substr((sprintf("%04X", $arg)), -4)),"set");  #04X converts to hex and fills up 0s; for negative, it must be trunckated. 
-    THZ_Write($hash,  $cmdHex2); 		# send request   SOH start of heading -- Null 	-- ?? -- DLE data link escape -- EOT End of Text
-    select(undef, undef, undef, 0.1); #maybe important for older firmware 
-    ($err, $msg) = THZ_ReadAnswer($hash);	#Expectedanswer     is "10",		DLE data link escape 
-     }
-   $msgtmp=  $msgtmp  ."\n" ."set--" . $cmdHex2  ."\n" . $msg; 
-   if ($msg eq "10") {
-      ($err, $msg) = THZ_ReadAnswer($hash);	#Expectedanswer  is "02"  -- STX start of text
-     THZ_Write($hash,  "10"); 		    	# DLE data link escape  // ack datatranfer      
-     ($err, $msg) = THZ_ReadAnswer($hash);	# Expectedanswer3 // read from the heatpump
-      THZ_Write($hash,  "10");
-     }
-   elsif ($msg eq "1002") {
-     THZ_Write($hash,  "10"); 		    	# DLE data link escape  // ack datatranfer      
-     ($err, $msg) = THZ_ReadAnswer($hash);	# Expectedanswer3 // read from the heatpump
-      THZ_Write($hash,  "10");
-     }
-   $msgtmp= $msgtmp ."\n" . $msg; 
-   if (defined($err))  {return ($cmdHex2 . "-". $msg ."--" . $err);}
-   else {
-	sleep 1;
-	$msg=THZ_Get($hash, $name, $cmd);
-	$msgtmp= $msgtmp ."\n" . $msg;
-	return ($msg);
-	} 
+  
+  Log3 $hash->{NAME}, 5, "THZ_Set: Check if port is open. State = '($hash->{STATE})'";
+  #if (($hash->{STATE} eq "DISCONNECTED")) 
+  #{
+  #	DevIo_OpenDev($hash, 0, "");
+  #}
+  $cmdHex2=THZ_encodecommand(($cmdHex2 . substr((sprintf("%04X", $arg)), -4)),"set");  #04X converts to hex and fills up 0s; for negative, it must be trunckated. 
+  ($err, $msg) = THZ_Get_Comunication($hash,  $cmdHex2);
+  if (defined($err))  {
+    return ($cmdHex2 . "-". $msg ."--" . $err);}
+  else {
+    $msg=THZ_Get($hash, $name, $cmd);
+    return ($msg);
+  }
+  
 }
 
 
@@ -550,42 +574,49 @@ sub THZ_Get($@){
 
   return "\"get $name\" needs one parameter" if(@a != 2);
   my $cmd = $a[1];
-  my ($err, $msg) =("", " ");
+   my ($err, $msg2) =("", " ");
 
-   if ($cmd eq "debug_read_raw_register_slow") {
+  if ($cmd eq "debug_read_raw_register_slow") {
     THZ_debugread($hash);
     return ("all raw registers read and saved");
     } 
-  
   
   my $cmdhash = $gets{$cmd};
   return "Unknown argument $cmd, choose one of " .
         join(" ", sort keys %gets) if(!defined($cmdhash));
 
+  Log3 $hash->{NAME}, 5, "THZ_Get: Try to get '$cmd'";
   my $cmdHex2 = $cmdhash->{cmd2};
   if(defined($cmdHex2) ) {
-      ($err, $msg) = THZ_Get_Comunication($hash,  $cmdHex2);
-      if (defined($err))  {return ($msg ."\n msg2 " . $err);}
-      $msg = THZ_Parse($msg);
+      $cmdHex2=THZ_encodecommand($cmdHex2,"get");
+      ($err, $msg2) = THZ_Get_Comunication($hash,  $cmdHex2);
+      if (defined($err))     {
+             Log3 $hash->{NAME}, 5, "THZ_Get: Error msg2: '$err'";
+             return ($msg2 ."\n msg2 " . $err);
+      }
+      $msg2 = THZ_Parse($hash,$msg2);
   }
   
   my $cmdHex3 = $cmdhash->{cmd3};
   if(defined($cmdHex3)) {
       my $msg3= " ";
+      $cmdHex3=THZ_encodecommand($cmdHex3,"get");
       ($err, $msg3) = THZ_Get_Comunication($hash,  $cmdHex3);
-      if (defined($err))  {return ($msg3 ."\n msg3 " . $err);}
-      $msg = THZ_Parse($msg3) * 1000 + $msg  ;
+       if (defined($err))     {
+             Log3 $hash->{NAME}, 5, "THZ_Get: Error msg3: '$err'";
+             return ($msg3 ."\n msg3 " . $err);
+      }
+      $msg2 = THZ_Parse($hash,$msg3) * 1000 + $msg2  ;
   }	            		
    
   my $unit = $cmdhash->{unit};
   if(defined($cmdHex3)) {
-    $msg = $msg . " " . $unit;
+    $msg2 = $msg2 . " " . $unit;
   }  
     
   my $activatetrigger =1;
-  readingsSingleUpdate($hash, $cmd, $msg, $activatetrigger);
-  return ($msg);
-	       
+  readingsSingleUpdate($hash, $cmd, $msg2, $activatetrigger);
+  return ($msg2);	       
 }
 
 
@@ -600,21 +631,30 @@ sub THZ_Get($@){
 sub THZ_Get_Comunication($$) {
 my ($hash, $cmdHex) = @_;
 my ($err, $msg) =("", " ");
-	            		
+
+ Log3 $hash->{NAME}, 5, "THZ_Get_Comunication: Check if port is open. State = '($hash->{STATE})'";
+ if (!(($hash->{STATE}) eq "opened"))  { return("closed connection", "");}
+ 
   THZ_Write($hash,  "02"); 			# STX start of text
   ($err, $msg) = THZ_ReadAnswer($hash);		#Expectedanswer1    is  "10"  DLE data link escape
   
    if ($msg eq "10")  {
-    $cmdHex=THZ_encodecommand($cmdHex,"get");
+
       THZ_Write($hash,  $cmdHex); 		# send request   SOH start of heading -- Null 	-- ?? -- DLE data link escape -- EOT End of Text
      ($err, $msg) = THZ_ReadAnswer($hash);	#Expectedanswer2     is "1002",		DLE data link escape -- STX start of text
     }
     
-   if($msg eq "1002") {
-     THZ_Write($hash,  "10"); 		    	# DLE data link escape  // ack datatranfer      
-     ($err, $msg) = THZ_ReadAnswer($hash);	# Expectedanswer3 // read from the heatpump
-     THZ_Write($hash,  "10");
-     }
+  if ($msg eq "10") {
+    ($err, $msg) = THZ_ReadAnswer($hash);
+  }        
+
+  if($msg eq "1002" || $msg eq "02") {
+   THZ_Write($hash,  "10"); 		    	# DLE data link escape  // ack datatranfer
+   #select(undef,undef,undef,0.010);
+   ($err, $msg) = THZ_ReadAnswer($hash);	# Expectedanswer3 // read from the heatpump
+   THZ_Write($hash,  "10");  
+   }
+   
    if (!(defined($err)))  {($err, $msg) = THZ_decode($msg);} 	#clean up and remove footer and header
    return($err, $msg) ;
 }
@@ -629,18 +669,55 @@ my ($err, $msg) =("", " ");
 # Parameter hash and command to be sent to the interface
 #
 ########################################################################################
-sub THZ_ReadAnswer($) {
-  my ($hash) = @_;
-#--next line added in order to slow-down 100ms
-  select(undef, undef, undef, 0.1);
-#--
-  my $buf = DevIo_SimpleRead($hash);
-  return ("InterfaceNotRespondig", "") if(!defined($buf));
-
-  my $name = $hash->{NAME};
-  
-  my $data =  uc(unpack('H*', $buf));
-  return (undef, $data);
+sub THZ_ReadAnswer($) 
+{
+	my ($hash) = @_;
+	Log3 $hash->{NAME}, 5, "$hash->{NAME} start Funktion THZ_ReadAnswer";
+        my $buf = DevIo_SimpleReadWithTimeout($hash, 0.8);
+	if(!defined($buf)) {
+	  Log3 $hash->{NAME}, 3, "$hash->{NAME} THZ_ReadAnswer got no answer from DevIo_SimpleRead. Maybe too slow?";
+	  return ("InterfaceNotRespondig", "");
+	}
+	my $name = $hash->{NAME};
+	my $data =  uc(unpack('H*', $buf));
+	
+	if ((length($data) > 4) and ($data !~ m/1003$/m )) # sometimes the first read gets a trunkated buffer, second read makes sure all the buffer is read.
+	{ my $buf1 = DevIo_SimpleReadWithTimeout($hash, 0.005);
+	  Log3($hash->{NAME}, 5, "doubble read activated $data");
+	  if(defined($buf1))
+	  {
+	  $buf = ($buf . $buf1) ;
+	  $data =  uc(unpack('H*', $buf));
+	   Log3($hash->{NAME}, 5, "doubble read result with buf1  $data");
+	  }
+	}
+	
+	if ((length($data) > 4) and ($data !~ m/1003$/m )) # sometimes the first read gets a trunkated buffer, third read makes sure all the buffer is read.
+	{ my $buf2 = DevIo_SimpleReadWithTimeout($hash, 0.005);
+	  Log3($hash->{NAME}, 5, "triple read activated $data");
+	  if(defined($buf2))
+	  {
+	  $buf = ($buf . $buf2) ;
+	  $data =  uc(unpack('H*', $buf));
+	   Log3($hash->{NAME}, 5, "triple read result with buf2  $data");
+	  }
+	}
+	
+	
+	if ((length($data) > 4) and ($data !~ m/1003$/m )) # sometimes the first read gets a trunkated buffer, fourth read makes sure all the buffer is read.
+	{ my $buf3 = DevIo_SimpleReadWithTimeout($hash, 0.005);
+	  Log3($hash->{NAME}, 5, "quadruple read activated $data");
+	  if(defined($buf3))
+	  {
+	  $buf = ($buf . $buf3) ;
+	  $data =  uc(unpack('H*', $buf));
+	   Log3($hash->{NAME}, 5, "quadruple read result with buf3  $data");
+	  }
+	}
+	
+	
+	Log3 $hash->{NAME}, 5, "THZ_ReadAnswer: uc unpack: '$data'";	
+	return (undef, $data);
 }
 
  
@@ -793,31 +870,57 @@ sub THZ_encodecommand($$) {
 #
 ########################################################################################
 
+
 sub THZ_decode($) {
   my ($message_orig) = @_;
   #  raw data received from device have to be de-escaped before header evaluation and data use:
   # - each sequece 2B 18 must be replaced with single byte 2B
   # - each sequece 10 10 must be replaced with single byte 10
-    my $find = "1010";
-    my $replace = "10";
-    $message_orig=THZ_replacebytes($message_orig, $find, $replace);
-    $find = "2B18";
-    $replace = "2B";
-    $message_orig=THZ_replacebytes($message_orig, $find, $replace);
+  my $find = "1010";
+  my $replace = "10";
+  $message_orig=THZ_replacebytes($message_orig, $find, $replace);
+  $find = "2B18";
+  $replace = "2B";
+  $message_orig=THZ_replacebytes($message_orig, $find, $replace);
+  
+  #Check if answer is NAK
+  if (length($message_orig) == 2 && $message_orig eq "15") {
+    return("NAK received from device",$message_orig);
+  }
+  
   #check header and if ok 0100, check checksum and return the decoded msg
-  if ("0100" eq substr($message_orig,0,4)) {
+  my $header = substr($message_orig,0,4);
+  if ($header eq  "0100")
+  {
     if (THZ_checksum($message_orig) eq substr($message_orig,4,2)) {
-        $message_orig =~ /0100(.*)1003/; 
-        my $message = $1;
-        return (undef, $message)
+      $message_orig =~ /0100(.*)1003/; 
+      my $message = $1;
+      return (undef, $message);
     }
-    else {return (THZ_checksum($message_orig) . "crc_error", $message_orig)}; }
-
-  if ("0103" eq substr($message_orig,0,4)) { return (" command not known", $message_orig)}; 
-
-  if ("0102" eq substr($message_orig,0,4)) {  return (" CRC error in request", $message_orig)}
-  else {return (" new error code " , $message_orig);}; 
+    else {return (THZ_checksum($message_orig) . "crc_error in answer", $message_orig)};
+  }
+  if ($header eq "0103")
+  {
+    return ("command not known", $message_orig);
+  }
+  if ($header eq "0102")
+  {
+    return ("CRC error in request", $message_orig);
+  }
+  if ($header eq "0104")
+  {
+    return ("UNKNOWN REQUEST", $message_orig);
+  }
+   if ($header eq "0180")
+  {
+    return (undef, $message_orig);
+  }
+  
+  return ("new unknown answer " , $message_orig);
 }
+
+
+
 
 ########################################################################################
 #
@@ -825,8 +928,11 @@ sub THZ_decode($) {
 #
 ########################################################################################
 	
-sub THZ_Parse($) {
-  my ($message) = @_;
+sub THZ_Parse($$) {
+  my ($hash,$message) = @_;
+  Log3 $hash->{NAME}, 5, "Parse message: $message";	  
+  my $length = length($message);
+  Log3 $hash->{NAME}, 4, "Message length: $length";
   given (substr($message,2,2)) {
   when ("0A")    {
        if (substr($message,4,4) eq "0116")						{$message = hex2int(substr($message, 8,4))/10 ." °C" }
@@ -835,7 +941,7 @@ sub THZ_Parse($) {
       elsif ((substr($message,4,2) eq "1D") or (substr($message,4,2) eq "17")) 		{$message = quaters2time(substr($message, 8,2)) ."--". quaters2time(substr($message, 10,2))}  #value 1Ch 28dec is 7 ; value 1Eh 30dec is 7:30  
       elsif (substr($message,4,4) eq "05D1") 				 		{$message = quaters2time(substr($message, 10,2)) ."--". quaters2time(substr($message, 8,2))}  #like above but before stop then start !!!!
       elsif ((substr($message,4,4) eq "05D3") or (substr($message,4,4) eq "05D4"))   	{$message = quaters2time(substr($message, 10,2)) }  #value 1Ch 28dec is 7 
-      elsif ((substr($message,4,3) eq "056")  or (substr($message,4,4) eq "0570")  or (substr($message,4,4) eq "0575") or (substr($message,4,4) eq "03AE") or (substr($message,4,4) eq "03AF") or (substr($message,4,4) eq "03B0") or (substr($message,4,4) eq "03B1") )	{$message = hex(substr($message, 8,4))}
+      elsif ((substr($message,4,3) eq "056")  or (substr($message,4,4) eq "0570")  or (substr($message,4,4) eq "0575") or (substr($message,4,4) eq "03AE") or (substr($message,4,4) eq "03AF") or (substr($message,4,4) eq "03B0") or (substr($message,4,4) eq "03B1") or (substr($message,4,3) eq "091") or (substr($message,4,3) eq "092") or (substr($message,4,3) eq "093") or (substr($message,4,4) eq "05B7") or (substr($message,4,4) eq "05B8"))	{$message = hex(substr($message, 8,4))}
       elsif ((substr($message,4,4) eq "0588") or (substr($message,4,4) eq "05A0")  or (substr($message,4,4) eq "0571") or (substr($message,4,4) eq "0572") or (substr($message,4,4) eq "0573") or (substr($message,4,4) eq "0574")) {$message = hex(substr($message, 8,4)) ." min" }
       elsif (substr($message,4,3) eq "057")						{$message = hex(substr($message, 8,4)) ." m3/h" }
       elsif (substr($message,4,4) eq "05A2")						{$message = hex(substr($message, 8,4))/10 ." K" }
@@ -843,17 +949,17 @@ sub THZ_Parse($) {
   }  
   when ("0B")    {							   #set parameter HC1
       if (substr($message,4,2) eq "14")  {$message = quaters2time(substr($message, 8,2)) ."--". quaters2time(substr($message, 10,2))}  #value 1Ch 28dec is 7 ; value 1Eh 30dec is 7:30
-      elsif (substr($message,4,4) eq "059E")						{$message = hex(substr($message, 8,4)) ." K" }
+      elsif (substr($message,4,4) eq "059E")						{$message = hex(substr($message, 8,4))/10  ." K" }
       elsif (substr($message,4,4) eq "059D")						{$message = hex(substr($message, 8,4)) ." %" }
       elsif (substr($message,4,4) eq "010E")						{$message = hex(substr($message, 8,4))/100}
-      elsif (substr($message,4,4) eq "010F")						{$message = hex(substr($message, 8,2))/10 . " °C"}
+      elsif (substr($message,4,4) eq "010F")						{$message = hex(substr($message, 8,2)) . " %"}
       else 				 {$message = hex2int(substr($message, 8,4))/10 ." °C"  }
   }
   when ("0C")    {							   #set parameter HC2
       if (substr($message,4,2) eq "15")  {$message = quaters2time(substr($message, 8,2)) ."--". quaters2time(substr($message, 10,2))}  #value 1Ch 28dec is 7 ; value 1Eh 30dec is 7:30
-      elsif (substr($message,4,4) eq "059E")						{$message = hex(substr($message, 8,4)) ." K" }
+      elsif (substr($message,4,4) eq "059E")						{$message = hex(substr($message, 8,4))/10  ." K" }
       elsif (substr($message,4,4) eq "010E")						{$message = hex(substr($message, 8,4))/100}
-      elsif (substr($message,4,4) eq "010F")						{$message = hex(substr($message, 8,2))/10  . " °C"}
+      elsif (substr($message,4,4) eq "010F")						{$message = hex(substr($message, 8,2)) . " %"}
       else 				 {$message = hex2int(substr($message, 8,4))/10 ." °C"  }
   }
   
@@ -959,6 +1065,9 @@ sub THZ_Parse($) {
               	  "Date: " 		. (hex(substr($message,12,2))+2000)  .	"/"		. hex(substr($message,14,2)) . "/"		. hex(substr($message,16,2));
   }
   when ("FB")    {                     #allFB
+#          1         2         3         5         6         7         8         9
+#012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+#0DFBFDA8005D014E010602CF01CCFDA8FDA80007014C200813021C021C0258001A001E0013006100000000
     $message =    "outsideTemp: " 				. hex2int(substr($message, 8,4))/10 . " " .
         	  "flowTemp: "					. hex2int(substr($message,12,4))/10 . " " .  #Vorlauf Temperatur
         	  "returnTemp: "				. hex2int(substr($message,16,4))/10 . " " .  #Rücklauf Temperatur
@@ -993,11 +1102,11 @@ sub THZ_Parse($) {
         	  "mainVentilatorSpeed: "			. hex(substr($message,70,4))/1   	. " " .  # m3/h
                   "outside_tempFiltered: "			. hex2int(substr($message,74,4))/10     . " " .
                   "relHumidity: "				. hex2int(substr($message,78,4))/10	. " " .
-		  "dewPoint: "					. hex2int(substr($message,86,4))/1	. " " .
-		  "P_Nd: "					. hex2int(substr($message,86,4))/100	. " " .	#bar
-		  "P_Hd: "					. hex2int(substr($message,90,4))/100	. " " .  #bar
-		  "actualPower_Qc: "				. hex2int(substr($message,94,8))/1      . " " .	#kw
-		  "actualPower_Pel: "				. hex2int(substr($message,102,4))/1     . " " .	#kw
+		  "dewPoint: "					. hex2int(mysubstr($hash,$message,86,4))/1	. " " .
+		  "P_Nd: "					. hex2int(mysubstr($hash,$message,86,4))/100	. " " .	#bar
+		  "P_Hd: "					. hex2int(mysubstr($hash,$message,90,4))/100	. " " .  #bar
+		  "actualPower_Qc: "				. hex2int(mysubstr($hash,$message,94,8))/1      . " " .	#kw
+		  "actualPower_Pel: "				. hex2int(mysubstr($hash,$message,102,4))/1     . " " .	#kw
 		  "collectorTemp: " 				. hex2int(substr($message, 4,4))/10  . " " .	#kw
 		  "insideTemp: " 				. hex2int(substr($message, 32,4))/10 ;	#Innentemperatur 
   }
@@ -1030,6 +1139,61 @@ sub THZ_Parse($) {
   }
   return (undef, $message);
 }
+
+
+
+
+
+
+
+#######################################
+#mysubstr($$$)
+#Same function as subst. But checks if offset + lenght is 
+#available in the string. If not, returns zeros.
+#######################################
+sub mysubstr($$$$)
+{
+  my ($hash,$message,$start, $length) = @_; 
+  my $ReturnValue = "";                
+  if (length($message) < ($start + $length))
+  {
+    Log3 $hash->{NAME},5, "mysubstr: offset($start) + length($length) is greater then message : '$message'";
+    my $msg;
+    for(my $i = 0;$i < $length;$i++)
+    {
+            $msg += "0";
+    }
+    $ReturnValue = uc(unpack('H*',pack('H*', $msg)));
+    Log3 $hash->{NAME},5,"mysubstr: retval instead '$ReturnValue'";
+    return $ReturnValue;
+  }
+  return substr($message,$start,$length);	
+}
+
+local $SIG{__WARN__} = sub
+{
+  my $message = shift;
+  
+  if (!defined($internalHash)) {
+    Log 3, "EXCEPTION in THZ: '$message'";
+  }
+  else
+  {
+    Log3 $internalHash->{NAME},3, "EXCEPTION in THZ: '$message'";
+  }  
+};
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 #######################################
@@ -1130,10 +1294,11 @@ sub THZ_Attr(@) {
   my ($cmd, $name, $attrName, $attrVal) = @_;
   my $hash = $defs{$name};
   if( $attrName =~ /^interval_/ ) {
-  DevIo_CloseDev($hash);
-  RemoveInternalTimer($hash);
+  #DevIo_CloseDev($hash);
+  THZ_RemoveInternalTimer("THZ_GetRefresh");
   #sleep 1;
-  DevIo_OpenDev($hash, 1, "THZ_Refresh_all_gets");
+  #DevIo_OpenDev($hash, 1, "THZ_Refresh_all_gets");
+  THZ_Refresh_all_gets($hash);
   }
   return undef;
 }
@@ -1147,20 +1312,44 @@ sub THZ_Attr(@) {
 sub THZ_Undef($$) {
   my ($hash, $arg) = @_;
   my $name = $hash->{NAME};
-  RemoveInternalTimer($hash);
+  THZ_RemoveInternalTimer("THZ_GetRefresh");
   foreach my $d (sort keys %defs) {
     if(defined($defs{$d}) &&
        defined($defs{$d}{IODev}) &&
        $defs{$d}{IODev} == $hash)
       {
         my $lev = ($reread_active ? 4 : 2);
-        Log GetLogLevel($name,$lev), "deleting port for $d";
+        Log3 $hash->{NAME}, $lev, "deleting port for $d";
         delete $defs{$d}{IODev};
       }
   }
   DevIo_CloseDev($hash); 
   return undef;
 }
+
+
+##########################################
+# THZ_RemoveInternalTimer($) 
+# modified takes as an argument the function to be called, not the argument
+########################################################################################
+sub THZ_RemoveInternalTimer($)
+{
+  my ($callingfun) = @_;
+  foreach my $a (keys %intAt) {
+    delete($intAt{$a}) if($intAt{$a}{FN} eq $callingfun);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
 #####################################
 # sub THZ_PrintcurveSVG
 # plots heat curve
@@ -1171,10 +1360,10 @@ sub THZ_Undef($$) {
 
 sub THZ_PrintcurveSVG {
 my $ret =  <<'END';
-<?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE svg> <svg width="800" height="160" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" >
+<?xml version="1.0" encoding="UTF-8"?> <!DOCTYPE svg> <svg width="800" height="163" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" >
 <style type="text/css"><![CDATA[
 text       { font-family:Times; font-size:12px; }
-text.title { font-size:16px; }
+text.title { font-size:14	px; }
 text.copy  { text-decoration:underline; stroke:none; fill:blue;    }
 text.paste { text-decoration:underline; stroke:none; fill:blue;    }
 polyline { stroke:black; fill:none; }
@@ -1213,67 +1402,86 @@ polyline { stroke:black; fill:none; }
 </defs>
 <rect x="48" y="19.2" width="704" height="121.6" rx="8" ry="8" fill="none" class="border"/>
 <text x="12" y="80" text-anchor="middle" class="ylabel" transform="rotate(270,12,80)">HC1 heat SetTemp °C</text>
-<text x="399" y="160" class="xlabel" text-anchor="middle">outside temperature filtered °C</text>
-<text x="44" y="156.8" class="ylabel" text-anchor="middle">-15</text>
-<text x="165" y="156.8" class="ylabel" text-anchor="middle">-9</text>  <polyline points="165,19.2 165,140.8" class="hgrid"/>
-<text x="282" y="156.8" class="ylabel" text-anchor="middle">-3</text>  <polyline points="282,19.2 282,140.8" class="hgrid"/>
-<text x="399" y="156.8" class="ylabel" text-anchor="middle">3</text>   <polyline points="399,19.2 399,140.8" class="hgrid"/>
-<text x="517" y="156.8" class="ylabel" text-anchor="middle">9</text>   <polyline points="517,19.2 517,140.8" class="hgrid"/>
-<text x="634" y="156.8" class="ylabel" text-anchor="middle">15</text>  <polyline points="634,19.2 634,140.8" class="hgrid"/>
-<text x="751" y="156.8" class="ylabel" text-anchor="middle">21</text>  <polyline points="751,19.2 751,140.8" class="hgrid"/>
+<text x="399" y="163.2" class="xlabel" text-anchor="middle">outside temperature filtered °C</text>
+<text x="44" y="155" class="ylabel" text-anchor="middle">-15</text>
+<text x="165" y="155" class="ylabel" text-anchor="middle">-9</text>  <polyline points="165,19.2 165,140.8" class="hgrid"/>
+<text x="282" y="155" class="ylabel" text-anchor="middle">-3</text>  <polyline points="282,19.2 282,140.8" class="hgrid"/>
+<text x="399" y="155" class="ylabel" text-anchor="middle">3</text>   <polyline points="399,19.2 399,140.8" class="hgrid"/>
+<text x="517" y="155" class="ylabel" text-anchor="middle">9</text>   <polyline points="517,19.2 517,140.8" class="hgrid"/>
+<text x="634" y="155" class="ylabel" text-anchor="middle">15</text>  <polyline points="634,19.2 634,140.8" class="hgrid"/>
+<text x="751" y="155" class="ylabel" text-anchor="middle">21</text>  <polyline points="751,19.2 751,140.8" class="hgrid"/>
 <g>
   <polyline points="44,140 49,140"/> <text x="39.2" y="144" class="ylabel" text-anchor="end">15</text>
-  <polyline points="44,110 49,110"/> <text x="39.2" y="114" class="ylabel" text-anchor="end">19</text>
-  <polyline points="44,80 49,80"/>   <text x="39.2" y="84" class="ylabel" text-anchor="end">23</text>
-  <polyline points="44,49 49,49"/>   <text x="39.2" y="53" class="ylabel" text-anchor="end">27</text>
-  <polyline points="44,19 49,19"/>   <text x="39.2" y="23" class="ylabel" text-anchor="end">31</text>
+  <polyline points="44,110 49,110"/> <text x="39.2" y="114" class="ylabel" text-anchor="end">23</text>
+  <polyline points="44,80 49,80"/>   <text x="39.2" y="84" class="ylabel" text-anchor="end">31</text>
+  <polyline points="44,49 49,49"/>   <text x="39.2" y="53" class="ylabel" text-anchor="end">39</text>
+  <polyline points="44,19 49,19"/>   <text x="39.2" y="23" class="ylabel" text-anchor="end">47</text>
 </g>
 <g>
   <polyline points="751,140 756,140"/> <text x="760.8" y="144" class="ylabel">15</text>
-  <polyline points="751,110 756,110"/> <text x="760.8" y="114" class="ylabel">19</text>
-  <polyline points="751,80 756,80"/>   <text x="760.8" y="84" class="ylabel">23</text>
-  <polyline points="751,49 756,49"/>   <text x="760.8" y="53" class="ylabel">27</text>
-  <polyline points="751,19 756,19"/>   <text x="760.8" y="23" class="ylabel">31</text>
+  <polyline points="751,110 756,110"/> <text x="760.8" y="114" class="ylabel">23</text>
+  <polyline points="751,80 756,80"/>   <text x="760.8" y="84" class="ylabel">31</text>
+  <polyline points="751,49 756,49"/>   <text x="760.8" y="53" class="ylabel">39</text>
+  <polyline points="751,19 756,19"/>   <text x="760.8" y="23" class="ylabel">47</text>
 </g>
-<text  line_id="line_0" x="100" y="105.2"  class="l0">Actual working point</text>
-<text line_id="line_1" x="100" y="121.2" class="l1">Heat curve</text>
 END
 
-
+my $insideTemp=(split ' ',ReadingsVal("Mythz","sGlobal",14))[81];
+$insideTemp="n.a." if ($insideTemp eq "-60"); #in case internal room sensor not connected
 my $roomSetTemp =(split ' ',ReadingsVal("Mythz","sHC1",0))[21];
-my $p13GradientHC1 = ReadingsVal("Mythz","p13GradientHC1",0);
-my $heatSetTemp =(split ' ',ReadingsVal("Mythz","sHC1",0))[11];
+$roomSetTemp ="1" if ($roomSetTemp == 0); #division by 0 is bad
+my $p13GradientHC1 = ReadingsVal("Mythz","p13GradientHC1",0.4);
+my $heatSetTemp =(split ' ',ReadingsVal("Mythz","sHC1",17))[11];
+my $p15RoomInfluenceHC1 = (split ' ',ReadingsVal("Mythz","p15RoomInfluenceHC1",0))[0];
 my $outside_tempFiltered =(split ' ',ReadingsVal("Mythz","sGlobal",0))[65];
-my $p14LowEnDHC1 =(split ' ',ReadingsVal("Mythz","p14LowEnDHC1",0))[0];
-my $a= 1.5 + ($roomSetTemp * 1.3) + $p14LowEnDHC1; 
-my $b= -10 * $p13GradientHC1 / $roomSetTemp; 
-my $c= -0.01;
-my $Simul_heatSetTemp;
+my $p14LowEndHC1 =(split ' ',ReadingsVal("Mythz","p14LowEndHC1",0))[0];
 
-open (MYFILE, '>/share/simone/txt.txt');
-print MYFILE ($outside_tempFiltered ." xx " . $heatSetTemp  );
-close (MYFILE); 
 
-$ret .='<polyline id="line_0"   title="Actual Working point" style="stroke-width:2" class="l0" points="';
-my ($px,$py) = ((($outside_tempFiltered+15)*(750-49)/(15+21)+49),(($heatSetTemp-31)*(140-19)/(15-31)+19)); 
- $ret.= ($px-3) . "," . ($py)   ." ";
- $ret.=  ($px)  . "," . ($py-3) ." ";
- $ret.= ($px+3) . "," . ($py) ." ";
- $ret.= ($px)   . "," . ($py+3)  ." ";
- $ret.= ($px-3)   . "," . ($py)  ." ";
-$ret .= '"/>';
+############willi data
+#$insideTemp=24.6;
+#$roomSetTemp = 21;
+#$p13GradientHC1 = 0.26;
+#$heatSetTemp = 21.3;
+#$p15RoomInfluenceHC1 = 50;
+#$outside_tempFiltered = 13.1;
+#$p14LowEndHC1 =1.5;
 
+
+
+
+
+
+#labels ######################
+$ret .= '<text line_id="line_1" x="70" y="105.2" class="l1"> --- heat curve</text>' ;
+$ret .= '<text  line_id="line_0" x="70" y="121.2"  class="l0"> --- working point: outside_tempFiltered=';
+$ret .=  $outside_tempFiltered . ' heatSetTemp=' . $heatSetTemp . '</text>';
+
+
+#title ######################
+$ret .= '<text id="svg_title" x="400" y="14.4" class="title" text-anchor="middle">';
+$ret .=  'roomSetTemp=' . $roomSetTemp . ' p13GradientHC1=' . $p13GradientHC1 . ' p14LowEndHC1=' . $p14LowEndHC1  .  ' p15RoomInfluenceHC1=' . $p15RoomInfluenceHC1 . " insideTemp=" . $insideTemp .' </text>';
+
+#equation####################
+$insideTemp=$roomSetTemp if ($insideTemp eq "n.a."); 
+my $a= 1 + ($roomSetTemp * (1 + $p13GradientHC1 * 0.87)) + $p14LowEndHC1 + ($p15RoomInfluenceHC1 * $p13GradientHC1 * ($roomSetTemp - $insideTemp) /10); 
+my $b= -14 * $p13GradientHC1 / $roomSetTemp; 
+my $c= -1 * $p13GradientHC1 /75;
+my $Simul_heatSetTemp; 
+
+
+#point ######################
+$ret .='<polyline id="line_0"   style="stroke-width:2" class="l0" points="';
+my ($px,$py) = ((($outside_tempFiltered+15)*(750-49)/(15+21)+49),(($heatSetTemp-47)*(140-19)/(15-47)+19)); 
+ $ret.= ($px-3) . "," . ($py)   ." " . ($px)  . "," . ($py-3) ." " . ($px+3) . "," . ($py) ." " . ($px)   . "," . ($py+3)  ." " . ($px-3)   . "," . ($py)  ." " . '"/>';
+
+#curve ######################
 $ret .='<polyline id="line_1"  title="Heat Curve" class="l1" points="';
-
 for(my $i = -15; $i < 22; $i++) {
  $Simul_heatSetTemp = $i * $i * $c + $i * $b + $a; 
- $ret.= (($i+15)*(750-49)/(15+21)+49) . "," . (($Simul_heatSetTemp-31)*(140-19)/(15-31)+19) ." ";
+ $ret.= (($i+15)*(750-49)/(15+21)+49) . "," . (($Simul_heatSetTemp-47)*(140-19)/(15-47)+19) ." ";
 }
 $ret .= '"/> </svg>';
 
-open (MYFILE, '>/share/simone/data.svg');
-print MYFILE ($ret);
-close (MYFILE); 
 my $FW_RETTYPE = "image/svg+xml";
 return ($FW_RETTYPE, $ret);
 #return $ret;
