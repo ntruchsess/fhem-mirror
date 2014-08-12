@@ -163,6 +163,7 @@ sub OWX_ASYNC_Initialize ($) {
   $hash->{NotifyFn} = "OWX_ASYNC_Notify";
   $hash->{ReadFn}   = "OWX_ASYNC_Read";
   $hash->{ReadyFn}  = "OWX_ASYNC_Ready";
+  $hash->{I2CRecFn} = "OWX_ASYNC_I2CRec";
   $hash->{InitFn}   = "OWX_ASYNC_Init";
   $hash->{AttrList} = "dokick:0,1 interval buspower:real,parasitic IODev timeout maxtimeouts";
   main::LoadModule("OWX");
@@ -1176,6 +1177,20 @@ sub OWX_ASYNC_RunTasks($) {
     };
   }
 };
+
+sub OWX_ASYNC_I2CRec($$) {
+  my ( $hash, $packet ) = @_;
+  
+  if (defined $hash->{ASYNC}) {
+    $hash->{ASYNC}->i2c_received(
+      $packet->{nbyte},
+      \split('',$packet->{received}),
+      $packet->{$hash->{IODev}->{NAME}."_SENDSTAT"} // "Ok" eq "Ok" ? 1 : 0
+    );
+  }
+  
+  OWX_ASYNC_RunTasks($hash);
+}
 
 1;
 
