@@ -112,36 +112,42 @@ sub get_pt_verify($) {
 
 sub get_pt_execute($$$$) {
   my ($self, $reset, $owx_dev, $writedata, $numread) = @_;
+  my ($pt_reset,$pt_select,$pt_write,$pt_read,$i,@response);
+  my @data = unpack "C*", $writedata if defined $writedata;
+
   return PT_THREAD(sub {
     my ($thread) = @_;
     
     PT_BEGIN($thread);
-
-    if (  my $firmata = main::FRM_Client_FirmataDevice($self->{hash}) and my $pin = $self->{pin} ) {
-      my @data = unpack "C*", $writedata if defined $writedata;
-      my $id = $self->{id};
-      my $ow_command = {
-        'reset'  => $reset,
-        'skip'   => defined($owx_dev) ? undef : 1,
-        'select' => defined($owx_dev) ? device_to_firmata($owx_dev) : undef,
-        'read'  => $numread,
-        'write' => @data ? \@data : undef,
-        'delay' => undef,
-        'id'    => $numread ? $id : undef
-      };
-      main::Log3 ($self->{name},5,"FRM_OWX_Execute: $id: $owx_dev [".join(" ",(map sprintf("%02X",$_),@data))."] numread: ".(defined $numread ? $numread : 0)) if $self->{debug};
-      $firmata->onewire_command_series( $pin, $ow_command );
-      if ($numread) {
-        $thread->{id} = $id;
-        $self->{id} = ( $id + 1 ) & 0xFFFF;
-        delete $self->{responses}->{$id};
-        main::OWX_ASYNC_TaskTimeout($self->{hash},gettimeofday+main::AttrVal($self->{name},"timeout",2));
-        PT_WAIT_UNTIL(defined $self->{responses}->{$thread->{id}});
-        my $ret = pack "C*", @{$self->{responses}->{$thread->{id}}};
-        delete $self->{responses}->{$thread->{id}};
-        PT_EXIT($ret);
-      };
-    };
+    if ($reset) {
+      $pt_reset = $self->pt_reset();
+      PT_WAIT_THREAD($pt_reset);
+      die $pt_reset->PT_CAUSE() if ($pt_reset->PT_STATE() == PT_ERROR || $pt_reset->PT_STATE() == PT_CANCELED);
+      die "reset failure" unless ($pt_reset->PT_RETVAL());
+    }
+    if ($owx_dev) {
+      $pt_select = $self->pt_wireSelect();
+    } else {
+      $pt_select = $self->pt_wireSkip();
+    }
+    PT_WAIT_THREAD($pt_select);
+    die $pt_select->PT_CAUSE() if ($pt_select->PT_STATE() == PT_ERROR || $pt_select->PT_STATE() == PT_CANCELED);
+    
+    while(@data) {
+      $pt_write = $self->pt_wireWriteByte(shift @data);
+      PT_WAIT_THREAD($pt_write);
+      die $pt_write->PT_CAUSE() if ($pt_write->PT_STATE() == PT_ERROR || $pt_write->PT_STATE() == PT_CANCELED);
+    }
+    
+    if ($numread) {
+      for ($i = 0; $i < $numread; $i++) {
+        $pt_read = $self->pt_wireReadByte();
+        PT_WAIT_THREAD($pt_read);
+        die $pt_read->PT_CAUSE() if ($pt_read->PT_STATE() == PT_ERROR || $pt_read->PT_STATE() == PT_CANCELED);
+        push @response,$pt_read->PT_RETVAL();
+      }
+      PT_EXIT(pack "C*", @response);
+    }
     PT_END;
   });
 };
@@ -226,74 +232,104 @@ use constant {
   DS2482_STATE_SHORTEND => 2,
 };
 
-sub detect($) {
+sub pt_detect($) {
   my ( $self, $address ) = @_;
-  $self->{address} = DS2482_I2C_ADDR | $address;
-  return undef unless ($self->reset()); 
-  return $self->configure(DS2482_CFG_APU);
+  my ($reset,$configure);
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    $self->{address} = DS2482_I2C_ADDR | $address;
+    $reset = $self->pt_reset();
+    PT_WAIT_THREAD($reset);
+    die $reset->PT_CAUSE() if ($reset->PT_STATE() == PT_ERROR || $reset->PT_STATE() == PT_CANCELED);
+    unless ($reset->PT_RETVAL()) {
+      PT_EXIT;
+    }
+    $configure = $self->pt_configure(DS2482_CFG_APU);
+    PT_WAIT_THREAD($configure);
+    die $configure->PT_CAUSE() if ($configure->PT_STATE() == PT_ERROR || $configure->PT_STATE() == PT_CANCELED);
+    PT_EXIT($configure->PT_RETVAL());
+    PT_END;
+  });
 }
 
-sub setReadPtr($) {
-  my ( $self, $readPtr ) = @_;
-  $self->i2c_write(DS2482_CMD_SRP,$readPtr);
-}
-
-sub readByte() {
-  my ( $self ) = @_;
-  return $self->i2c_request($self->{address},1);
-}
-
-sub wireReadStatus($) {
+#TODO obsolete?
+sub pt_wireReadStatus($) {
   my ( $self, $setPtr ) = @_;
-  if ($setPtr) {
-    $self->setReadPtr(DS2482_READPTR_SR);
-  }
-  return $self->readByte();
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    if ($setPtr) {
+      $self->i2c_write(DS2482_CMD_SRP,DS2482_READPTR_SR);
+    }
+    $self->i2c_request(1);
+    PT_WAIT_UNTIL($self->i2c_response_ready());
+    # check for failure due to incorrect read back of status
+    PT_EXIT(($self->{response});
+    PT_END;
+  });
 }
 
-sub busyWait($) {
+sub pt_busyWait($) {
   my ( $self, $setReadPtr ) = @_;
   my $status;
-  my $loopCount = 1000;
-  while(($status = $self->wireReadStatus($setReadPtr)) & DS2482_STATUS_1WB) {
-    if (--$loopCount <= 0) {
-      $self->{state} |= DS2482_STATE_TIMEOUT;
-      last;
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    if($setReadPtr) {
+      $self->i2c_write(DS2482_CMD_SRP,DS2482_READPTR_SR);
     }
-    select(undef,undef,undef,0.000020); # was: delayMicroseconds(20); #TODO protothreads here!
-  }
-  return $status;
+    do {
+      $self->i2c_request(1);
+      PT_WAIT_UNTIL($self->i2c_response_ready());
+    } while ($status = $self->{response} & DS2482_STATUS_1WB);
+    PT_EXIT($status);
+    PT_END;
+  });
 }
 
 #-- interface
 
-sub reset() {
+sub pt_reset() {
   my ( $self ) = @_;
-  $self->{state} = 0;
-  $self->i2c_write(DS2482_CMD_DRST);
-  my $result = readByte();
-  # check for failure due to incorrect read back of status
-  return (($result & 0xf7) == 0x10);
+
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    $self->{state} = 0;
+    $self->i2c_write(DS2482_CMD_DRST);
+    $self->i2c_request(1);
+    PT_WAIT_UNTIL($self->i2c_response_ready());
+    # check for failure due to incorrect read back of status
+    PT_EXIT(($self->{response} & 0xf7) == 0x10);
+    PT_END;
+  });
 }
 
-sub configure($) {
+sub pt_configure($) {
   my ( $self, $config ) = @_;
-  
-  if ($self->busyWait(1) && ($self->{state} & DS2482_STATE_TIMEOUT)) {
-    return undef;
-  }
-  
-  $self->i2c_write(DS2482_CMD_WCFG, $config | (~$config << 4));
+  my $busyWait;
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    $busyWait = $self->pt_busyWait(1);
+    PT_WAIT_THEAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
 
-  if ($self->readByte() == $config) {
-    return 1;
-  }
-  $self->reset();
-  return undef;
+    $self->i2c_write(DS2482_CMD_WCFG, $config | (~$config << 4));
+
+    $self->i2c_request(1);
+    PT_WAIT_UNTIL($self->i2c_response_ready());
+    if ($self->{response} == $config) {
+      PT_EXIT(1);
+    }
+    $self->reset();
+    return undef;
+  });
 }
 
-sub selectChannel($) {
-  my ( $self, $channel ) = @_;	
+sub pt_selectChannel($) {
+  my ( $self, $channel ) = @_;
   my ($ch, $ch_read);
   CHANNEL: {
     $channel == 0 and do {
@@ -338,87 +374,148 @@ sub selectChannel($) {
     };
   };
 
-  if ($self->busyWait(1) && ($self->{state} & DS2482_STATE_TIMEOUT)) {
-    return undef;
-  }
+  my $busyWait;
+
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    $busyWait = $self->pt_busyWait(1);
+    PT_WAIT_THEAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
+
+    $self->i2c_write(DS2482_CMD_CHSL,$ch);
   
-  $self->i2c_write(DS2482_CMD_CHSL,$ch);
+    $busyWait = $self->pt_busyWait(0);
+    PT_WAIT_THEAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
   
-  if ($self->busyWait() && ($self->{state} & DS2482_STATE_TIMEOUT)) {
-    return false;
-  }
-  
-  return ($self->readByte() == $ch_read);
+    $self->i2c_request(1);
+    PT_WAIT_UNTIL($self->i2c_response_ready());
+    PT_EXIT($self->{response} == $ch_read);
+    PT_END;
+  });  
 }
 
-sub wireReset() {
+sub pt_wireReset() {
   my ( $self ) = @_;
-  if ($self->busyWait(1) && ($self->{state} & DS2482_STATE_TIMEOUT)) {
-    return 0;
-  }
-  $self->i2c_write(DS2482_CMD_1WRS);
+  my $busyWait;
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    $busyWait = $self->pt_busyWait(1);
+    PT_WAIT_THEAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
 
-  my $status = $self->busyWait();
+    $self->i2c_write(DS2482_CMD_1WRS);
 
-  # check for short condition
-  if ($status & DS2482_STATUS_SD) {
-    $self->{state} |= DS2482_STATE_SHORTEND;
-  }
-  # check for presence detect
-  return status & DS2482_STATUS_PPD;
-}
+    $busyWait = $self->pt_busyWait(0);
+    PT_WAIT_THEAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
 
-sub wireWriteByte($) {
-  my ( $self, $b ) = @_;
-  if ($self->busyWait(1) && ($self->{state} & DS2482_STATE_TIMEOUT)) {
-    return;
-  }
-  $self->i2c_write(DS2482_CMD_1WWB,$b);
-}
+    my $status = $busyWait->PT_RETVAL();
 
-sub wireReadByte() {
-  my ( $self ) = @_;
-  if ($self->busyWait(1) && ($self->{state} & DS2482_STATE_TIMEOUT)) {
-    return 0;
-  }
-  
-  $self->i2c_write(DS2482_CMD_1WRB);
-  
-  if ($self->busyWait() && ($self->{state} & DS2482_STATE_TIMEOUT)) {
-    return 0;
-  }
-  $self->setReadPtr(DS2482_READPTR_RDR);
-  return $self->readByte();
-}
-
-sub wireWriteBit($) {
-  my ( $self, $bit ) = @_;
-  if ($self->busyWait(1) && ($self->{state} & DS2482_STATE_TIMEOUT)) {
-    return;
-  }
-  $self->i2c_write(DS2482_CMD_1WSB,$bit ? 0x80 : 0);
-}
-
-sub wireReadBit() {
-  my ( $self ) = @_;
-  $self->wireWriteBit(1);
-  my $status = $self->busyWait(1);
-  return $status & DS2482_STATUS_SBR ? 1 : 0;
-}
-
-sub wireSkip() {
-  my ( $self ) = @_;
-  $self->wireWriteByte(SKIP_ROM);
-}
-
-sub wireSelect($) {
-  my ( $self, $rom ) = @_;
-  $self->wireWriteByte(COPY_SCRATCHPAD);
-  if (!$self->{state}) {
-    for (my $i=0; $i < 8 && !$self->{state}; $i++) {
-      $self->wireWriteByte($rom->[$i]);
+    # check for short condition
+    if ($status & DS2482_STATUS_SD) {
+      $self->{state} |= DS2482_STATE_SHORTEND;
     }
-  }
+    # check for presence detect
+    PT_EXIT($status & DS2482_STATUS_PPD);
+    PT_END;
+  });
+}
+
+sub pt_wireWriteByte($) {
+  my ( $self, $b ) = @_;
+  my $busyWait;
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    $busyWait = $self->pt_busyWait(1);
+    PT_WAIT_THEAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
+    $self->i2c_write(DS2482_CMD_1WWB,$b);
+    PT_END;
+  });
+}
+
+sub pt_wireReadByte() {
+  my ( $self ) = @_;
+  my $busyWait;
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    $busyWait = $self->pt_busyWait(1);
+    PT_WAIT_THEAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
+  
+    $self->i2c_write(DS2482_CMD_1WRB);
+
+    $busyWait = $self->pt_busyWait(0);
+    PT_WAIT_THEAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
+  
+    $self->i2c_write(DS2482_CMD_SRP,DS2482_READPTR_RDR);
+    
+    $self->i2c_request(1);
+    PT_WAIT_UNTIL($self->i2c_response_ready());
+    PT_EXIT($self->{response});
+    PT_END;
+  });
+}
+
+sub pt_wireWriteBit($) {
+  my ( $self, $bit ) = @_;
+  my $busyWait;
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    $busyWait = $self->pt_busyWait(1);
+    PT_WAIT_THEAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
+    $self->i2c_write(DS2482_CMD_1WSB,$bit ? 0x80 : 0);
+    PT_END;
+  });
+}
+
+sub pt_wireReadBit() {
+  my ( $self ) = @_;
+  my ($busyWait,$writeBit);
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    $writeBit = $self->pt_wireWriteBit(1);
+    PT_WAIT_THREAD($writeBit);
+    $busyWait = $self->pt_busyWait(1);
+    PT_WAIT_THEAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
+    PT_EXIT($busyWait->PT_RETVAL() & DS2482_STATUS_SBR ? 1 : 0);
+    PT_END;
+  });
+}
+
+sub pt_wireSkip() {
+  my ( $self ) = @_;
+  return $self->pt_wireWriteByte(SKIP_ROM);
+}
+
+sub pt_wireSelect($) {
+  my ( $self, $rom ) = @_;
+  my $wireWriteByte;
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
+    $wireWriteByte = $self->pt_wireWriteByte(COPY_SCRATCHPAD);
+    PT_WAIT_THREAD($wireWriteByte);
+    die $wireWriteByte->PT_CAUSE() if ($wireWriteByte->PT_STATE() == PT_ERROR || $wireWriteByte->PT_STATE() == PT_CANCELED);
+    if (!$self->{state}) {
+      for (my $i=0; $i < 8 && !$self->{state}; $i++) {
+        $wireWriteByte = $self->pt_wireWriteByte($rom->[$i]);
+        PT_WAIT_THREAD($wireWriteByte);
+        die $wireWriteByte->PT_CAUSE() if ($wireWriteByte->PT_STATE() == PT_ERROR || $wireWriteByte->PT_STATE() == PT_CANCELED);
+      }
+    }
+    PT_END;
+  });
 }
 
 #if ONEWIRE_SEARCH
@@ -429,74 +526,94 @@ sub wireResetSearch() {
   $self->{searchAddress} = [0,0,0,0,0,0,0,0];
 }
 
-sub wireSearch($) {
+sub pt_wireSearch($) {
   my ( $self ) = @_;
-  return $self->wireSearchInternal(SEARCH);
+  return $self->pt_wireSearchInternal(SEARCH);
 }
 
-sub wireSearchAlarms($) {
+sub pt_wireSearchAlarms($) {
   my ( $self ) = @_;
-  return $self->wireSearchInternal(SEARCH_ALARMS);
+  return $self->pt_wireSearchInternal(SEARCH_ALARMS);
 }
 
-sub wireSearchInternal($) {
+sub pt_wireSearchInternal($) {
   my ( $self, $command ) = @_;
   my $i;
   my $direction;
   my $last_zero=0;
+  my ($reset,$busyWait,$wireWriteByte);
+  return PT_THREAD(sub {
+    my ($thread) = @_;
+    PT_BEGIN($thread);
 
-  if ($self->{searchExhausted}) {
-    return 0;
-  }
-
-  if (!$self->wireReset()) {
-    return 0;
-  }
-
-  $self->busyWait(1);
-  $self->wireWriteByte($command);
-
-  for(my $i=1;$i<65;$i++) {
-
-    my $romByte = ($i-1)>>3;
-    my $romBit = 1<<(($i-1)&7);
-
-    if ($i < $self->{searchLastDisrepancy}) {
-      $direction = $self->{searchAddress}->[$romByte] & $romBit;
-    } else {
-      $direction = $i == $self->{searchLastDisrepancy} ? 1 : 0;
+    if ($self->{searchExhausted}) {
+      PT_EXIT(0);
     }
 
-    $self->busyWait();
+    $reset = $self->pt_wireReset();
+    PT_WAIT_THREAD($reset);
+    die $reset->PT_CAUSE() if ($reset->PT_STATE() == PT_ERROR || $reset->PT_STATE() == PT_CANCELED);
+    if (!$reset->PT_RETVAL()) {
+      PT_EXIT(0);
+    }
     
-    $self->i2c_write(DS2482_CMD_1WT,$direction ? 0x80 : 0);
+    $busyWait = $self->pt_busyWait(1);
+    PT_WAIT_THREAD($busyWait);
+    die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
+
+    $wireWriteByte = $self->pt_wireWriteByte($command);
+    PT_WAIT_THREAD($wireWriteByte);
+    die $wireWriteByte->PT_CAUSE() if ($wireWriteByte->PT_STATE() == PT_ERROR || $wireWriteByte->PT_STATE() == PT_CANCELED);
+
+    for(my $i=1;$i<65;$i++) {
+
+      my $romByte = ($i-1)>>3;
+      my $romBit = 1<<(($i-1)&7);
+
+      if ($i < $self->{searchLastDisrepancy}) {
+        $direction = $self->{searchAddress}->[$romByte] & $romBit;
+      } else {
+        $direction = $i == $self->{searchLastDisrepancy} ? 1 : 0;
+      }
+
+      $busyWait = $self->pt_busyWait();
+      PT_WAIT_THREAD($busyWait);
+      die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
+
+      $self->i2c_write(DS2482_CMD_1WT,$direction ? 0x80 : 0);
+
+      $busyWait = $self->pt_busyWait();
+      PT_WAIT_THREAD($busyWait);
+      die $busyWait->PT_CAUSE() if ($busyWait->PT_STATE() == PT_ERROR || $busyWait->PT_STATE() == PT_CANCELED);
     
-    my $status = $self->busyWait();
+      my $status = $busyWait->PT_RETVAL();
 
-    my $id = $status & DS2482_STATUS_SBR;
-    my $comp_id = $status & DS2482_STATUS_TSB;
-    $direction = $status & DS2482_STATUS_DIR;
+      my $id = $status & DS2482_STATUS_SBR;
+      my $comp_id = $status & DS2482_STATUS_TSB;
+      $direction = $status & DS2482_STATUS_DIR;
 
-    if ($id == 1 && $comp_id == 1) {
-      return 0;
-    } elsif ($id == 0 && $comp_id == 0 && $direction == 0) {
-      $last_zero = i;
+      if ($id == 1 && $comp_id == 1) {
+        PT_EXIT(0);
+      } elsif ($id == 0 && $comp_id == 0 && $direction == 0) {
+        $last_zero = i;
+      }
+
+      if ($direction) {
+        $self->{searchAddress}->[$romByte] |= $romBit;
+      } else {
+        $self->{searchAddress}->[$romByte] &= ~$romBit;
+      }
     }
 
-    if ($direction) {
-      $self->{searchAddress}->[$romByte] |= $romBit;
-    } else {
-      $self->{searchAddress}->[$romByte] &= ~$romBit;
+    $self->{searchLastDisrepancy} = $last_zero;
+
+    if ($last_zero == 0) {
+      $self->{searchExhausted} = 1;
     }
-  }
 
-  $self->{searchLastDisrepancy} = $last_zero;
-
-  if ($last_zero == 0) {
-    $self->{searchExhausted} = 1;
-  }
-
-  return 1;
+    PT_EXIT(1);
+    PT_END;
+  });
 }
 
 ########################################################################################
@@ -519,15 +636,15 @@ sub i2c_write(@) {
 	}
 }
 
-sub i2c_request($) {
-	my ( $self, $nbyte ) = @_;
+sub i2c_request() {
+	my ( $self ) = @_;
 	my $hash = $self->{hash};
 	if (defined (my $iodev = $hash->{IODev})) {
 	  delete $self->{response};
 		main::CallFn($iodev->{NAME}, "I2CWrtFn", $iodev, {
 			i2caddress => $hash->{I2C_Address},
 			direction  => "i2cread",
-			nbyte      => $nbyte
+			nbyte      => 1
 		});
 	} else {
 		die "no IODev assigned to '$hash->{NAME}'";
@@ -537,17 +654,15 @@ sub i2c_request($) {
 sub i2c_response_ready() {
   my ( $self ) = @_;
   return undef unless defined $self->{response}; 
-  die "I2C-Error" unless $self->{response}->{state};
+  die "I2C-Error" unless $self->{response_state};
   return 1;
 }
 
 sub i2c_received($$@) {
   my ( $self, $nbyte, $data, $ok ) = @_;
-  $self->{response} = {
-    len   => $nbyte,
-    data  => $data,
-    state => $ok,
-  };
+  die "unexpected response length $nbyte" unless $nbyte == 1; 
+  $self->{response} = $data;
+  $self->{response_state} = $ok
 }
 
 1;

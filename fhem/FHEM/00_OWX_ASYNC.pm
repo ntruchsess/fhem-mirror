@@ -1184,7 +1184,7 @@ sub OWX_ASYNC_I2CRec($$) {
   if (defined $hash->{ASYNC}) {
     $hash->{ASYNC}->i2c_received(
       $packet->{nbyte},
-      \split('',$packet->{received}),
+      $packet->{received},
       $packet->{$hash->{IODev}->{NAME}."_SENDSTAT"} // "Ok" eq "Ok" ? 1 : 0
     );
   }
