@@ -69,13 +69,13 @@ sub I2C_DS1307_Init($$) {
 
   my $name = $hash->{NAME};
   my $address = defined $args ? shift @$args : 0b1101000; #default address
-  $hash->{I2C_Address} = $address;
+  $hash->{I2C_Address} = $address =~ /^0.*$/ ? oct($address) : $address; 
   if (! (defined AttrVal($name,"stateFormat",undef))) {
     $main::attr{$name}{"stateFormat"} = "datetime";
   }
   eval {
     main::AssignIoPort( $hash, AttrVal( $name, "IODev", undef ) );
-    $hash->{DS1307} = Device::DS1307->new($address);
+    $hash->{DS1307} = Device::DS1307->new($hash->{I2C_Address});
     $hash->{DS1307}->attach(I2C_DS1307_IO->new($hash));
     $hash->{STATE} = "Initialized";
   };
