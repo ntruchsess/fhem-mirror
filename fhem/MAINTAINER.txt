@@ -14,7 +14,7 @@ fhem.pl                      rudolfkoenig         http://forum.fhem.de Sonstiges
 fhem.cfg                     rudolfkoenig         http://forum.fhem.de Sonstiges
 Makefile                     rudolfkoenig         http://forum.fhem.de Sonstiges
 configDB.pm                  betateilchen         http://forum.fhem.de Sonstiges
-                                                 
+
 FHEM/00_CM11.pm              borisneubert         http://forum.fhem.de SlowRF
 FHEM/00_CUL.pm               rudolfkoenig         http://forum.fhem.de SlowRF
 FHEM/00_FBAHA.pm             rudolfkoenig         http://forum.fhem.de FRITZ!Box
@@ -27,7 +27,7 @@ FHEM/00_NetzerI2C.pm         klausw               http://forum.fhem.de Sonstige 
 FHEM/00_OWX.pm               pahenning            http://forum.fhem.de 1Wire
 FHEM/00_RPII2C               klausw               http://forum.fhem.de Einplatinencomputer
 FHEM/00_TCM.pm               klaus-schauer        http://forum.fhem.de EnOcean
-FHEM/00_THZ.pm               immiimmi             http://forum.fhem.de Sonstiges 		
+FHEM/00_THZ.pm               immiimmi             http://forum.fhem.de Sonstiges
 FHEM/00_TUL.pm               hotmaz               http://forum.fhem.de KNX/EIB
 FHEM/00_ZWDongle.pm          rudolfkoenig         http://forum.fhem.de ZWave
 FHEM/01_FHEMWEB.pm           rudolfkoenig         http://forum.fhem.de Frontends
@@ -48,6 +48,7 @@ FHEM/10_IT.pm                justme1968           http://forum.fhem.de InterTech
 FHEM/10_Itach_IR             ulimaass             http://forum.fhem.de Sonstige Systeme
 FHEM/10_MAX.pm               mgehre               http://forum.fhem.de MAX
 FHEM/10_OWServer.pm          borisneubert/mfr69bs http://forum.fhem.de 1Wire
+FHEM/10_SOMFY.pm             thdankert            http://forum.fhem.de Sonstiges
 FHEM/10_UNIRoll.pm           c-herrmann           http://forum.fhem.de SlowRF
 FHEM/10_ZWave.pm             rudolfkoenig         http://forum.fhem.de ZWave
 FHEM/10_RESIDENTS.pm         loredo               http://forum.fhem.de Automatisierung
@@ -116,6 +117,9 @@ FHEM/36_PCA301.pm            justme1968           http://forum.fhem.de Sonstige 
 FHEM/36_LaCrosse.pm          justme1968           http://forum.fhem.de Sonstige Systeme
 FHEM/36_EMT7110.pm           HCS                  http://forum.fhem.de Sonstige Systeme
 FHEM/36_Level.pm             HCS                  http://forum.fhem.de Sonstige Systeme
+FHEM/36_WMBUS.pm             kaihs                http://forum.fhem.de Sonstige Systeme
+FHEM/37_SHC.pm               rr2000               http://forum.fhem.de Sonstige Systeme
+FHEM/37_SHCdev.pm            rr2000               http://forum.fhem.de Sonstige Systeme
 FHEM/38_CO20.pm              justme1968           http://forum.fhem.de Sonstiges
 FHEM/40_RFXCOM.pm            wherzig              http://forum.fhem.de RFXTRX
 FHEM/41_OREGON.pm            wherzig              http://forum.fhem.de Sonstiges
@@ -159,6 +163,7 @@ FHEM/70_Jabber.pm            BioS                 http://forum.fhem.de Unterstue
 FHEM/70_JSONMETER.pm         tupol                http://forum.fhem.de Sonstiges
 FHEM/70_PHTV.pm              loredo               http://forum.fhem.de Multimedia
 FHEM/70_ONKYO_AVR.pm         loredo               http://forum.fhem.de Multimedia
+FHEM/70_PIONEERAVR.pm        hofrichter           http://forum.fhem.de Multimedia
 FHEM/70_SCIVT.pm             rudolfkoenig/orphan  http://forum.fhem.de Sonstiges
 FHEM/70_SISPM.pm             real-wusel           http://forum.fhem.de Sonstiges
 FHEM/70_SML.pm               bentele              http://forum.fhem.de Sonstiges
@@ -169,6 +174,7 @@ FHEM/70_VIERA.pm             teevau               http://forum.fhem.de Sonstiges
 FHEM/70_WS3600.pm            Josch                http://forum.fhem.de Sonstiges
 FHEM/70_XBMC.pm              dennisb              http://forum.fhem.de Multimedia
 FHEM/70_Pushover.pm          Johannes_B           http://forum.fhem.de Unterstuetzende Dienste
+FHEM/70_PushNotifier.pm      xusader              http://forum.fhem.de Unterstuetzende Dienste
 FHEM/71_YAMAHA_AVR.pm        markusbloch          http://forum.fhem.de Multimedia
 FHEM/71_YAMAHA_BD.pm         markusbloch          http://forum.fhem.de Multimedia
 FHEM/72_FB_CALLMONITOR.pm    markusbloch          http://forum.fhem.de Unterstuetzende Dienste
@@ -190,6 +196,7 @@ FHEM/88_Itach_Relay.pm       sachag               http://forum.fhem.de Automatis
 FHEM/88_Itach_IRDevice       ulimaass             http://forum.fhem.de Sonstige Systeme
 FHEM/88_VantagePro2.pm       sachag               http://forum.fhem.de Sonstiges
 FHEM/88_WEBCOUNT.pm          sachag               http://forum.fhem.de Sonstiges
+FHEM/89_HEATRONIC.pm         heikoranft           http://forum.fhem.de Sonstige Systeme
 FHEM/90_at.pm                rudolfkoenig         http://forum.fhem.de Automatisierung
 FHEM/91_eventTypes.pm        rudolfkoenig         http://forum.fhem.de Frontends
 FHEM/91_notify.pm            rudolfkoenig         http://forum.fhem.de Automatisierung
@@ -253,7 +260,7 @@ FHEM/TcpServerUtils.pm       rudolfkoenig         http://forum.fhem.de Automatis
 FHEM/lib/Device/Firmata/*    ntruchsess           http://forum.fhem.de Sonstiges
 FHEM/lib/SWAP/*              justme1968           http://forum.fhem.de Sonstige Systeme
 FHEM/FhemUtils/*             mfr69bs              http://forum.fhem.de Sonstiges
-                                                
+
 contrib/YAF/*                danielweisensee      http://forum.fhem.de Frontends
 contrib/23_WEBTHERM.pm       betateilchen/sachag  http://forum.fhem.de Sonstiges
 contrib/55_BBB_BMP180.pm     betateilchen         http://forum.fhem.de Einplatinencomputer
@@ -261,7 +268,7 @@ contrib/71_LISTENLIVE.pm     betateilchen         http://forum.fhem.de Multimedi
 contrib/98_geodata.pm        betateilchen         http://forum.fhem.de Sonstiges
 contrib/98_openweathermap.pm betateilchen         http://forum.fhem.de Unterstuetzende Dienste
 contrib/98_PID.pm            betateilchen         http://forum.fhem.de Automatisierung
-                                                
+
 www/codemirror/*             betateilchen         http://forum.fhem.de Frontends
 www/gplot/*                  rudolfkoenig         http://forum.fhem.de Frontends
 www/images/*                 ulimaass             http://forum.fhem.de Frontends
@@ -270,7 +277,7 @@ www/pgm2/fhemweb_readingsHistory.js  justme1968   http://forum.fhem.de Frontends
 www/pgm2/*                   rudolfkoenig         http://forum.fhem.de Frontends
 www/jscolor/*                justme1968           http://forum.fhem.de Frontends
 www/frontend/*               johannnes            http://forum.fhem.de Frontends
-                                                
+
 docs/fhem-floorplan-*        ulimaass             http://forum.fhem.de Sonstiges
 docs/*                       rudolfkoenig         http://forum.fhem.de Sonstiges
 

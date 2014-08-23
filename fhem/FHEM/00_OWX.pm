@@ -438,7 +438,6 @@ sub OWX_CRC ($) {
     for(my $i=0; $i<8; $i++){
       $crc8 = $crc8_table[ $crc8 ^ $owx_ROM_ID[$i] ];
     }  
-    return $crc8;
   } elsif (ref($romid) eq "ARRAY") {
     for(my $i=0; $i<8; $i++){
       $crc8 = $crc8_table[ $crc8 ^ $romid->[$i] ];
@@ -452,9 +451,9 @@ sub OWX_CRC ($) {
     for(my $i=0; $i<7; $i++){
       $crc8 = $crc8_table[ $crc8 ^ $owx_ROM_ID[$i] ];
     }  
-    return $crc8;
   }
-}  
+  return $crc8;
+}
 
 ########################################################################################
 #
@@ -607,7 +606,7 @@ sub OWX_Detect ($) {
         $ress .= "master DS2480 re-detected";
         $owx_interface="DS2480";
         $ret=1;
-      } elsif( ($res eq "\x17\x0A\x5B\x0F\x02") || ($res eq "\x00\x17\x0A\x5B\x0F\x02") || ($res eq "\x30\xf8\x00") ){
+      } elsif( ($res eq "\x17\x0A\x5B\x0F\x02") || ($res eq "\x00\x17\x0A\x5B\x0F\x02") || ($res eq "\x30\xf8\x00") || ($res eq "\x06\x00\x09\x07\x80") || ($res eq "\x17\x41\xAB\x20\xFC")){
         $ress .= "passive DS9097 detected";
         $owx_interface="DS9097";
         $ret=1;
@@ -1198,9 +1197,12 @@ sub OWX_Complex_SER ($$$$) {
 
 sub OWX_First_SER ($$) {
   my ($hash,$mode) = @_;
-  
+
   #-- clear 16 byte of search data
   @owx_search=(0,0,0,0 ,0,0,0,0, 0,0,0,0, 0,0,0,0);
+  #-- clear 8 bytes of romid:
+  @owx_ROM_ID = (0,0,0,0,0,0,0,0);
+
   #-- reset the search state
   $owx_LastDiscrepancy = 0;
   $owx_LastDeviceFlag = 0;
@@ -1915,9 +1917,6 @@ sub OWX_Search_9097 ($$) {
       
   #$response = OWX_TouchByte($hash,$sp1); 
 
-  #-- clear 8 byte of device id for current search
-  @owx_ROM_ID =(0,0,0,0 ,0,0,0,0); 
-
   while ( $id_bit_number <= 64) {
     #loop until through all ROM bytes 0-7  
     my $id_bit     = OWX_TouchBit_9097($hash,1);
@@ -1927,7 +1926,7 @@ sub OWX_Search_9097 ($$) {
      
     if( ($id_bit == 1) && ($cmp_id_bit == 1) ){
       #print "no devices present at id_bit_number=$id_bit_number \n";
-      next;
+      last;
     }
     if ( $id_bit != $cmp_id_bit ){
       $search_direction = $id_bit;
@@ -1977,8 +1976,8 @@ sub OWX_Search_9097 ($$) {
       $rom_byte_number++;
       $rom_byte_mask = 1;
     } 
-    $owx_LastDiscrepancy = $last_zero;
   }
+  $owx_LastDiscrepancy = $last_zero;
   return 1; 
 }
 

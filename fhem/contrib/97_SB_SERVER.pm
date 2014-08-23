@@ -10,7 +10,7 @@
 #
 #  This is absolutley open source. Please feel free to use just as you
 #  like. Please note, that no warranty is given and no liability 
-#  granted.
+#  granted
 #
 # ############################################################################
 #
@@ -80,6 +80,7 @@ sub SB_SERVER_Initialize( $ ) {
     $hash->{GetFn}   = "SB_SERVER_Get";
     $hash->{SetFn}   = "SB_SERVER_Set";
     $hash->{AttrFn}  = "SB_SERVER_Attr";
+    $hash->{NotifyFn}  = "SB_SERVER_Notify";
 
     $hash->{AttrList} = "alivetimer maxfavorites ";
     $hash->{AttrList} .= "doalivecheck:true,false ";
@@ -149,6 +150,12 @@ sub SB_SERVER_Define( $$ ) {
 
     $hash->{LASTANSWER} = "none";
 
+    # used for alive checking of the CLI interface
+    $hash->{ALIVECHECK} = "?";
+
+    # the status of the CLI connection (on / off)
+    $hash->{CLICONNECTION} = "?";
+
     # preset our attributes
     if( !defined( $attr{$name}{alivetimer} ) ) {
 	$attr{$name}{alivetimer} = 120;
@@ -185,12 +192,6 @@ sub SB_SERVER_Define( $$ ) {
     if( !defined( $hash->{READINGS}{serversecure}{VAL} ) ) {
 	$hash->{READINGS}{serversecure}{VAL} = "?";
 	$hash->{READINGS}{serversecure}{TIME} = $tn; 
-    }
-
-    # the status of our server alive check mechanism
-    if( !defined( $hash->{READINGS}{alivecheck}{VAL} ) ) {
-	$hash->{READINGS}{alivecheck}{VAL} = "?";
-	$hash->{READINGS}{alivecheck}{TIME} = $tn; 
     }
 
 
@@ -371,12 +372,13 @@ sub SB_SERVER_Ready( $ ) {
 	    SB_SERVER_Broadcast( $hash, "SERVER",  "OFF" );
 	}
 
-	if( $hash->{TCPDev} ) {
-	    SB_SERVER_DoInit( $hash );
-	}
+	return( DevIo_OpenDev( $hash, 1, "SB_SERVER_DoInit") );
     }
 
-    return( DevIo_OpenDev( $hash, 1, "SB_SERVER_DoInit" ) );
+    #if( $hash->{TCPDev} ) {
+	#SB_SERVER_DoInit( $hash );
+    #}
+
 }
 
 
@@ -405,19 +407,13 @@ sub SB_SERVER_Attr( @ ) {
     my $name = shift( @_ );
     my @args = @_;
 
-    Log( 1, "SB_SERVER_Attr: called with @args" );
+    Log( 4, "SB_SERVER_Attr($name): called with @args" );
 
     if( $cmd eq "set" ) {
 	if( $args[ 0 ] eq "alivetimer" ) {
 
 	}
     }
-    
-    # do an update of the status
-#    InternalTimer( gettimeofday() + AttrVal( $name, "alivetimer", 120 ),
-#		   "SB_SERVER_Alive", 
-#		   $hash, 
-#		   0 );
 }
 
 
@@ -427,6 +423,8 @@ sub SB_SERVER_Attr( @ ) {
 sub SB_SERVER_Set( $@ ) {
     my ($hash, @a) = @_;
     my $name = $hash->{NAME};
+
+    Log( 4, "SB_SERVER_Set($name): called" );
 
     if( @a < 2 ) {
 	return( "at least one parameter is needed" ) ;
@@ -452,34 +450,41 @@ sub SB_SERVER_Set( $@ ) {
 	    if( $hash->{RCCNAME} ne "none" ) {
 		fhem( "set $hash->{RCCNAME} on" );
 	    }
-
-	} elsif( $cmd eq "renew" ) {
-	    Log3( $hash, 5, "SB_SERVER_Set: renew" );
-	    DevIo_SimpleWrite( $hash, "listen 1\n", 0 );
-
-	} elsif( $cmd eq "abort" ) {
-	    DevIo_SimpleWrite( $hash, "listen 0\n", 0 );
-
-	} elsif( $cmd eq "statusRequest" ) {
-	    DevIo_SimpleWrite( $hash, "serverstatus 0 200\n", 0 );
-
-	} elsif( $cmd eq "cliraw" ) {
-	    # write raw messages to the CLI interface per player
-	    my $v = join( " ", @a );
-	    $v .= "\n";	
-	    Log3( $hash, 5, "SB_SERVER_Set: cliraw: $v " ); 
-	    IOWrite( $hash, $v );
-
-	} elsif( $cmd eq "rescan" ) {
-	    IOWrite( $hash, $cmd . " " . $a[ 0 ] . "\n" );
-
-	} else {
-	    ;
 	}
 
-	return( undef );
+    } elsif( $cmd eq "renew" ) {
+	Log3( $hash, 5, "SB_SERVER_Set: renew" );
+	DevIo_SimpleWrite( $hash, "listen 1\n", 0 );
+	
+    } elsif( $cmd eq "abort" ) {
+	DevIo_SimpleWrite( $hash, "listen 0\n", 0 );
+	
+    } elsif( $cmd eq "statusRequest" ) {
+	Log3( $hash, 5, "SB_SERVER_Set: statusRequest" );
+	DevIo_SimpleWrite( $hash, "version ?\n", 0 );
+	DevIo_SimpleWrite( $hash, "serverstatus 0 200\n", 0 );
+	DevIo_SimpleWrite( $hash, "favorites items 0 " . 
+			   AttrVal( $name, "maxfavorites", 100 ) . "\n", 
+			   0 );
+	DevIo_SimpleWrite( $hash, "playlists 0 200\n", 0 );
+	
+    } elsif( $cmd eq "cliraw" ) {
+	# write raw messages to the CLI interface per player
+	my $v = join( " ", @a );
+	$v .= "\n";	
+	Log3( $hash, 5, "SB_SERVER_Set: cliraw: $v " ); 
+	    IOWrite( $hash, $v );
+	
+    } elsif( $cmd eq "rescan" ) {
+	IOWrite( $hash, $cmd . " " . $a[ 0 ] . "\n" );
+	
+    } else {
+	;
     }
+    
+    return( undef );
 }
+
 
 # ----------------------------------------------------------------------------
 # Read
@@ -487,19 +492,18 @@ sub SB_SERVER_Set( $@ ) {
 # ----------------------------------------------------------------------------
 sub SB_SERVER_Read( $ ) {
     my ($hash) = @_;
+    my $name = $hash->{NAME};
 
+    Log3( $hash, 4, "SB_SERVER_Read($name): called" );
     Log3( $hash, 5, "+++++++++++++++++++++++++++++++++++++++++++++++++++++" );
     Log3( $hash, 5, "New Squeezebox Server Read cycle starts here" );
     Log3( $hash, 5, "+++++++++++++++++++++++++++++++++++++++++++++++++++++" );
-    Log3( $hash, 5, "SB_SERVER_Read: called" );
 
     my $buf = DevIo_SimpleRead( $hash );
 
     if( !defined( $buf ) ) {
 	return( "" );
     }
-
-    my $name = $hash->{NAME};
 
     # if we have data, the server is on again
     if( ReadingsVal( $name, "power", "off" ) ne "on" ) {
@@ -565,11 +569,11 @@ sub SB_SERVER_Write( $$$ ) {
     my ( $hash, $fn, $msg ) = @_;
     my $name = $hash->{NAME};
 
+    Log3( $hash, 4, "SB_SERVER_Write($name): called with FN:$fn" );
+
     if( !defined( $fn ) ) {
 	return( undef );
     }
-
-    Log3( $hash, 4, "SB_SERVER_Write($name): called with FN:$fn" );
 
     if( defined( $msg ) ) {
 	Log3( $hash, 4, "SB_SERVER_Write: MSG:$msg" );
@@ -606,15 +610,26 @@ sub SB_SERVER_DoInit( $ ) {
     my ($hash) = @_;
     my $name = $hash->{NAME};
 
-    Log3( $hash, 4, "SB_SERVER_DoInit: called" );
+    Log3( $hash, 4, "SB_SERVER_DoInit($name): called" );
 
     if( !$hash->{TCPDev} ) {
 	Log3( $hash, 5, "SB_SERVER_DoInit: no TCPDev available?" );
+	DevIo_CloseDev( $hash ); 
     }
 
     if( $hash->{STATE} eq "disconnected" ) {
 	# server is off after FHEM start, broadcast to clients
-	SB_SERVER_Broadcast( $hash, "SERVER",  "OFF" );
+	if( ( ReadingsVal( $name, "power", "on" ) eq "on" ) ||
+	    ( ReadingsVal( $name, "power", "on" ) eq "?" ) ) {
+	    # obviously the first we realize the Server is off
+	    readingsSingleUpdate( $hash, "power", "off", 1 );
+
+	    # and signal to our clients
+	    SB_SERVER_Broadcast( $hash, "SERVER",  "OFF" );
+	    SB_SERVER_Broadcast( $hash, "SERVER", 
+				 "IP " . $hash->{IP} . 
+				 ":9000" );
+	}
 	return( "" );
     }
 
@@ -627,9 +642,14 @@ sub SB_SERVER_DoInit( $ ) {
     DevIo_SimpleWrite( $hash, "serverstatus 0 200\n", 0 );
     DevIo_SimpleWrite( $hash, "favorites items 0 " . 
 		       AttrVal( $name, "maxfavorites", 100 ) . "\n", 0 );
+    DevIo_SimpleWrite( $hash, "playlists 0 200\n", 0 );
+
+    SB_SERVER_Broadcast( $hash, "SERVER", 
+			 "IP " . $hash->{IP} . 
+			 ":9000" );
 
     # start the alive checking mechanism
-    readingsSingleUpdate( $hash, "alivecheck", "?", 0 );
+    $hash->{ALIVECHECK} = "?";
     InternalTimer( gettimeofday() + AttrVal( $name, "alivetimer", 120 ),
 		   "SB_SERVER_Alive", 
 		   $hash, 
@@ -682,8 +702,9 @@ sub SB_SERVER_DispatchCommandLine( $$ ) {
 # ----------------------------------------------------------------------------
 sub SB_SERVER_ParseCmds( $$ ) {
     my ( $hash, $instr ) = @_;
-
     my $name = $hash->{NAME};
+
+    Log3( $hash, 4, "SB_SERVER_ParseCmds($name): called" );
 
     my @args = split( " ", $instr );
 
@@ -699,6 +720,9 @@ sub SB_SERVER_ParseCmds( $$ ) {
 	    readingsSingleUpdate( $hash, "power", "on", 1 );
 	    # signal our players
 	    SB_SERVER_Broadcast( $hash, "SERVER", "ON" );
+	    SB_SERVER_Broadcast( $hash, "SERVER", 
+				 "IP " . $hash->{IP} . 
+				 ":9000" );
 	}
 
     } elsif( $cmd eq "pref" ) {
@@ -707,7 +731,7 @@ sub SB_SERVER_ParseCmds( $$ ) {
 	}
 
     } elsif( $cmd eq "fhemalivecheck" ) {
-	readingsSingleUpdate( $hash, "alivecheck", "received", 0 );
+	$hash->{ALIVECHECK} = "received";
 	Log3( $hash, 4, "SB_SERVER_ParseCmds($name): alivecheck received" );
 
     } elsif( $cmd eq "favorites" ) {
@@ -728,6 +752,10 @@ sub SB_SERVER_ParseCmds( $$ ) {
 	Log3( $hash, 4, "SB_SERVER_ParseCmds($name): server status" );
 	SB_SERVER_ParseServerStatus( $hash, \@args );
 
+    } elsif( $cmd eq "playlists" ) {
+	Log3( $hash, 4, "SB_SERVER_ParseCmds($name): playlists" );
+	SB_SERVER_ParseServerPlaylists( $hash, \@args );
+
     } else {
 	# unkown
     }
@@ -741,6 +769,10 @@ sub SB_SERVER_Alive( $ ) {
     my ($hash) = @_;
     my $name = $hash->{NAME};
 
+    my $rccstatus = "on";
+    my $pingstatus = "on";
+    my $nexttime = gettimeofday() + AttrVal( $name, "alivetimer", 120 );
+
     Log3( $hash, 4, "SB_SERVER_Alive($name): called" );
 
     if( AttrVal( $name, "doalivecheck", "false" ) eq "false" ) {
@@ -748,29 +780,50 @@ sub SB_SERVER_Alive( $ ) {
 	return;
     }
 
-    # let's ping the server to figure out if he is reachable
-    # needed for servers that go in hibernate mode
+    # check via the RCC element
+    if( $hash->{RCCNAME} ne "none" ) {
+	# an RCC element has been given as argument
+	$rccstatus = ReadingsVal( $hash->{RCCNAME}, "state", "off" );
+    }
+
+    # check via ping
     my $p = Net::Ping->new( 'tcp' );
     if( $p->ping( $hash->{IP}, 2 ) ) {
-	# host is reachable so go on normally
+	$pingstatus = "on";
+    } else {
+	$pingstatus = "off";
+    }
+    # close our ping mechanism again
+    $p->close( );
+
+    Log3( $hash, 5, "SB_SERVER_Alive($name): " . 
+	  "RCC:" . $rccstatus . " Ping:" . $pingstatus );
+
+    # set the status of the server accordingly
+    if( ( $rccstatus eq "on" ) || ( $pingstatus eq "on" ) ) {
+	# the server is reachable
 	if( ReadingsVal( $name, "power", "on" ) eq "off" ) {
-	    Log3( $hash, 5, "SB_SERVER_Alive($name): ping succesful. " . 
+	    # the first time we see the server being on
+	    Log3( $hash, 5, "SB_SERVER_Alive($name): " . 
 		  "SB-Server is back again." );
 	    # first time we realized server is away
 	    DevIo_OpenDev( $hash, 1, "SB_SERVER_DoInit" );
+
 	    readingsSingleUpdate( $hash, "power", "on", 1 );
-	    readingsSingleUpdate( $hash, "alivecheck", "?", 0 );
-	    # signal that to our clients
-	    SB_SERVER_Broadcast( $hash, "SERVER",  "ON" );
+	    $hash->{ALIVECHECK} = "?";
+	    $hash->{CLICONNECTION} = "off";
+
+	    # quicker update to capture CLI connection faster
+	    $nexttime = gettimeofday() + 10;
 	}
 
-	if( ReadingsVal( $name, "alivecheck", "received" ) eq "waiting" ) {
+	# check the CLI connection (sub-state)
+	if( $hash->{ALIVECHECK} eq "waiting" ) {
 	    # ups, we did not receive any answer in the last minutes
 	    # SB Server potentially dead or shut-down
 	    Log3( $hash, 5, "SB_SERVER_Alive($name): overrun SB-Server dead." );
 
-	    readingsSingleUpdate( $hash, "power", "off", 1 );
-	    readingsSingleUpdate( $hash, "alivecheck", "?", 0 );
+	    $hash->{CLICONNECTION} = "off";
 
 	    # signal that to our clients
 	    SB_SERVER_Broadcast( $hash, "SERVER",  "OFF" );
@@ -781,22 +834,32 @@ sub SB_SERVER_Alive( $ ) {
 	    # remove all timers we created
 	    RemoveInternalTimer( $hash );
 	} else {
+	    if( $hash->{CLICONNECTION} eq "off" ) {
+		# signal that to our clients
+		# to be revisited, should only be sent after CLI established
+		SB_SERVER_Broadcast( $hash, "SERVER",  "ON" );
+	    }
+	    
+	    $hash->{CLICONNECTION} = "on";
+
 	    # just send something to the SB-Server. It will echo it
 	    # if we receive the echo, the server is still alive
 	    DevIo_SimpleWrite( $hash, "fhemalivecheck\n", 0 );
 	    
-	    readingsSingleUpdate( $hash, "alivecheck", "waiting", 0 );
+	    $hash->{ALIVECHECK} = "waiting";
 	}
 
-    } else {
-	# the server is away and therefore presumably in hibernate / suspend
-	Log3( $hash, 5, "SB_SERVER_Alive($name): ping timeout. " . 
-	      "SB-Server in hibernate / suspend?." );
 
-	if( ReadingsVal( $name, "power", "off" ) eq "on" ) {
+    } elsif( ( $rccstatus eq "off" ) && ( $pingstatus eq "off" ) ) {
+	if( ReadingsVal( $name, "power", "on" ) eq "on" ) {
+	    # the first time we realize the server is off
+	    Log3( $hash, 5, "SB_SERVER_Alive($name): " . 
+		  "SB-Server in hibernate / suspend?." );
+
 	    # first time we realized server is away
+	    $hash->{CLICONNECTION} = "off";
 	    readingsSingleUpdate( $hash, "power", "off", 1 );
-	    readingsSingleUpdate( $hash, "alivecheck", "?", 0 );
+	    $hash->{ALIVECHECK} = "?";
 
 	    # signal that to our clients
 	    SB_SERVER_Broadcast( $hash, "SERVER",  "OFF" );
@@ -806,14 +869,14 @@ sub SB_SERVER_Alive( $ ) {
 	    # remove all timers we created
 	    RemoveInternalTimer( $hash );
 	}
-
+    } else {
+	# we shouldn't end up here
+	Log3( $hash, 5, "SB_SERVER_Alive($name): funny server status " . 
+	      "received. Ping=" . $pingstatus . " RCC=" . $rccstatus );
     }
-	
-    # close our ping mechanism again
-    $p->close( );
 
     # do an update of the status
-    InternalTimer( gettimeofday() + AttrVal( $name, "alivetimer", 120 ),
+    InternalTimer( $nexttime, 
 		   "SB_SERVER_Alive", 
 		   $hash, 
 		   0 );
@@ -828,7 +891,7 @@ sub SB_SERVER_Broadcast( $$@ ) {
     my $name = $hash->{NAME};
     my $iodevhash;
 
-    Log3( $hash, 4, "SB_SERVER_Broadcast: called" );
+    Log3( $hash, 4, "SB_SERVER_Broadcast($name): called" );
 
     if( !defined( $bin ) ) {
 	$bin = 0;
@@ -867,8 +930,10 @@ sub SB_SERVER_Broadcast( $$@ ) {
 # ----------------------------------------------------------------------------
 sub SB_SERVER_ParseServerStatus( $$ ) {
     my( $hash, $dataptr ) = @_;
-    
+   
     my $name = $hash->{NAME};
+
+    Log3( $hash, 4, "SB_SERVER_ParseServerStatus($name): called " );
     
     # typically the start index being a number
     if( $dataptr->[ 0 ] =~ /^([0-9])*/ ) {
@@ -936,6 +1001,13 @@ sub SB_SERVER_ParseServerStatus( $$ ) {
 	    next;
 	} elsif( $_ =~ /^(scanning:)([0-9]*)/ ) {
 	    readingsBulkUpdate( $hash, "scanning", $2 );
+	    next;
+	} elsif( $_ =~ /^(rescan:)([0-9]*)/ ) {
+	    if( $2 eq "1" ) {
+		readingsBulkUpdate( $hash, "scanning", "yes" );
+	    } else {
+		readingsBulkUpdate( $hash, "scanning", "no" );
+	    }
 	    next;
 	} elsif( $_ =~ /^(version:)([0-9\.]*)/ ) {
 	    readingsBulkUpdate( $hash, "serverversion", $2 );
@@ -1080,6 +1152,20 @@ sub SB_SERVER_ParseServerStatus( $$ ) {
 	}
     }
 
+    # the list for the sync masters
+    # make all client create e new sync master list
+    SB_SERVER_Broadcast( $hash, "SYNCMASTER",  
+			 "FLUSH dont care", undef );
+
+    # now send the list for the sync masters
+    foreach my $player ( keys %players ) {
+	my $uniqueid = join( "", split( ":", $players{$player}{MAC} ) );
+	SB_SERVER_Broadcast( $hash, "SYNCMASTER",  
+			     "ADD $players{$player}{name} " . 
+			     "$players{$player}{MAC} $uniqueid", undef );
+    }
+
+
     return;
 }
 
@@ -1091,6 +1177,8 @@ sub SB_SERVER_FavoritesParse( $$ ) {
     my ( $hash, $str ) = @_;
     
     my $name = $hash->{NAME};
+
+    Log3( $hash, 5, "SB_SERVER_FavoritesParse($name): called" );
 
     # flush the existing list
     foreach my $titi ( keys %{$favorites{$name}} ) {
@@ -1342,6 +1430,121 @@ sub SB_SERVER_CMDStackPop( $ ) {
     }
     
     return( $res );
+}
+
+
+# ----------------------------------------------------------------------------
+#  parse the list of known Playlists
+# ----------------------------------------------------------------------------
+sub SB_SERVER_ParseServerPlaylists( $$ ) {
+    my( $hash, $dataptr ) = @_;
+    
+    my $name = $hash->{NAME};
+
+    Log3( $hash, 4, "SB_SERVER_ParseServerPlaylists($name): called" );
+
+    my $namebuf = "";
+    my $uniquename = "";
+    my $idbuf = -1;
+    
+    # typically the start index being a number
+    if( $dataptr->[ 0 ] =~ /^([0-9])*/ ) {
+	shift( @{$dataptr} );
+    } else {
+	Log3( $hash, 5, "SB_SERVER_ParseServerPlaylists($name): entry is " .
+	      "not the start number" );
+	return;
+    }
+
+    # typically the max index being a number
+    if( $dataptr->[ 0 ] =~ /^([0-9])*/ ) {
+	shift( @{$dataptr} );
+    } else {
+	Log3( $hash, 5, "SB_SERVER_ParseServerPlaylists($name): entry is " .
+	      "not the end number" );
+	return;
+    }
+
+    my $datastr = join( " ", @{$dataptr} );
+
+    Log3( $hash, 5, "SB_SERVER_ParseServerPlaylists($name): data to parse: " .
+	  $datastr );
+
+    # make all client create e new favorites list
+    SB_SERVER_Broadcast( $hash, "PLAYLISTS",  
+			 "FLUSH dont care", undef );
+
+    my @data1 = split( " ", $datastr );
+
+    foreach( @data1 ) {
+	if( $_ =~ /^(id:)(.*)/ ) {
+	    Log3( $hash, 5, "SB_SERVER_ParseServerPlaylists($name): " . 
+		  "id:$idbuf name:$namebuf " );
+	    if( $idbuf != -1 ) {
+		$uniquename = SB_SERVER_FavoritesName2UID( $namebuf );
+		SB_SERVER_Broadcast( $hash, "PLAYLISTS",  
+				     "ADD $namebuf $idbuf $uniquename", undef );
+	    }
+	    $idbuf = $2;
+	    $namebuf = "";
+	    $uniquename = "";
+	    next;
+	} elsif( $_ =~ /^(playlist:)(.*)/ ) {
+	    $namebuf = $2;
+	    next;
+	} elsif( $_ =~ /^(count:)([0-9]*)/ ) {
+	    # the last entry of the return
+	    Log3( $hash, 5, "SB_SERVER_ParseServerPlaylists($name): " . 
+		  "id:$idbuf name:$namebuf " );
+	    if( $idbuf != -1 ) {
+		$uniquename = SB_SERVER_FavoritesName2UID( $namebuf );
+		SB_SERVER_Broadcast( $hash, "PLAYLISTS",  
+				     "ADD $namebuf $idbuf $uniquename", undef );
+	    }
+	    
+	} else {
+	    $namebuf .= "_" . $_;
+	    next;
+	}
+    }
+
+    return;
+}
+
+
+# ----------------------------------------------------------------------------
+#  the Notify function
+# ----------------------------------------------------------------------------
+sub SB_SERVER_Notify( $$ ) {
+  my ( $hash, $dev_hash ) = @_;
+  my $name = $hash->{NAME}; # own name / hash
+  my $devName = $dev_hash->{NAME}; # Device that created the events
+
+  Log3( $hash, 4, "SB_SERVER_Notify($name): called" . 
+      "Own:" . $name . " Device:" . $devName );
+  
+  if( $devName eq $hash->{RCCNAME} ) {
+      if( ReadingsVal( $hash->{RCCNAME}, "state", "off" ) eq "off" ) {
+	  RemoveInternalTimer( $hash );
+	  InternalTimer( gettimeofday() + 10, 
+			 "SB_SERVER_Alive", 
+			 $hash, 
+			 0 );
+      } elsif( ReadingsVal( $hash->{RCCNAME}, "state", "off" ) eq "on" ) {
+	  RemoveInternalTimer( $hash );
+	  # do an update of the status, but SB CLI must come up
+	  InternalTimer( gettimeofday() + 20, 
+			 "SB_SERVER_Alive", 
+			 $hash, 
+			 0 );
+      } else {
+	  return( undef );
+      }
+      return( "" );
+  } else {
+      return( undef );
+  }
+
 }
 
 

@@ -40,7 +40,7 @@ sub readingsGroup_Initialize($)
   #$hash->{SetFn}    = "readingsGroup_Set";
   $hash->{GetFn}    = "readingsGroup_Get";
   $hash->{AttrFn}   = "readingsGroup_Attr";
-  $hash->{AttrList} = "disable:1,2,3 nameIcon valueIcon mapping separator style nameStyle valueColumns valueStyle valueFormat commands timestampStyle noheading:1 nolinks:1 nonames:1 notime:1 nostate:1 alwaysTrigger:1 sortDevices:1";
+  $hash->{AttrList} = "disable:1,2,3 cacheHtml:1 nameIcon valueIcon mapping separator style nameStyle valueColumn valueColumns valueStyle valueFormat commands timestampStyle noheading:1 nolinks:1 nonames:1 notime:1 nostate:1 alwaysTrigger:1 sortDevices:1";
 
   $hash->{FW_detailFn}  = "readingsGroup_detailFn";
   $hash->{FW_summaryFn}  = "readingsGroup_detailFn";
@@ -54,7 +54,9 @@ readingsGroup_updateDevices($)
   my ($hash) = @_;
 
   my %list;
+  my %list2;
   my @devices;
+  my @devices2;
 
   my @params = split(" ", $hash->{DEF});
   while (@params) {
@@ -129,6 +131,54 @@ readingsGroup_updateDevices($)
     }
   }
 
+  foreach my $device (@devices) {
+    my $regex = $device->[1];
+    my @list = (undef);
+    @list = split(",",$regex) if( $regex );
+    my $first = 1;
+    my $multi = @list;
+    for( my $i = 0; $i <= $#list; ++$i ) {
+      my $regex = $list[$i];
+      while ($regex && $regex =~ m/^</ && $regex !~ m/>$/ && defined($list[++$i]) ) {
+        $regex .= ",". $list[$i];
+      }
+
+      next if( !$regex );
+
+      if( $regex =~ m/^<.*>$/ ) {
+        # handle <{...}@reading>@device
+      } elsif( $regex =~ m/(.*)@(.*)/ ) {
+        $regex = $1;
+
+        next if( $regex && $regex =~ m/^\+(.*)/ );
+        next if( $regex && $regex =~ m/^\?(.*)/ );
+
+        my $name = $2;
+        if( $name =~ m/^{(.*)}$/ ) {
+          my $DEVICE = $device->[0];
+          $name = eval $name;
+        }
+
+        next if( !$name );
+        next if( !defined($defs{$name}) );
+
+        $list2{$name} = 1;
+
+        @devices2 = @devices if( !@devices2 );
+
+        my $found = 0;
+        foreach my $device (@devices2) {
+
+          $found = 1 if( $device->[0] eq $name && $device->[1] eq $regex );
+          last if $found;
+        }
+        next if $found;
+
+        push @devices2, [$name,$regex];
+      }
+    }
+  }
+
   if( AttrVal( $hash->{NAME}, "sortDevices", 0 ) == 1 ) {
     @devices = sort { my $aa = @{$a}[0]; my $bb =  @{$b}[0];
                       $aa = "#" if( $aa =~ m/^</ );
@@ -139,8 +189,12 @@ readingsGroup_updateDevices($)
 
   $hash->{CONTENT} = \%list;
   $hash->{DEVICES} = \@devices;
+  $hash->{CONTENT2} = \%list2;
+  delete $hash->{DEVICES2};
+  $hash->{DEVICES2} = \@devices2 if( @devices2 );
 
   $hash->{fhem}->{last_update} = gettimeofday();
+  $hash->{fhem}->{lastDefChange} = $lastDefChange;
 }
 
 sub readingsGroup_Define($$)
@@ -281,8 +335,13 @@ readingsGroup_2html($)
 
   return undef if( !$hash );
 
+  #if( $hash->{fhem}->{cached} && $hash->{fhem}->{lastDefChange} && $hash->{fhem}->{lastDefChange} != $lastDefChange ) {
+  #  return $hash->{fhem}->{cached};
+  #}
+
   if( $hash->{DEF} =~ m/=/ ) {
     if( !$hash->{fhem}->{last_update}
+        || $hash->{fhem}->{lastDefChange} != $lastDefChange
         || gettimeofday() - $hash->{fhem}->{last_update} > 600 ) {
       readingsGroup_updateDevices($hash);
     }
@@ -297,7 +356,7 @@ readingsGroup_2html($)
 
   my $disable = AttrVal($d,"disable", 0);
   if( AttrVal($d,"disable", 0) > 2 ) {
-    return undef;
+    return "";
   } elsif( AttrVal($d,"disable", 0) > 1 ) {
     my $ret;
     $ret .= "<table>";
@@ -332,11 +391,18 @@ readingsGroup_2html($)
     $value_format = $vf if( $vf );
   }
 
+  my $value_column = AttrVal( $d, "valueColumn", "" );
+  if( $value_column =~ m/^{.*}$/ ) {
+    my $vc = eval $value_column;
+    $value_column = $vc if( $vc );
+  }
+
   my $value_columns = AttrVal( $d, "valueColumns", "" );
   if( $value_columns =~ m/^{.*}$/ ) {
     my $vc = eval $value_columns;
     $value_columns = $vc if( $vc );
   }
+
 
   my $mapping = AttrVal( $d, "mapping", "");
   $mapping = eval $mapping if( $mapping =~ m/^{.*}$/ );
@@ -374,11 +440,13 @@ readingsGroup_2html($)
     }
     next if( !$h );
     my $name = $h->{NAME};
+    my $name2 = $h->{NAME};
 
     my @list = (undef);
     @list = split(",",$regex) if( $regex );
     my $first = 1;
     my $multi = @list;
+    my $column = 1;
     #foreach my $regex (@list) {
     for( my $i = 0; $i <= $#list; ++$i ) {
       my $regex = $list[$i];
@@ -430,20 +498,20 @@ readingsGroup_2html($)
           $row++;
 
           if( $h != $hash ) {
-            my $a = AttrVal($name, "alias", $name);
-            my $m = "$a$separator";
+            my $a = AttrVal($name2, "alias", $name2);
+            my $m = "$a";
             $m = $a if( $multi != 1 );
             $m = "" if( !$show_names );
-            my $room = AttrVal($name, "room", "");
-            my $group = AttrVal($name, "group", "");
-            my $txt = lookup($mapping,$name,$a,"","",$room,$group,$row,$m);
+            my $room = AttrVal($name2, "room", "");
+            my $group = AttrVal($name2, "group", "");
+            my $txt = lookup($mapping,$name2,$a,"","",$room,$group,$row,$m);
 
             $ret .= "<td><div $name_style class=\"dname\">$txt</div></td>" if( $show_names );
           }
         } else {
           my $cmd = lookup2($commands,$name,$d,$txt);
 
-          if( $cmd =~ m/^([\w-]*):(\S*)?$/ ) {
+          if( $cmd && $cmd =~ m/^([\w-]*):(\S*)?$/ ) {
             my $set = $1;
             my $values = $2;
 
@@ -487,13 +555,28 @@ readingsGroup_2html($)
         $ret .= "<td><div $name_style $inform_id>$txt</div></td>";
         $first = 0;
         next;
-      } elsif( $regex && $regex =~ m/^\+(.*)/ ) {
-        $regex = $1;
-      } elsif( $regex && $regex =~ m/^\?(.*)/ ) {
-        $regex = $1;
-        $h = $attr{$name};
       } else {
-        $h = $h->{READINGS};
+        if( $regex && $regex =~ m/(.*)@(.*)/ ) {
+          $regex = $1;
+          $name = $2;
+          if( $name =~ m/^{(.*)}$/ ) {
+            my $DEVICE = $device->[0];
+            $name = eval $name;
+          }
+          next if( !$name );
+
+          $h = $defs{$name};
+
+          next if( !$h );
+        }
+        if( $regex && $regex =~ m/^\+(.*)/ ) {
+          $regex = $1;
+        } elsif( $regex && $regex =~ m/^\?(.*)/ ) {
+          $regex = $1;
+          $h = $attr{$name};
+        } else {
+          $h = $h->{READINGS};
+        }
       }
 
       foreach my $n (sort keys %{$h}) {
@@ -531,14 +614,15 @@ readingsGroup_2html($)
           $v = $value_format;
         }
 
+        my $value_column = lookup2($value_column,$name,$n,undef);
         my $value_columns = lookup2($value_columns,$name,$n,$v);
 
-        my $a = AttrVal($name, "alias", $name);
+        my $a = AttrVal($name2, "alias", $name2);
         my $m = "$a$separator$n";
         $m = $a if( $multi != 1 );
-        my $room = AttrVal($name, "room", "");
-        my $group = AttrVal($name, "group", "");
-        my $txt = lookup($mapping,$name,$a,($multi!=1?"":$n),$v,$room,$group,$row,$m);
+        my $room = AttrVal($name2, "room", "");
+        my $group = AttrVal($name2, "group", "");
+        my $txt = lookup($mapping,$name2,$a,($multi!=1?"":$n),$v,$room,$group,$row,$m);
 
         if( $nameIcon ) {
           if( my $icon = lookup($nameIcon,$name,$a,$n,$v,$room,$group,$row,"") ) {
@@ -566,7 +650,7 @@ readingsGroup_2html($)
         if( !$devStateIcon ) {
           $cmd = lookup2($commands,$name,$n,$v) if( !$devStateIcon );
 
-          if( $cmd =~ m/^([\w-]*):(\S*)?$/ ) {
+          if( $cmd && $cmd =~ m/^([\w-]*):(\S*)?$/ ) {
             my $set = $1;
             my $values = $2;
 
@@ -614,11 +698,20 @@ readingsGroup_2html($)
         $v = "<div $value_style>$v</div>" if( $value_style && !$devStateIcon );
 
         $ret .= "<td><div $name_style class=\"dname\">$txt</div></td>" if( $show_names && ($first || $multi == 1) );
+
+        if( $value_column && $multi ) {
+          while ($column < $value_column ) {
+            $ret .= "<td></td>";
+            ++$column;
+          }
+        }
+
         $ret .= "<td informId=\"$d-$name.$n\">$devStateIcon</td>" if( $devStateIcon );
         $ret .= "<td $value_columns><div informId=\"$d-$name.$n\">$v</div></td>" if( !$devStateIcon );
         $ret .= "<td><div $timestamp_style informId=\"$d-$name.$n-ts\">$t</div></td>" if( $show_time && $t );
 
         $first = 0;
+        ++$column;
       }
     }
   }
@@ -626,6 +719,8 @@ readingsGroup_2html($)
   $ret .= "<td colspan=\"99\"><div style=\"color:#ff8888;text-align:center\">updates disabled</div></td></tr>" if( $disable > 0 );
   $ret .= "</table></td></tr>";
   $ret .= "</table>";
+
+  #$hash->{fhem}->{cached} = $ret;
 
   return $ret;
 }
@@ -662,6 +757,7 @@ readingsGroup_Notify($$)
   #return if($dev->{NAME} eq $name);
 
   my $devices = $hash->{DEVICES};
+  $devices = $hash->{DEVICES2} if( $hash->{DEVICES2} );
 
   my $max = int(@{$dev->{CHANGED}});
   for (my $i = 0; $i < $max; $i++) {
@@ -674,7 +770,7 @@ readingsGroup_Notify($$)
 
         $hash->{DEF} =~ s/(\s*)$old((:\S+)?\s*)/$1$new$2/g;
       }
-      readingsGroup_updateDevices($hash);
+      #readingsGroup_updateDevices($hash);
     } elsif( $dev->{NAME} eq "global" && $s =~ m/^DELETED ([^ ]*)$/) {
       my ($name) = ($1);
 
@@ -684,13 +780,13 @@ readingsGroup_Notify($$)
         $hash->{DEF} =~ s/^ //;
         $hash->{DEF} =~ s/ $//;
       }
-      readingsGroup_updateDevices($hash);
+      #readingsGroup_updateDevices($hash);
     } elsif( $dev->{NAME} eq "global" && $s =~ m/^DEFINED ([^ ]*)$/) {
-      readingsGroup_updateDevices($hash);
+      #readingsGroup_updateDevices($hash);
     } else {
       next if(AttrVal($name,"disable", undef));
 
-      next if (!$hash->{CONTENT}->{$dev->{NAME}});
+      next if (!$hash->{CONTENT}->{$dev->{NAME}} && !$hash->{CONTENT2}->{$dev->{NAME}});
 
       if( $hash->{alwaysTrigger} ) {
       } elsif( !defined($hash->{mayBeVisible}) ) {
@@ -754,6 +850,7 @@ readingsGroup_Notify($$)
           next if( $reading eq "state" && !$show_state && (!defined($regex) || $regex ne "state") );
           next if( $regex && $regex =~ m/^\+/ );
           next if( $regex && $regex =~ m/^\?/ );
+
           if( $regex && $regex =~ m/^<(.*)>$/ ) {
             my $txt = $1;
             my $readings;
@@ -783,8 +880,7 @@ readingsGroup_Notify($$)
                 ($txt,undef) = readingsGroup_makeLink($txt,undef,$cmd);
               }
 
-              DoTrigger( "$name", "$n.i$item.item: $txt" );
-              #CommandTrigger( "", "$name $n.i$item.item: $txt" );
+              DoTrigger( $name, "$n.i$item.item: $txt" );
             }
 
             next;
@@ -828,14 +924,13 @@ readingsGroup_Notify($$)
             if( $devStateIcon ) {
               (undef,$devStateIcon) = readingsGroup_makeLink(undef,$devStateIcon,$cmd);
 
-              DoTrigger( "$name", "$n.$reading: $devStateIcon" );
-              #CommandTrigger( "", "$name $n.$reading: $devStateIcon" );
+              DoTrigger( $name, "$n.$reading: $devStateIcon" );
               next;
             }
           }
 
           $cmd = lookup2($commands,$n,$reading,$value);
-          if( $cmd =~ m/^(\w.*):(\S.*)?$/ ) {
+          if( $cmd && $cmd =~ m/^(\w.*):(\S.*)?$/ ) {
             next;
           }
 
@@ -843,8 +938,7 @@ readingsGroup_Notify($$)
 
           $value = "<div $value_style>$value</div>" if( $value_style );
 
-          DoTrigger( "$name", "$n.$reading: $value" );
-          #CommandTrigger( "", "$name $n.$reading: $value" );
+          DoTrigger( $name, "$n.$reading: $value" );
         }
       }
     }
@@ -899,7 +993,6 @@ readingsGroup_Attr($$$)
 
     if( $cmd eq "set" ) {
       $hash->{alwaysTrigger} = $attrVal;
-      delete( $hash->{helper}->{myDisplay} ) if( $hash->{alwaysTrigger} );
     } else {
       delete $hash->{alwaysTrigger};
     }
@@ -950,6 +1043,8 @@ readingsGroup_Attr($$$)
       <li>If regex is a comma separatet list the reading values will be shown on a single line.</li>
       <li>If regex starts with a '+' it will be matched against the internal values of the device instead of the readings.</li>
       <li>If regex starts with a '?' it will be matched against the attributes of the device instead of the readings.</li>
+      <li>regex can be of the form &lt;regex&gt;@device to use readings from a different device.</li>
+      <li>regex can be of the form &lt;regex&gt;@{perl} to use readings from a different device.</li>
       <li>regex can be of the form &lt;STRING&gt; or &lt;{perl}[@readings]&gt; where STRING or the string returned by perl is
           inserted as a reading or:
           <ul><li>the item will be skipped if STRING is undef</li>
@@ -1056,6 +1151,9 @@ readingsGroup_Attr($$$)
       <li>valueStyle<br>
         Specify an HTML style for the reading values, e.g.:<br>
           <code>attr temperatures valueStyle style="text-align:right"</code></li>
+      <li>valueColumn<br>
+        Specify the minimum column in which a reading should appear. <br>
+          <code>attr temperatures valueColumn { temperature => 2 }</code></li>
       <li>valueColumns<br>
         Specify an HTML colspan for the reading values, e.g.:<br>
           <code>attr wzReceiverRG valueColumns { eventdescription => 'colspan="4"' }</code></li>

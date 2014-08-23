@@ -31,7 +31,18 @@ use HttpUtils;
 
 package main;
 
-
+#
+# Note:
+#
+# There might be issues when turning to daylight saving time and back that
+# need further investigation. For reference please see
+# http://forum.fhem.de/index.php?topic=18707.new#new
+# http://forum.fhem.de/index.php?topic=15827.new;topicseen#new
+#
+# Potential future extensions: add support for EXDATE
+# http://forum.fhem.de/index.php?topic=24485.new#new
+#
+#
 #####################################
 #
 # ICal
@@ -97,6 +108,7 @@ sub parseSub {
     $line =~ s/[\x0D]//; # chomp will not remove the CR
     #main::Debug "$ln: $line";
     $ln++;
+    next if($line eq ""); # remove empty line
     last if($line =~ m/^END:.*$/);
     if($line =~ m/^BEGIN:(.*)$/) {
       my $entry= ICal::Entry->new($1);
@@ -292,8 +304,14 @@ sub d {
   } elsif($dw =~ m/(\d+)W$/) {
     $t+= 604800*$1; # weeks
   }
-  if($dt =~ m/^(\d+)H(\d+)M(\d+)S$/) {
-    $t+= $1*3600+$2*60+$3;
+  if($dt =~ m/(\d+)H/) {
+    $t+= $1*3600;
+  }
+  if($dt =~ m/(\d+)M/) {
+    $t+= $1*60;
+  }
+  if($dt =~ m/(\d+)S/) {
+    $t+= $1;
   }
   $t*= $sign;
   #main::Debug "sign: $sign  dw: $dw  dt: $dt   t= $t";
@@ -335,7 +353,14 @@ sub fromVEvent {
   } elsif(defined($vevent->value("DURATION"))) {
     $self->{end}= $self->{start} + d($vevent->value("DURATION"));
   }
-  $self->{lastModified}= tm($vevent->value("LAST-MODIFIED"));
+  # we take the creation time if the last modification time is unavailable
+  if(defined($vevent->value("LAST-MODIFIED"))) {
+    $self->{lastModified}= tm($vevent->value("LAST-MODIFIED"));
+    #main::Debug "LAST-MOD: $self->{lastModified} ";
+  } else {
+    $self->{lastModified}= tm($vevent->value("DTSTAMP"));
+    #main::Debug "DTSTAMP: $self->{lastModified} ";
+  }  
   $self->{summary}= $vevent->value("SUMMARY");
   $self->{location}= $vevent->value("LOCATION");
 

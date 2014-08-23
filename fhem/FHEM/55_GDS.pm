@@ -6,7 +6,6 @@
 #	An FHEM Perl module to retrieve data from "Deutscher Wetterdienst"
 #
 #	Copyright: betateilchen ®
-#	e-mail: fhem.development@betateilchen.de
 #
 #	This file is part of fhem.
 #
@@ -1086,10 +1085,10 @@ sub createIndexFile($){
 
 	if($name){
 		my $text =	"<html><head></head><body>".
-					"<a href=\"/fhem/".$name."/".$name."_conditionsmap.jpg\" target=\"blank\">Aktuelle Wetterkarte: Wetterlage</a><br/>".
-					"<a href=\"/fhem/".$name."/".$name."_forecastsmap.jpg\" target=\"blank\">Aktuelle Wetterkarte: Vorhersage</a><br/>".
-					"<a href=\"/fhem/".$name."/".$name."_warningsmap.jpg\" target=\"blank\">Aktuelle Wetterkarte: Warnungen</a><br/>".
-					"<a href=\"/fhem/".$name."/".$name."_radarmap.jpg\" target=\"blank\">Aktuelle Radarkarte</a><br/>".
+					"<a href=\"./".$name."/".$name."_conditionsmap.jpg\" target=\"blank\">Aktuelle Wetterkarte: Wetterlage</a><br/>".
+					"<a href=\"./".$name."/".$name."_forecastsmap.jpg\" target=\"blank\">Aktuelle Wetterkarte: Vorhersage</a><br/>".
+					"<a href=\"./".$name."/".$name."_warningsmap.jpg\" target=\"blank\">Aktuelle Wetterkarte: Warnungen</a><br/>".
+					"<a href=\"./".$name."/".$name."_radarmap.jpg\" target=\"blank\">Aktuelle Radarkarte</a><br/>".
 					"</body></html>";
 		open	(DATEI, ">".$tempDir.$name.".html") or die $!;
 		print	 DATEI $text;
@@ -1428,7 +1427,7 @@ sub initDropdownLists($){
 		<br/>
 		<code>get &lt;name&gt; alerts &lt;region&gt;</code>
 		<br/><br/>
-		<ul>Retrieve alert message for selected region from DWD server</ul>
+		<ul>Retrieve alert message for selected region from previously read alert file (see rereadcfg)</ul>
 		<br/>
 
 		<code>get &lt;name&gt; conditions &lt;stationName&gt;</code>

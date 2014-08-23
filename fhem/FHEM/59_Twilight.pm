@@ -130,8 +130,8 @@ sub Twilight_Define($$)
      return "Argument Longitude is not a valid number";
   }
 
-  my $weather   = "";
-  my $indoor_horizon="4";
+  my $weather         = 0;
+  my $indoor_horizon  ="4";
   if(int(@a)>5) { $weather=$a[5] }
   if(int(@a)>4) { if ($a[4] =~ /^[\+-]*[0-9]*\.*[0-9]*$/ && $a[4] !~ /^[\. ]*$/ ) {
      $indoor_horizon  = $a[4];
@@ -146,11 +146,12 @@ sub Twilight_Define($$)
   $hash->{LATITUDE}       = $latitude;
   $hash->{LONGITUDE}      = $longitude;
   $hash->{WEATHER}        = $weather;
-  $hash->{SUNPOS_OFFSET}  = 1;
+  $hash->{SUNPOS_OFFSET}  = 5*60;
  
-  Twilight_sunposTimerSet($hash);
-  myRemoveInternalTimer("Midnight", $hash);
-  myInternalTimer      ("Midnight", time()+1, "Twilight_Midnight", $hash, 0);
+  my $mHash = { HASH=>$hash };
+  Twilight_sunpos($mHash);  
+  Twilight_Midnight($mHash);
+  
   return undef;
 }
 ################################################################################
@@ -231,7 +232,7 @@ sub Twilight_TwilightTimes($$)
     ($hash->{TW}{$sr}{TIME}, $hash->{TW}{$ss}{TIME})=
        Twilight_calc($latitude, $longitude, $deg, $declination, $timezone, $midseconds, $timediff);
 
-    Log3 $hash, 3, "$hash->{TW}{$sr}{NAME},  $hash->{TW}{$ss}{NAME} are not defined(nan)"      if ($hash->{TW}{$sr}{TIME} eq "nan");
+    Log3 $hash, 4, "hint: $hash->{TW}{$sr}{NAME},  $hash->{TW}{$ss}{NAME} are not defined(nan)"      if ($hash->{TW}{$sr}{TIME} eq "nan");
     $hash->{TW}{$sr}{TIME} += 0.01*$idx                                                if ($hash->{TW}{$sr}{TIME} ne "nan");
     $hash->{TW}{$ss}{TIME} -= 0.01*$idx                                                if ($hash->{TW}{$ss}{TIME} ne "nan");
 
@@ -343,7 +344,6 @@ sub Twilight_sunposTimerSet($) {
   myRemoveInternalTimer       ("sunpos", $hash);
   myInternalTimer             ("sunpos", time()+$hash->{SUNPOS_OFFSET},  "Twilight_sunpos", $hash, 0);
 
-  $hash->{SUNPOS_OFFSET} = 5*60;
 }
 ################################################################################
 sub Twilight_fireEvent($)
@@ -388,7 +388,7 @@ sub Twilight_calc($$$$$$$)
 {
   my ($latitude, $longitude, $horizon, $declination, $timezone, $midseconds, $timediff) = @_;
 
-  my $bogRad = 360/2/pi;            # ~ 57.29578°
+  my $bogRad = 360/2/pi;         # ~ 57.29578°
   #                              $s1--|   $s2-------------------|   $s3---------------------|
   #   Zeitdifferenz = 12*arccos((sin(h) - sin(B)*sin(Deklination)) / (cos(B)*cos(Deklination)))/Pi;
   my $s1 = sin($horizon /$bogRad);
@@ -412,6 +412,13 @@ sub Twilight_calc($$$$$$$)
 sub Twilight_getWeatherHorizon($)
 {
   my $hash=shift; # 0
+  
+  my $location=$hash->{WEATHER};
+  if ($location == 0)  {
+     $hash->{WEATHER_HORIZON}="0";
+     $hash->{CONDITION}="0";  
+     return 1;
+  } 
 
   my $mod = "[".$hash->{NAME} ."] ";
   my @a_current = (25,25,25,25,20,10,10,10,10,10,
@@ -421,7 +428,6 @@ sub Twilight_getWeatherHorizon($)
                     9,15, 8, 5,12, 6, 8, 8);
 
   # condition codes are described in FHEM wiki and in the documentation of the yahoo weather API
-  my $location=$hash->{WEATHER};
   my $url = "http://weather.yahooapis.com/forecastrss?w=".$location."&u=c";
   my $xml = GetFileFromURL($url, 3, undef, 1);
 
@@ -451,8 +457,8 @@ sub Twilight_getWeatherHorizon($)
     .$xml
     ."\n=======";
 
-  $hash->{WEATHER_HORIZON}="0";
-  $hash->{CONDITION}="-1";
+  $hash->{WEATHER_HORIZON} = "0";
+  $hash->{CONDITION}       = "-1";
 }
 ################################################################################
 sub Twilight_sunpos($)

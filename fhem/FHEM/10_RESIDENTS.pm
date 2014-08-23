@@ -28,7 +28,7 @@
 # Major Version History:
 # - 1.1.0 - 2014-04-07
 # -- new readings in computer readable format (*_cr)
-# -- format of readings durTimer readings changes from minutes to HH:MM:ss
+# -- format of readings durTimer readings changed from minutes to HH:MM:ss
 #
 # - 1.0.0 - 2014-02-08
 # -- First release
@@ -1111,7 +1111,7 @@ sub RESIDENTS_Datetime2Timestamp($) {
         <code>define &lt;rgr_ResidentsName&gt; RESIDENTS</code><br>
         <br>
         Stellt ein spezielles Dummy-Device bereit, um eine Gruppe von Personen zu repräsentieren, die zusammen wohnen.<br>
-        Es kombiniert dabei logisch die individuellen Stati von <a href="#ROOMMATE">ROOMMATE</a> und <a href="#GUEST">GUEST</a> Devices und erlaubt den Status für alle Mitglieder zeitgleich zu ändern. Basierend auf dem aktuelle Status und anderen Readings können andere Aktionen innerhalb von FHEM angestoßen werden.<br>
+        Es kombiniert dabei logisch die individuellen Status von <a href="#ROOMMATE">ROOMMATE</a> und <a href="#GUEST">GUEST</a> Devices und erlaubt den Status für alle Mitglieder zeitgleich zu ändern. Basierend auf dem aktuellen Status und anderen Readings können andere Aktionen innerhalb von FHEM angestoßen werden.<br>
         <br>
         Beispiele:<br>
         <div style="margin-left: 2em">
@@ -1130,7 +1130,7 @@ sub RESIDENTS_Datetime2Timestamp($) {
             <b>addGuest</b> &nbsp;&nbsp;-&nbsp;&nbsp; erstellt ein neues GUEST Device und fügt es der aktuellen RESIDENTS Gruppe hinzu. Einfach den Platzhalternamen eingeben und das wars.
           </li>
           <li>
-            <b>addRoommate</b> &nbsp;&nbsp;-&nbsp;&nbsp; erstellt ein neues GUEST Device und fügt es der aktuellen RESIDENTS Gruppe hinzu. Einfach den Vornamen eingeben und das wars.
+            <b>addRoommate</b> &nbsp;&nbsp;-&nbsp;&nbsp; erstellt ein neues ROOMMATE Device und fügt es der aktuellen RESIDENTS Gruppe hinzu. Einfach den Vornamen eingeben und das wars.
           </li>
           <li>
             <b>removeGuest</b> &nbsp;&nbsp;-&nbsp;&nbsp; zeigt alle Mitglieder vom Typ GUEST an und ermöglicht ein einfaches löschen des dazugehörigen Dummy Devices.
@@ -1145,10 +1145,10 @@ sub RESIDENTS_Datetime2Timestamp($) {
       </div><br>
       <br>
       <div style="margin-left: 2em">
-        <u>Mögliche Stati und ihre Bedeutung</u><br>
+        <u>Mögliche Status und ihre Bedeutung</u><br>
         <br>
         <div style="margin-left: 2em">
-          Dieses Modul unterscheidet 7 verschiedene Stati:<br>
+          Dieses Modul unterscheidet 7 verschiedene Status:<br>
           <br>
           <ul>
             <li>
@@ -1182,10 +1182,10 @@ sub RESIDENTS_Datetime2Timestamp($) {
       <div style="margin-left: 2em">
         <ul>
           <li>
-            <b>rgr_showAllStates</b> - die Stati 'asleep' und 'awoken' sind normalerweise nicht immer sichtbar, um einen einfachen Zubettgeh-Prozess über das devStateIcon Attribut zu ermöglichen; Standard ist 0
+            <b>rgr_showAllStates</b> - die Status 'asleep' und 'awoken' sind normalerweise nicht immer sichtbar, um einen einfachen Zubettgeh-Prozess über das devStateIcon Attribut zu ermöglichen; Standard ist 0
           </li>
           <li>
-            <b>rgr_states</b> - Liste aller in FHEMWEB angezeigter Stati; Eintrage nur mit Komma trennen und KEINE Leerzeichen benutzen; nicht unterstützte Stati führen zu Fehlern
+            <b>rgr_states</b> - Liste aller in FHEMWEB angezeigter Status; Eintrage nur mit Komma trennen und KEINE Leerzeichen benutzen; nicht unterstützte Status führen zu Fehlern
           </li>
         </ul>
       </div><br>
@@ -1234,7 +1234,7 @@ sub RESIDENTS_Datetime2Timestamp($) {
             <b>lastState</b> - der vorherige Status
           </li>
           <li>
-            <b>presence</b> - gibt den Zuhause Status in Abhängigkeit des Readings 'state' wieder (kann 'present' oder 'absent' sein)
+            <b>presence</b> - gibt den zu Hause Status in Abhängigkeit des Readings 'state' wieder (kann 'present' oder 'absent' sein)
           </li>
           <li>
             <b>residentsAbsent</b> - Anzahl der Bewohner mit Status 'absent'
@@ -1264,7 +1264,7 @@ sub RESIDENTS_Datetime2Timestamp($) {
             <b>residentsTotalAbsent</b> - Summe aller aktiven Bewohner, die unterwegs sind
           </li>
           <li>
-            <b>residentsTotalPresent</b> - Summe aller aktiven Bewohner, die momentan Zuhause sind
+            <b>residentsTotalPresent</b> - Summe aller aktiven Bewohner, die momentan zu Hause sind
           </li>
           <li>
             <b>residentsTotalWayhome</b> - Summe aller aktiven Bewohner, die momentan auf dem Weg zurück nach Hause sind

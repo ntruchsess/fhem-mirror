@@ -26,7 +26,9 @@ my %fbdect_payload = (
   20 => { n=>"power",       fmt=>'sprintf("%0.2f W", hex($pyld)/100)' },
   21 => { n=>"energy",      fmt=>'sprintf("%0.0f Wh",hex($pyld))' },
   22 => { n=>"powerFactor", fmt=>'sprintf("%0.3f", hex($pyld))' },
-  23 => { n=>"temperature", fmt=>'sprintf("%0.1f C", hex($pyld)/10)' },
+  23 => { n=>"temperature", fmt=>'sprintf("%0.1f C (%s)",'.
+        'hex(substr($pyld,0,8))/10,'.
+        '(hex(substr($pyld,8,8))+0)?"corrected":"measured")' },
   35 => { n=>"options",     fmt=>'FBDECT_decodeOptions($pyld)' },
   37 => { n=>"control",     fmt=>'FBDECT_decodeControl($pyld)' },
 );
@@ -131,6 +133,8 @@ FBDECT_Get($@)
     my $state = "inactive" if($answ[0] =~ m/ inactive,/);
     while($d) {
       my ($ptyp, $plen, $pyld) = FBDECT_decodePayload($d);
+      Log3 $hash, 4, "Payload: $d -> $ptyp: $pyld";
+      last if($ptyp eq "");
       if($ptyp eq "state" && 
          ReadingsVal($hash->{NAME}, $ptyp, "") ne $pyld) {
         readingsSingleUpdate($hash, $ptyp, ($state ? $state : $pyld), 1);
@@ -171,6 +175,8 @@ FBDECT_Parse($$@)
     my $d = substr($msg, 32);
     while($d) {
       my ($ptyp, $plen, $pyld) = FBDECT_decodePayload($d);
+      Log3 $hash, 4, "Payload: $d -> $ptyp: $pyld";
+      last if($ptyp eq "");
       readingsBulkUpdate($hash, $ptyp, $pyld);
       $d = substr($d, 16+$plen*2);
     }
@@ -184,20 +190,25 @@ FBDECT_Parse($$@)
     } else {
       my $d = pop @answ;
       while($d) {
+        if(length($d) <= 16) {
+          push @answ, "FBDECT_DECODE_ERROR:short payload $d";
+          last;
+        }
         my ($ptyp, $plen, $pyld) = FBDECT_decodePayload($d);
-        last if(!$plen);
+        last if($ptyp eq "");
         push @answ, "  $ptyp: $pyld";
         $d = substr($d, 16+$plen*2);
       }
+      Log 4, "FBDECT PARSED: ".join(" / ", @answ);
       # Ignore the rest, is too confusing.
       @answ = grep /state:/, @answ;
-      (undef, $state) = split(": ", $answ[0], 2);
+      (undef, $state) = split(": ", $answ[0], 2) if(@answ > 0);
     }
-    readingsBulkUpdate($hash, "state", $state);
+    readingsBulkUpdate($hash, "state", $state) if($state);
   }
 
   readingsEndUpdate($hash, 1);
-
+  Log 5, "FBDECT_Parse for device $hash->{NAME} done";
   return $hash->{NAME};
 }
 
@@ -278,9 +289,19 @@ sub
 FBDECT_decodePayload($)
 {
   my ($d) = @_;
+  if(length($d) < 12) {
+    Log 4, "FBDECT ignoring payload: data too short";
+    return ("", "", "");
+  }
+
   my $ptyp = hex(substr($d, 0, 8));
   my $plen = hex(substr($d, 8, 4));
+  if(length($d) < 16+$plen*2) {
+    Log 4, "FBDECT ignoring payload: data shorter than given length($plen)";
+    return ("", "", "");
+  }
   my $pyld = substr($d, 16, $plen*2);
+
   if($fbdect_payload{$ptyp}) {
     $pyld = eval $fbdect_payload{$ptyp}{fmt} if($fbdect_payload{$ptyp}{fmt});
     $ptyp = $fbdect_payload{$ptyp}{n};
@@ -374,7 +395,7 @@ FBDECT_Undef($$)
     <li>power: $v W</li>
     <li>energy: $v Wh</li>
     <li>powerFactor: $v"</li>
-    <li>temperature: $v C</li>
+    <li>temperature: $v C ([measured|corrected])</li>
     <li>options: uninitialized</li>
     <li>options: powerOnState:[on|off|last],lock:[none,webUi,remoteFb,button]</li>
     <li>control: disabled</li>
@@ -460,7 +481,7 @@ FBDECT_Undef($$)
     <li>power: $v W</li>
     <li>energy: $v Wh</li>
     <li>powerFactor: $v"</li>
-    <li>temperature: $v C</li>
+    <li>temperature: $v C ([measured|corrected])</li>
     <li>options: uninitialized</li>
     <li>options: powerOnState:[on|off|last],lock:[none,webUi,remoteFb,button]</li>
     <li>control: disabled</li>

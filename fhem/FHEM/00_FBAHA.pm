@@ -57,6 +57,7 @@ FBAHA_Define($$)
   DevIo_CloseDev($hash);
   $hash->{DeviceName} = $dev;
 
+  return undef if($dev eq "none"); # DEBUGGING
   my $ret = DevIo_OpenDev($hash, 0, "FBAHA_DoInit");
   return $ret;
 }
@@ -91,7 +92,7 @@ FBAHA_Set($@)
   if($type eq "reregister") {
     # Release seems to be deadly on the 546e
     FBAHA_Write($hash, "02", "") if($hash->{HANDLE});  # RELEASE
-    FBAHA_Write($hash, "00", "00010001");              # REGISTER
+    FBAHA_Write($hash, "00", "00022005");              # REGISTER
     my ($err, $data) = FBAHA_ReadAnswer($hash, "REGISTER", "^01");
     if($err) {
       Log3 $name, 1, $err;
@@ -118,7 +119,8 @@ FBAHA_Set($@)
       return $msg;
 
     }
-    FBAHA_Write($hash, "03", "0000028200000000");  # LISTEN
+    FBAHA_Write($hash, "03", "0000038200000000");  # LISTEN
+
   }
 
   if($type eq "reopen") {
@@ -173,7 +175,6 @@ FBAHA_configInd($$)
 {
   my ($data, $onlyId) = @_;
 
-
   my @answer;
   while(length($data) >= 288) {
     my $id  = hex(substr($data,  0, 4)); 
@@ -202,7 +203,7 @@ FBAHA_configInd($$)
       push @answer, "  MANUF:$mnf";
       push @answer, "  UniqueID:$idf";
       push @answer, "  Firmware:$frm";
-      push @answer, substr($data, 288, $dlen);
+      push @answer, substr($data, 288+$dlen);
       return @answer;
     }
     $data = substr($data, 288+$dlen); # rest

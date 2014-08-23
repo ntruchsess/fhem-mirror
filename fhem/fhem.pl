@@ -226,7 +226,7 @@ my $namedef = "where <name> is a single device name, a list separated by komma (
 my $rcvdquit;			# Used for quit handling in init files
 my $readingsUpdateDelayTrigger; # needed internally
 my $sig_term = 0;		# if set to 1, terminate (saving the state)
-my $wbName = ".WRITEBUFFER";    # Buffuer-name for delayed writing via select
+my $wbName = ".WRITEBUFFER";    # Buffer-name for delayed writing via select
 my %comments;			# Comments from the include files
 my %duplicate;                  # Pool of received msg for multi-fhz/cul setups
 my @cmdList;                    # Remaining commands in a chain. Used by sleep
@@ -427,8 +427,11 @@ if($attr{global}{logfile} ne "-" && !$attr{global}{nofork}) {
 
 # FritzBox special: Wait until the time is set via NTP,
 # but not more than 2 hours
-while(time() < 2*3600) {
-  sleep(5);
+if(time() < 2*3600) {
+  Log 1, "date/time not set, waiting up to 2 hours to be set.";
+  while(time() < 2*3600) {
+    sleep(5);
+  }
 }
 
 ###################################################
@@ -599,7 +602,9 @@ while (1) {
 
       } else {
         my $wb = $hash->{$wbName};
+        alarm($hash->{ALARMTIMEOUT}) if($hash->{ALARMTIMEOUT});
         my $ret = syswrite($hash->{CD}, $wb);
+        alarm(0) if($hash->{ALARMTIMEOUT});
         if(!$ret || $ret < 0) {
           Log 4, "Write error to $p, deleting $hash->{NAME}";
           TcpServer_Close($hash);
@@ -2554,7 +2559,7 @@ SignalHandling()
     $SIG{'PIPE'} = 'IGNORE';
     $SIG{'CHLD'} = 'IGNORE';
     $SIG{'HUP'}  = sub { CommandRereadCfg(undef, "") };
-
+    $SIG{'ALRM'} = sub { Log 1, "ALARM signal, blocking write?" };
   }
 }
 
@@ -3557,19 +3562,20 @@ readingsBulkUpdate($$$@)
     my $eour = $attreour && grep($reading =~ m/^$_$/, @{$attreour});
 
     # check if threshold is given
-    my $threshold_reachded = 1;
+    my $threshold_reached = 1;
     if( $eocr
         && $eocrv[0] =~ m/.*:(.*)/ ) {
 
+      $value =~ s/[^\d\.\-]//g; # We expect only numbers here.
       my $last_value = $hash->{".attreocr-threshold$reading"};
       if( !defined($last_value) ) {
         $hash->{".attreocr-threshold$reading"} = $value;
       } elsif( abs($value-$last_value) < $1 ) {
-        $threshold_reachded = 0;
+        $threshold_reached = 0;
       } else {
         $hash->{".attreocr-threshold$reading"} = $value;
       }
-      #Log 1, "EOCR:$eocr value: $value last:$last_value  threshold: $1 reached: $threshold_reachded";
+      #Log 1, "EOCR:$eocr value: $value last:$last_value  threshold: $1 reached: $threshold_reached";
     }
 
     # determine if an event should be created:
@@ -3580,7 +3586,7 @@ readingsBulkUpdate($$$@)
     # ...and the change greater then the threshold
     $changed= !($attreocr || $attreour)
               || $eour  
-              || ($eocr && ($value ne $readings->{VAL}) && $threshold_reachded);
+              || ($eocr && ($value ne $readings->{VAL}) && $threshold_reached);
     #Log 1, "EOCR:$eocr EOUR:$eour CHANGED:$changed";
 
     my @v = grep { my $l = $_;

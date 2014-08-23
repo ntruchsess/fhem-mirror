@@ -30,7 +30,7 @@ package main;
 use strict;
 use warnings;
 
-my $VERSION = "1.4.0";
+my $VERSION = "1.6.1";
 
 use constant {
   DATE            => "date",
@@ -44,6 +44,7 @@ use constant {
 
 use constant {
   CPU_FREQ     => "cpu_freq",
+  CPU1_FREQ     => "cpu1_freq",
   CPU_BOGOMIPS => "cpu_bogomips",
   CPU_TEMP     => "cpu_temp",
   CPU_TEMP_AVG => "cpu_temp_avg",
@@ -59,6 +60,8 @@ use constant {
   ETH0        => "eth0",
   WLAN0       => "wlan0",
   DIFF_SUFFIX => "_diff",
+  IP_SUFFIX   => "_ip",
+  IP6_SUFFIX  => "_ip6",
   FB_WLAN_STATE       => "wlan_state",
   FB_WLAN_GUEST_STATE => "wlan_guest_state",
   FB_INET_IP          => "internet_ip",
@@ -111,7 +114,7 @@ SYSMON_Define($$)
 
   $hash->{STATE} = "Initialized";
 
-  $hash->{DEF_TIME} = time() unless defined($hash->{DEF_TIME});
+  #$hash->{DEF_TIME} = time() unless defined($hash->{DEF_TIME});
 
   SYSMON_updateCurrentReadingsMap($hash);
 
@@ -162,6 +165,7 @@ SYSMON_updateCurrentReadingsMap($) {
 	if(SYSMON_isCPUFreqRPiBBB($hash)) {
 	  #$rMap->{"cpu_freq"}       = "CPU Frequenz";
 	  $rMap->{"cpu_freq"}        = "CPU frequency";
+	  $rMap->{"cpu1_freq"}        = "CPU frequency (second core)";
 	}
 	if(SYSMON_isCPUTempRPi($hash) || SYSMON_isCPUTempBBB($hash)) {
     #$rMap->{+CPU_TEMP}       = "CPU Temperatur";
@@ -169,6 +173,35 @@ SYSMON_updateCurrentReadingsMap($) {
     $rMap->{+CPU_TEMP}        = "CPU temperature";
     $rMap->{"cpu_temp_avg"}   = "Average CPU temperature";
   }
+  
+  if(SYSMON_isSysPowerAc($hash)) {
+  	#$rMap->{"power_ac_online"}  = "AC-Versorgung Status";
+		#$rMap->{"power_ac_present"} = "AC-Versorgung vorhanden";
+		#$rMap->{"power_ac_current"} = "AC-Versorgung Strom";
+		#$rMap->{"power_ac_voltage"} = "AC-Versorgung Spannung";
+		$rMap->{"power_ac_stat"}    = "AC-Versorgung Info";
+		$rMap->{"power_ac_text"}    = "AC-Versorgung Info";
+  }
+
+  if(SYSMON_isSysPowerUsb($hash)) {
+  	#$rMap->{"power_usb_online"}  = "USB-Versorgung Status";
+		#$rMap->{"power_usb_present"} = "USB-Versorgung vorhanden";
+		#$rMap->{"power_usb_current"} = "USB-Versorgung Strom";
+		#$rMap->{"power_usb_voltage"} = "USB-Versorgung Spannung";
+		$rMap->{"power_usb_stat"}    = "USB-Versorgung Info";
+		$rMap->{"power_usb_text"}    = "USB-Versorgung Info";
+  }
+  
+  if(SYSMON_isSysPowerBat($hash)) {
+  	#$rMap->{"power_battery_online"}  = "Batterie-Versorgung Status";
+		#$rMap->{"power_battery_present"} = "Batterie-Versorgung vorhanden";
+		#$rMap->{"power_battery_current"} = "Batterie-Versorgung Strom";
+		#$rMap->{"power_battery_voltage"} = "Batterie-Versorgung Spannung";
+		$rMap->{"power_battery_stat"}    = "Batterie-Versorgung Info";
+		$rMap->{"power_battery_text"}    = "Batterie-Versorgung  Info";
+		$rMap->{"power_battery_info"}    = "Batterie-Versorgung  Zusatzinfo";
+  }
+
   #$rMap->{"fhemuptime"}      = "Betriebszeit FHEM";
   #$rMap->{"fhemuptime_text"} = "Betriebszeit FHEM";
   #$rMap->{"idletime"}        = "Leerlaufzeit";
@@ -276,6 +309,8 @@ SYSMON_updateCurrentReadingsMap($) {
       $rMap->{$nName."_diff"}   =  $nPt." (diff)";
 	    $rMap->{$nName."_rx"}     =  $nPt." (RX)";
 	    $rMap->{$nName."_tx"}     =  $nPt." (TX)";
+	    $rMap->{$nName."_ip"}     =  $nPt." (IP)";
+	    $rMap->{$nName."_ip6"}    =  $nPt." (IP6)";
 	    
     }
   } else {
@@ -287,54 +322,72 @@ SYSMON_updateCurrentReadingsMap($) {
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
 	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
 	    
 	    $nName = "ath1";
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
 	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
 	    
 	    $nName = "cpmac0";
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
 	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
 	    
 	    $nName = "dsl";
       $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
 	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
 	    
 	    $nName = ETH0;
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
 	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
 	    
 	    $nName = "guest";
 	  	$rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
 	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
 	    
 	    $nName = "hotspot";
     	$rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
 	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
 	    
 	    $nName = "lan";
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
 	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
 	    
 	    $nName = "vdsl";
 		  $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
 	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
 	    
 	  } else {
 	  	my $nName = ETH0;
@@ -342,12 +395,16 @@ SYSMON_updateCurrentReadingsMap($) {
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
       $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
 	    
       $nName = WLAN0;
       $rMap->{$nName}         = "Network adapter ".$nName;
 	    $rMap->{$nName."_diff"} = "Network adapter ".$nName." (diff)";
 	    $rMap->{$nName."_rx"} = "Network adapter ".$nName." (RX)";
 	    $rMap->{$nName."_tx"} = "Network adapter ".$nName." (TX)";
+	    $rMap->{$nName."_ip"} = "Network adapter ".$nName." (IP)";
+	    $rMap->{$nName."_ip6"} = "Network adapter ".$nName." (IP6)";
     }
   }
   
@@ -676,9 +733,23 @@ SYSMON_obtainParameters($$)
       if(SYSMON_isCPUFreqRPiBBB($hash)) {
         $map = SYSMON_getCPUFreq($hash, $map);
       }
+      if(SYSMON_isCPU1Freq($hash)) {
+        $map = SYSMON_getCPU1Freq($hash, $map);
+      }
       $map = SYSMON_getLoadAvg($hash, $map);
       $map = SYSMON_getCPUProcStat($hash, $map);
       #$map = SYSMON_getDiskStat($hash, $map);
+      
+      # Power info (cubietruck)
+      if(SYSMON_isSysPowerAc($hash)) {
+      	$map = SYSMON_PowerAcInfo($hash, $map);
+      }
+      if(SYSMON_isSysPowerUsb($hash)) {
+      	$map = SYSMON_PowerUsbInfo($hash, $map);
+      }
+      if(SYSMON_isSysPowerBat($hash)) {
+      	$map = SYSMON_PowerBatInfo($hash, $map);
+      }
     }
   }
 
@@ -861,8 +932,10 @@ SYSMON_getFHEMUptime($$)
 {
 	my ($hash, $map) = @_;
 
-	if(defined ($hash->{DEF_TIME})) {
-	  my $fhemuptime = time()-$hash->{DEF_TIME};
+	#if(defined ($hash->{DEF_TIME})) {
+	if(defined($fhem_started)) {
+	  #my $fhemuptime = time()-$hash->{DEF_TIME};
+	  my $fhemuptime = time()-$fhem_started;
 	  $map->{+FHEMUPTIME} = sprintf("%d",$fhemuptime);
 	  $map->{+FHEMUPTIME_TEXT} = sprintf("%d days, %02d hours, %02d minutes",SYSMON_decode_time_diff($fhemuptime));
   }
@@ -927,7 +1000,7 @@ SYSMON_getCPUTemp_BBB($$)
 }
 
 #------------------------------------------------------------------------------
-# leifert CPU Frequenz (Raspberry Pi, BeagleBone Black)
+# leifert CPU Frequenz (Raspberry Pi, BeagleBone Black, Cubietruck, etc.)
 #------------------------------------------------------------------------------
 sub
 SYSMON_getCPUFreq($$)
@@ -937,6 +1010,20 @@ SYSMON_getCPUFreq($$)
 	$val = int($val);
 	my $val_txt = sprintf("%d", $val/1000);
   $map->{+CPU_FREQ}="$val_txt";
+	return $map;
+}
+
+#------------------------------------------------------------------------------
+# leifert CPU Frequenz für 2te CPU (Cubietruck, etc.)
+#------------------------------------------------------------------------------
+sub
+SYSMON_getCPU1Freq($$)
+{
+	my ($hash, $map) = @_;
+	my $val = SYSMON_execute($hash, "cat /sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq 2>&1");
+	$val = int($val);
+	my $val_txt = sprintf("%d", $val/1000);
+  $map->{+CPU1_FREQ}="$val_txt";
 	return $map;
 }
 
@@ -1414,11 +1501,26 @@ sub SYSMON_getNetworkInfo ($$$)
     #           Kollisionen:0 Sendewarteschlangenlaenge:1000
     #           RX bytes:25517384 (24.3 MiB)  TX bytes:683970999 (652.2 MiB)
 
+    my $ip = undef; my $ip6 = undef;
     foreach (@dataThroughput) {
+    	if($_=~ m/inet\s+(addr:)*(\S*)/) {
+    	  $ip=$2;
+    	}
+    	if($_=~ m/inet6\s+(addr:)*\s*(\S*)/) {
+    		$ip6=$2;
+    	}
       if(index($_, 'RX bytes') >= 0) {
         $dataThroughput = $_;
         last;
       }
+    }
+    
+    if(defined $ip) {
+    	$map->{$nName.IP_SUFFIX} = $ip;
+    }
+    
+    if(defined $ip6) {
+    	$map->{$nName.IP6_SUFFIX} = $ip6;
     }
 
     my $rxRaw = -1;
@@ -1708,7 +1810,8 @@ sub SYSMON_ShowValuesFmt ($$;@)
 	                      CPU_TEMP.":".$cur_readings_map->{+CPU_TEMP}.": ".$deg."C", 
 	                      CPU_FREQ.":".$cur_readings_map->{+CPU_FREQ}.": "."MHz", 
 	                      CPU_BOGOMIPS,
-	                      UPTIME_TEXT, FHEMUPTIME_TEXT, LOADAVG, RAM, SWAP);
+	                      UPTIME_TEXT, FHEMUPTIME_TEXT, LOADAVG, RAM, SWAP, 
+	                      "power_ac_text", "power_usb_text", "power_battery_text");
 
 	  # network-interfaces
   	my $networks = AttrVal($name, "network-interfaces", undef);
@@ -1728,8 +1831,8 @@ sub SYSMON_ShowValuesFmt ($$;@)
         my($fName, $fDef, $fComment) = split(/:/, $_);
   	    push(@dataDescription, $fName);
   	  }
-  	}
-  	
+  	} 	
+
   	# User defined
 	  my $userdefined = AttrVal($name, "user-defined", undef);
     if(defined $userdefined) {
@@ -1841,6 +1944,17 @@ SYSMON_isCPUFreqRPiBBB($) {
 	return $sys_cpu_freq_rpi_bbb;
 }
 
+my $sys_cpu1_freq = undef;
+sub
+SYSMON_isCPU1Freq($) {
+	my ($hash) = @_;
+	if(!defined $sys_cpu1_freq) {
+	  $sys_cpu1_freq = int(SYSMON_execute($hash, "[ -f /sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq ] && echo 1 || echo 0"));
+  }
+
+	return $sys_cpu1_freq;
+}
+
 my $sys_fb = undef;
 sub
 SYSMON_isFB($) {
@@ -1850,6 +1964,131 @@ SYSMON_isFB($) {
   } 
 	return $sys_fb;
 }
+
+#-Power-------
+my $sys_power_ac = undef;
+sub
+SYSMON_isSysPowerAc($) {
+	my ($hash) = @_;
+	if(!defined $sys_power_ac) {
+	  $sys_power_ac = int(SYSMON_execute($hash, "[ -f /sys/class/power_supply/ac/online ] && echo 1 || echo 0"));
+  }
+
+	return $sys_power_ac;
+}
+
+my $sys_power_usb = undef;
+sub
+SYSMON_isSysPowerUsb($) {
+	my ($hash) = @_;
+	if(!defined $sys_power_usb) {
+	  $sys_power_usb = int(SYSMON_execute($hash, "[ -f /sys/class/power_supply/usb/online ] && echo 1 || echo 0"));
+  }
+
+	return $sys_power_usb;
+}
+
+my $sys_power_bat = undef;
+sub
+SYSMON_isSysPowerBat($) {
+	my ($hash) = @_;
+	if(!defined $sys_power_bat) {
+	  $sys_power_bat = int(SYSMON_execute($hash, "[ -f /sys/class/power_supply/battery/online ] && echo 1 || echo 0"));
+  }
+
+	return $sys_power_bat;
+}
+
+sub SYSMON_PowerAcInfo($$)
+{
+	#online, present, current_now (/1000 =>mA), voltage_now (/1000000 => V)
+	my ($hash, $map) = @_;
+	my $type="ac";
+	my $base = "cat /sys/class/power_supply/".$type."/";
+		
+  my $d_online = trim(SYSMON_execute($hash, $base."online"));
+  my $d_present = trim(SYSMON_execute($hash, $base."present"));
+  my $d_current = SYSMON_execute($hash, $base."current_now");
+  if(defined $d_current) {$d_current/=1000;}
+  my $d_voltage = SYSMON_execute($hash, $base."voltage_now");
+  if(defined $d_voltage) {$d_voltage/=1000000;}
+  
+  #$map->{"power_".$type."_online"}=$d_online;
+  #$map->{"power_".$type."_present"}=$d_present;
+  #$map->{"power_".$type."_current"}=$d_current;
+  #$map->{"power_".$type."_voltage"}=$d_voltage;
+  $map->{"power_".$type."_stat"}="$d_online $d_present $d_voltage $d_current";
+  $map->{"power_".$type."_text"}=$type.": ".(($d_present eq "1") ? "present" : "absent")." / ".($d_online eq "1" ? "online" : "offline").", voltage: ".$d_voltage." V, current: ".$d_current." mA";
+  
+  return $map;
+}
+
+sub SYSMON_PowerUsbInfo($$)
+{
+	#online, present, current_now (/1000 =>mA), voltage_now (/1000000 => V)
+	my ($hash, $map) = @_;
+	my $type="usb";
+	my $base = "cat /sys/class/power_supply/".$type."/";
+		
+  my $d_online = trim(SYSMON_execute($hash, $base."online"));
+  my $d_present = trim(SYSMON_execute($hash, $base."present"));
+  my $d_current = SYSMON_execute($hash, $base."current_now");
+  if(defined $d_current) {$d_current/=1000;}
+  my $d_voltage = SYSMON_execute($hash, $base."voltage_now");
+  if(defined $d_voltage) {$d_voltage/=1000000;}
+  
+  #$map->{"power_".$type."_online"}=$d_online;
+  #$map->{"power_".$type."_present"}=$d_present;
+  #$map->{"power_".$type."_current"}=$d_current;
+  #$map->{"power_".$type."_voltage"}=$d_voltage;
+  $map->{"power_".$type."_stat"}="$d_online $d_present $d_voltage $d_current";
+  $map->{"power_".$type."_text"}=$type.": ".(($d_present eq "1") ? "present" : "absent")." / ".($d_online eq "1" ? "online" : "offline").", voltage: ".$d_voltage." V, current: ".$d_current." mA";
+  
+  return $map;
+}
+
+sub SYSMON_PowerBatInfo($$)
+{
+	#online, present, current_now (/1000 =>mA), voltage_now (/1000000 => V)
+	my ($hash, $map) = @_;
+	my $type="battery";
+	my $base = "cat /sys/class/power_supply/".$type."/";
+		
+  my $d_online = trim(SYSMON_execute($hash, $base."online"));
+  my $d_present = trim(SYSMON_execute($hash, $base."present"));
+  my $d_current = SYSMON_execute($hash, $base."current_now");
+  if(defined $d_current) {$d_current/=1000;}
+  my $d_voltage = SYSMON_execute($hash, $base."voltage_now");
+  if(defined $d_voltage) {$d_voltage/=1000000;}
+  
+  my $d_capacity = trim(SYSMON_execute($hash, $base."capacity"));
+  if($d_present ne "1") {
+  	$d_capacity = "0";
+  }
+  #$map->{"power_".$type."_online"}=$d_online;
+  #$map->{"power_".$type."_present"}=$d_present;
+  #$map->{"power_".$type."_current"}=$d_current;
+  #$map->{"power_".$type."_voltage"}=$d_voltage;
+  $map->{"power_".$type."_stat"}="$d_online $d_present $d_voltage $d_current $d_capacity";
+  $map->{"power_".$type."_text"}=$type.": ".(($d_present eq "1") ? "present" : "absent")." / ".($d_online eq "1" ? "online" : "offline").", voltage: ".$d_voltage." V, current: ".$d_current." mA, capacity: ".$d_capacity." %";
+  
+  if($d_present eq "1") {
+    # Zusaetzlich: technology, capacity, status, health, temp (/10 => °C)
+    my $d_technology = trim(SYSMON_execute($hash, $base."technology"));
+    my $d_status = trim(SYSMON_execute($hash, $base."status"));
+    my $d_health = trim(SYSMON_execute($hash, $base."health"));
+    my $d_energy_full_design = trim(SYSMON_execute($hash, $base."energy_full_design"));
+    
+    $map->{"power_".$type."_info"}=$type." info: ".$d_technology." , capacity: ".$d_capacity." %, status: ".$d_status." , health: ".$d_health." , total capacity: ".$d_energy_full_design." mAh";
+    
+    # ggf. noch irgendwann: model_name, voltage_max_design, voltage_min_design
+  } else {
+  	$map->{"power_".$type."_info"}=$type." info: n/a , capacity: n/a %, status: n/a , health: n/a , total capacity: n/a mAh";
+  }
+  
+  return $map;
+}
+#-------------
 
 sub
 SYSMON_execute($$)
@@ -1920,7 +2159,7 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     The parameters are responsible for updating the readings according to the following scheme:
     <ul>
      <li>M1: (Default: 1)<br>
-     cpu_freq, cpu_temp, cpu_temp_avg, loadavg, stat_cpu, stat_cpu_diff, stat_cpu_percent, stat_cpu_text<br><br>
+     cpu_freq, cpu_temp, cpu_temp_avg, loadavg, stat_cpu, stat_cpu_diff, stat_cpu_percent, stat_cpu_text, power readings<br><br>
      </li>
      <li>M2: (Default: M1)<br>
      ram, swap<br>
@@ -1943,7 +2182,7 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     <li>cpu_bogomips<br>
         CPU Speed: BogoMIPS
     </li>
-    <li>cpu_freq<br>
+    <li>cpu_freq (and cpu1_freq for dual core systems)<br>
         CPU frequency
     </li>
     <br>
@@ -1999,6 +2238,9 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     <code>eth0: RX: 940.58 MB, TX: 736.19 MB, Total: 1676.77 MB</code><br>
     Change of the amount of the transferred data in relation to the previous call (for eth0).<br>
     <code>eth0_diff: RX: 0.66 MB, TX: 0.06 MB, Total: 0.72 MB</code><br>
+    IP and IP v6 adresses
+    <code>eth0_ip 192.168.0.15</code><br>
+    <code>eth0_ip6 fe85::49:4ff:fe85:f885/64</code><br>
     </li>
     <br>
     <li>File system information<br>
@@ -2049,6 +2291,43 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
         Information on the installed firmware version: <VersionNum> <creation date> <time>
     </li>
     <br>
+    <b>Power Supply Readings</b>
+    <li>power_ac_stat<br>
+        status information to the AC socket: present (0|1), online (0|1), voltage, current<br>
+        Example:<br>
+    		<code>power_ac_stat: 1 1 4.807 264</code><br>
+    </li>
+    <br>
+    <li>power_ac_text<br>
+        human readable status information to the AC socket<br>
+        Example:<br>
+    		<code>power_ac_text ac: present / online, voltage: 4.807 V, current: 264 mA</code><br>
+    </li>
+    <br>
+    <li>power_usb_stat<br>
+        status information to the USB socket
+    </li>
+    <br>
+    <li>power_usb_text<br>
+        human readable status information to the USB socket
+    </li>
+    <br>
+    <li>power_battery_stat<br>
+        status information to the battery (if installed): present (0|1), online (0|1), voltage, current, actual capacity<br>
+        Example:<br>
+    		<code>power_battery_stat: 1 1 4.807 264 100</code><br>
+    </li>
+    <br>
+    <li>power_battery_text<br>
+        human readable status information to the battery (if installed)
+    </li>
+    <br>
+    <li>power_battery_info<br>
+        human readable additional information to the battery (if installed): technology, capacity, status, health, total capacity<br>
+        Example:<br>
+    		<code>power_battery_info: battery info: Li-Ion , capacity: 100 %, status: Full , health: Good , total capacity: 2100 mAh</code><br>
+    </li>
+    <br>    
   <br>
   </ul>
 
@@ -2239,6 +2518,9 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
        SM_CPUStat.gplot<br>
        SM_CPUStatSum.gplot<br>
        SM_CPUStatTotal.gplot<br>
+       SM_power_ac.gplot<br>
+       SM_power_usb.gplot<br>
+       SM_power_battery.gplot<br>
       </code>
       DbLog versions:<br>
       <code>
@@ -2355,6 +2637,17 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
       attr wl_sysmon_cpustatT group RPi<br>
       attr wl_sysmon_cpustatT plotsize 840,420<br>
       attr wl_sysmon_cpustatT room 9.99_Test<br>
+      <br>
+      # Anzeige Stromversorgung AC<br>
+      define wl_sysmon_power_ac SVG FileLog_sysmon:SM_power_ac:CURRENT<br>
+      attr wl_sysmon_power_ac label "Stromversorgung (ac) Spannung: $data{min1} - $data{max1} V,  Strom: $data{min2} - $data{max2} mA"<br>
+      attr wl_sysmon_power_ac room Technik<br>
+      attr wl_sysmon_power_ac group system<br>
+      # Anzeige Stromversorgung Battery<br>
+      define wl_sysmon_power_bat SVG FileLog_sysmon:SM_power_battery:CURRENT<br>
+      attr wl_sysmon_power_bat label "Stromversorgung (bat) Spannung: $data{min1} - $data{max1} V,  Strom: $data{min2} - $data{max2} mA"<br>
+      attr wl_sysmon_power_bat room Technik<br>
+      attr wl_sysmon_power_bat group system<br>
     </code>
     </ul>
 
@@ -2386,7 +2679,7 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     Die Parameter sind f&uuml;r die Aktualisierung der Readings nach folgender Schema zust&auml;ndig:
     <ul>
      <li>M1: (Default-Wert: 1)<br>
-     cpu_freq, cpu_temp, cpu_temp_avg, loadavg, stat_cpu, stat_cpu_diff, stat_cpu_percent, stat_cpu_text<br><br>
+     cpu_freq, cpu_temp, cpu_temp_avg, loadavg, stat_cpu, stat_cpu_diff, stat_cpu_percent, stat_cpu_text, power readings<br><br>
      </li>
      <li>M2: (Default-Wert: M1)<br>
      ram, swap<br>
@@ -2409,7 +2702,7 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     <li>cpu_bogomips<br>
         CPU Speed: BogoMIPS
     </li>
-    <li>cpu_freq<br>
+    <li>cpu_freq (auf den DualCore-Systemen wie Cubietruck auch cpu1_freq)<br>
         CPU-Frequenz
     </li>
     <br>
@@ -2467,6 +2760,9 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     <code>eth0: RX: 940.58 MB, TX: 736.19 MB, Total: 1676.77 MB</code><br>
     &Auml;nderung der &uuml;bertragenen Datenmenge in Bezug auf den vorherigen Aufruf (f&uuml;r eth0).<br>
     <code>eth0_diff: RX: 0.66 MB, TX: 0.06 MB, Total: 0.72 MB</code><br>
+    IP and IP v6 Adressen
+    <code>eth0_ip 192.168.0.15</code><br>
+    <code>eth0_ip6 fe85::49:4ff:fe85:f885/64</code><br>
     </li>
     <br>
     <li>Dateisysteminformationen<br>
@@ -2521,6 +2817,43 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
         Angaben zu der installierten Firmware-Version: <VersionNr> <Erstelldatum> <Zeit>
     </li>
     <br>
+    <b>Readings zur Stromversorgung</b>
+    <li>power_ac_stat<br>
+        Statusinformation f&uuml;r die AC-Buchse: present (0|1), online (0|1), voltage, current<br>
+        Beispiel:<br>
+    		<code>power_ac_stat: 1 1 4.807 264</code><br>
+    </li>
+    <br>
+    <li>power_ac_text<br>
+        Statusinformation f&uuml;r die AC-Buchse in menschenlesbarer Form<br>
+        Beispiel:<br>
+    		<code>power_ac_text ac: present / online, Voltage: 4.807 V, Current: 264 mA</code><br>
+    </li>
+    <br>
+    <li>power_usb_stat<br>
+        Statusinformation f&uuml;r die USB-Buchse
+    </li>
+    <br>
+    <li>power_usb_text<br>
+        Statusinformation f&uuml;r die USB-Buchse in menschenlesbarer Form
+    </li>
+    <br>
+    <li>power_battery_stat<br>
+        Statusinformation f&uuml;r die Batterie (wenn vorhanden): present (0|1), online (0|1), voltage, current, actual capacity<br>
+        Beispiel:<br>
+    		<code>power_battery_stat: 1 1 4.807 264 100</code><br>
+    </li>
+    <br>
+    <li>power_battery_text<br>
+        Statusinformation f&uuml;r die Batterie (wenn vorhanden) in menschenlesbarer Form
+    </li>
+    <br>
+    <li>power_battery_info<br>
+        Menschenlesbare Zusatzinformationen  f&uuml;r die Batterie (wenn vorhanden): Technologie, Kapazit&auml;t, Status, Zustand, Gesamtkapazit&auml;t<br>
+        Beispiel:<br>
+    		<code>power_battery_info: battery info: Li-Ion , capacity: 100 %, status: Full , health: Good , total capacity: 2100 mAh</code><br>
+    </li>
+    <br>    
   <br>
   </ul>
 
@@ -2720,6 +3053,9 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
        SM_CPUStat.gplot<br>
        SM_CPUStatSum.gplot<br>
        SM_CPUStatTotal.gplot<br>
+       SM_power_ac.gplot<br>
+       SM_power_usb.gplot<br>
+       SM_power_battery.gplot<br>
       </code>
       DbLog-Versionen:<br>
       <code>
@@ -2839,6 +3175,17 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
       attr wl_sysmon_cpustatT group RPi<br>
       attr wl_sysmon_cpustatT plotsize 840,420<br>
       attr wl_sysmon_cpustatT room 9.99_Test<br>
+      <br>
+      # Anzeige Stromversorgung AC<br>
+      define wl_sysmon_power_ac SVG FileLog_sysmon:SM_power_ac:CURRENT<br>
+      attr wl_sysmon_power_ac label "Stromversorgung (ac) Spannung: $data{min1} - $data{max1} V,  Strom: $data{min2} - $data{max2} mA"<br>
+      attr wl_sysmon_power_ac room Technik<br>
+      attr wl_sysmon_power_ac group system<br>
+      # Anzeige Stromversorgung Battery<br>
+      define wl_sysmon_power_bat SVG FileLog_sysmon:SM_power_battery:CURRENT<br>
+      attr wl_sysmon_power_bat label "Stromversorgung (bat) Spannung: $data{min1} - $data{max1} V,  Strom: $data{min2} - $data{max2} mA"<br>
+      attr wl_sysmon_power_bat room Technik<br>
+      attr wl_sysmon_power_bat group system<br>
     </code>
     </ul>
 

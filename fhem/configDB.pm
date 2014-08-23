@@ -10,7 +10,6 @@
 # READ COMMANDREF DOCUMENTATION FOR CORRECT USE!
 #
 # Copyright: betateilchen ®
-# e-mail: fhem.development@betateilchen.de
 #
 # This file is part of fhem.
 #
@@ -210,7 +209,13 @@ sub cfgDB_Init() {
 	$fhem_dbh->do("CREATE TABLE IF NOT EXISTS fhemstate(stateString TEXT)");
 
 #	create TABLE fhembinfilesave if nonexistent
-	$fhem_dbh->do("CREATE TABLE IF NOT EXISTS fhembinfilesave(filename TEXT, content BLOB)");
+	if($cfgDB_dbtype eq "MYSQL") {
+		$fhem_dbh->do("CREATE TABLE IF NOT EXISTS fhembinfilesave(filename TEXT, content MEDIUMBLOB)");
+#		my $spaltentyp = $fhem_dbh->do("SHOW FIELDS FROM fhembinfilesave LIKE 'content'");
+#		Log3(undef,1,$spaltentyp);
+	} else {
+		$fhem_dbh->do("CREATE TABLE IF NOT EXISTS fhembinfilesave(filename TEXT, content BLOB)");
+	}
 
 	$fhem_dbh->commit();
 
@@ -465,7 +470,7 @@ sub cfgDB_FW_fileList($$@) {
 
 # read filelist containing 99_ files in database
 sub cfgDB_Read99() {
-  my $ret;
+  my $ret = "";
   my $fhem_dbh = _cfgDB_Connect;
   my $sth = $fhem_dbh->prepare( "SELECT filename FROM fhembinfilesave WHERE filename like '%/99_%.pm' group by filename" );
   $sth->execute();
@@ -647,6 +652,7 @@ sub _cfgDB_Info() {
 	$sth = $fhem_dbh->prepare( $sql );
 	$sth->execute();
 	while (@line = $sth->fetchrow_array()) {
+		$line[3] = "" unless defined $line[3];
 		$row	 = " Ver $line[6] saved: $line[1] $line[2] $line[3] def: ".
 				$fhem_dbh->selectrow_array("SELECT COUNT(*) from fhemconfig where COMMAND = 'define' and VERSIONUUID = '$line[5]'");
 		$row	.= " attr: ".

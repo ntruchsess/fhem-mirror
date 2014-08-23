@@ -1450,7 +1450,7 @@ LUXTRONIK2_doStatisticMinMax ($$$)
       $yearLast += 1900;
       $monthLast ++;
    }
-   ($dummy, $dummy, $dummy, $dayNow, $monthNow, $yearNow) = localtime ( gettimeofday() + $hash->{INTERVAL});
+   ($dummy, $dummy, $dummy, $dayNow, $monthNow, $yearNow) = localtime;
    $yearNow += 1900;
    $monthNow ++;
 
@@ -1568,7 +1568,7 @@ LUXTRONIK2_doStatisticDelta ($$$$$)
       $previousTariff = 0; 
       $showDate = 6;
    }
-   ($dummy, $dummy, $dummy, $dayNow, $monthNow, $yearNow) = localtime (gettimeofday() + $hash->{INTERVAL});
+   ($dummy, $dummy, $dummy, $dayNow, $monthNow, $yearNow) = localtime;
    if ($yearNow != $yearLast) { $periodSwitch = 3; }
    elsif ($monthNow != $monthLast) { $periodSwitch = 2; }
    elsif ($dayNow != $dayLast) { $periodSwitch = 1; }
@@ -1795,7 +1795,7 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$$)
       <li><code>heatPumpElectricalPowerFactor</code><br>
          Change of electrical power consumption per 1 K flow temperature differenz to 35&deg;C (e.g. 2% per 1 K = 0,02) 
          </li><br>
-      <li><code>heatHeatRodElectricalPowerWatt</code><br>
+      <li><code>heatRodElectricalPowerWatt</code><br>
          Electrical power of the heat rods (2nd heat source) to estimate electrical consumption
          </li><br>
       <li><code>ignoreFirmwareCheck &lt; 0 | 1 &gt;</code>
@@ -1917,8 +1917,8 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$$)
       Bildet t&auml;gliche, monatliche und j&auml;hrliche Statistiken bestimmter Ger&auml;tewerte.<br>
       F&uuml;r grafische Auswertungen k&ouml;nnen die Werte der Form 'stat<i>ReadingName</i><b>Last</b>' genutzt werden.
       </li><br>
-    <li><code>heatPumpElectricalPowerWatt</code><br>
-      Betriebsleistung der W&auml;remepumpe bei einer Vorlauftemperatur von 35 &deg;C zur Berechung der Arbeitszahl (erzeugte W&auml;rme pro elektrische Energieeinheit)
+    <li><code>heatPumpElectricalPowerWatt &lt;E-Leistung in Watt&gt;</code><br>
+      Elektrische Leistungsaufnahme der W&auml;rmepumpe in Watt bei einer Vorlauftemperatur von 35 &deg;C zur Berechung der Arbeitszahl (erzeugte W&auml;rme pro elektrische Energieeinheit)
       und Absch&auml;tzung des elektrischen Verbrauches
       </li><br>
     <li><code>heatPumpElectricalPowerFactor</code><br>
@@ -1926,8 +1926,8 @@ LUXTRONIK2_doStatisticDeltaSingle ($$$$$$$)
          <br>
          (z.B. 2% pro 1 K = 0,02)
          </li><br>
-    <li><code>heatHeatRodElectricalPowerWatt</code><br>
-      Betriebsleistung der Heizst&auml;be zur Absch&auml;tzung des elektrischen Verbrauches
+    <li><code>heatRodElectricalPowerWatt &lt;E-Leistung in Watt&gt;</code><br>
+      Elektrische Leistungsaufnahme der Heizst&auml;be in Watt zur Absch&auml;tzung des elektrischen Verbrauches
       </li><br>
    <li><code>ignoreFirmwareCheck &lt; 0 | 1 &gt;</code>
       <br>

@@ -15,8 +15,20 @@ log(txt)
 }
 
 function
+addcsrf(arg)
+{
+var oarg=arg;
+  var csrf = document.body.getAttribute('fwcsrf');
+  if(csrf && arg.indexOf('fwcsrf') < 0)
+    arg += '&fwcsrf='+csrf;
+log(oarg+" -> "+arg);
+  return arg;
+}
+
+function
 FW_cmd(arg)     /* see also FW_devState */
 {
+  arg = addcsrf(arg);
   var req = new XMLHttpRequest();
   req.open("GET", arg, true);
   req.send(null);
@@ -105,13 +117,24 @@ FW_doUpdate()
       FW_widgets[w].updateDevs(devs);
     }
   }
+
+  // reset the connection to avoid memory problems
+  if(FW_pollConn.responseText.length > 300*1024)
+    FW_longpoll();
 }
 
 function
 FW_longpoll()
 {
+  log("Connecting...");
   FW_curLine = 0;
+  if(FW_pollConn) {
+    FW_leaving = 1;
+    FW_pollConn.abort();
+  }
+
   FW_pollConn = new XMLHttpRequest();
+  FW_leaving = 0;
 
   var filter = document.body.getAttribute("longpollfilter");
   if(filter == null)
@@ -157,6 +180,7 @@ FW_longpoll()
   var query = document.location.pathname+"?XHR=1"+
                 "&inform=type=status;filter="+filter+
                 "&timestamp="+new Date().getTime();
+  query = addcsrf(query);
   FW_pollConn.open("GET", query, true);
   FW_pollConn.onreadystatechange = FW_doUpdate;
   FW_pollConn.send(null);
@@ -273,7 +297,9 @@ FW_queryValue(cmd, qFn, qArg)
     eval(qFn.replace("%", qResp));
     delete qConn;
   }
-  qConn.open("GET", document.location.pathname+"?cmd="+cmd+"&XHR=1", true);
+  var query = document.location.pathname+"?cmd="+cmd+"&XHR=1"
+  query = addcsrf(query);
+  qConn.open("GET", query, true);
   qConn.send(null);
 }
 
@@ -325,8 +351,10 @@ loadScript(sname, callback)
       }
     }
   } else {
-    if(isiOS)
+    if(isiOS) {
+      FW_leaving = 1;
       FW_pollConn.abort();
+    }
     script.onload = function(){
       if(callback)
         callback();

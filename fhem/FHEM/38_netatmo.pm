@@ -11,6 +11,15 @@ use JSON;
 
 use HttpUtils;
 
+my $netatmo_isFritzBox = undef;
+sub
+netatmo_isFritzBox()
+{
+  $netatmo_isFritzBox = int( qx( [ -f /usr/bin/ctlmgr_ctl ] && echo 1 || echo 0 ) )  if( !defined( $netatmo_isFritzBox) );
+
+  return $netatmo_isFritzBox;
+}
+
 sub
 netatmo_Initialize($)
 {
@@ -41,8 +50,9 @@ netatmo_Define($$)
 
   my @a = split("[ \t][ \t]*", $def);
 
-  my $subtype;
   my $name = $a[0];
+
+  my $subtype;
   if( @a == 3 ) {
     $subtype = "DEVICE";
 
@@ -56,6 +66,54 @@ netatmo_Define($$)
     return "device $device already defined as $d->{NAME}" if( defined($d) && $d->{NAME} ne $name );
 
     $modules{$hash->{TYPE}}{defptr}{"D$device"} = $hash;
+
+  } elsif( ($a[2] eq "PUBLIC" && @a > 3 ) ) {
+    my $device = $a[3];
+    $hash->{Device} = $device;
+
+    if( $a[4] && $a[4] =~ m/[\da-f]{2}(:[\da-f]{2}){5}/ ) {
+      $subtype = "MODULE";
+
+      my $module = "";
+      my $readings = "";
+
+      my @a = splice( @a, 4 );
+      while( @a ) {
+        $module .= " " if( $module );
+        $module .= shift( @a );
+
+        $readings .= " " if( $readings );
+        $readings .=  shift( @a );
+      }
+
+      $hash->{Module} = $module;
+      $hash->{dataTypes} = $readings;
+
+      my $d = $modules{$hash->{TYPE}}{defptr}{"M$module"};
+      return "module $module already defined as $d->{NAME}" if( defined($d) && $d->{NAME} ne $name );
+
+      $modules{$hash->{TYPE}}{defptr}{"M$module"} = $hash;
+    } else {
+      my $lon = $a[4];
+      my $lat = $a[5];
+      my $rad = $a[6];
+      $rad = 0.02 if( !$rad );
+
+      $hash->{Lat} = $lat;
+      $hash->{Lon} = $lon;
+      $hash->{Rad} = $rad;
+
+      delete( $hash->{LAST_POLL} );
+
+      $subtype = "DEVICE";
+
+      my $d = $modules{$hash->{TYPE}}{defptr}{"D$device"};
+      return "device $device already defined as $d->{NAME}" if( defined($d) && $d->{NAME} ne $name );
+
+      $modules{$hash->{TYPE}}{defptr}{"D$device"} = $hash;
+    }
+
+    $hash->{INTERVAL} = 60*15;
 
   } elsif( ($a[2] eq "MODULE" && @a == 5 ) ) {
     $subtype = "MODULE";
@@ -87,9 +145,13 @@ netatmo_Define($$)
     $hash->{password} = $password;
     $hash->{client_id} = $client_id;
     $hash->{client_secret} = $client_secret;
+
+    $attr{$name}{nossl} = 1 if( !$init_done && netatmo_isFritzBox() );
+
   } else {
     return "Usage: define <name> netatmo device\
        define <name> netatmo userid publickey\
+       define <name> netatmo PUBLIC device latitude longitude [radius]\
        define <name> netatmo [ACCOUNT] username password"  if(@a < 3 || @a > 5);
   }
 
@@ -145,8 +207,11 @@ netatmo_getToken($)
 {
   my ($hash) = @_;
 
+  $hash->{https} = "https";
+  $hash->{https} = "http" if( AttrVal($hash->{NAME}, "nossl", 0) );
+
   my($err,$data) = HttpUtils_BlockingGet({
-    url => 'https://api.netatmo.net/oauth2/token',
+    url => "$hash->{https}://api.netatmo.net/oauth2/token",
     timeout => 10,
     noshutdown => 1,
     data => {grant_type => 'password', client_id => $hash->{client_id},  client_secret=> $hash->{client_secret}, username => $hash->{username}, password => $hash->{password}},
@@ -170,7 +235,7 @@ netatmo_refreshToken($;$)
 
   if( $nonblocking ) {
     HttpUtils_NonblockingGet({
-      url => 'https://api.netatmo.net/oauth2/token',
+      url => "$hash->{https}://api.netatmo.net/oauth2/token",
       timeout => 10,
       noshutdown => 1,
       data => {grant_type => 'refresh_token', client_id => $hash->{client_id},  client_secret=> $hash->{client_secret}, refresh_token => $hash->{refresh_token}},
@@ -180,7 +245,7 @@ netatmo_refreshToken($;$)
     });
   } else {
     my($err,$data) = HttpUtils_BlockingGet({
-      url => 'https://api.netatmo.net/oauth2/token',
+      url => "$hash->{https}://api.netatmo.net/oauth2/token",
       timeout => 10,
       noshutdown => 1,
       data => {grant_type => 'refresh_token', client_id => $hash->{client_id},  client_secret=> $hash->{client_secret}, refresh_token => $hash->{refresh_token}},
@@ -235,13 +300,13 @@ netatmo_initDevice($)
     $hash->{country} = $device->{place}{country};
     $hash->{bssid} = $device->{place}{bssid};
     $hash->{altitude} = $device->{place}{altitude};
+    $hash->{city} = $device->{place}{geoip_city};
     $hash->{location} = $device->{place}{location}[0] .",". $device->{place}{location}[1];
   }
 
   my $state_format;
   if( $device->{data_type} ) {
     delete($hash->{dataTypes});
-    delete($hash->{helper}{dataTypes});
 
     my @reading_names = ();
     foreach my $type (@{$device->{data_type}}) {
@@ -262,7 +327,8 @@ netatmo_initDevice($)
 
     $hash->{helper}{readingNames} = \@reading_names;
   }
-  $attr{$name}{stateFormat} = $state_format if( !defined( $attr{$name}{stateFormat} ) );
+
+  $attr{$name}{stateFormat} = $state_format if( !defined($attr{$name}{stateFormat}) && defined($state_format) );
 
   netatmo_poll($hash);
 }
@@ -276,7 +342,7 @@ netatmo_getDevices($;$)
 
   if( $blocking ) {
     my($err,$data) = HttpUtils_BlockingGet({
-      url => 'http://api.netatmo.net/api/devicelist',
+      url => "$hash->{https}://api.netatmo.net/api/devicelist",
       noshutdown => 1,
       data => { access_token => $hash->{access_token}, scope => 'read_station' },
     });
@@ -286,7 +352,7 @@ netatmo_getDevices($;$)
     return $hash->{helper}{devices};
   } else {
     HttpUtils_NonblockingGet({
-      url => 'http://api.netatmo.net/api/devicelist',
+      url => "$hash->{https}://api.netatmo.net/api/devicelist",
       noshutdown => 1,
       data => { access_token => $hash->{access_token}, scope => 'read_station', },
       hash => $hash,
@@ -295,6 +361,113 @@ netatmo_getDevices($;$)
     });
   }
 }
+sub
+netatmo_getPublicDevices($$;$$$$)
+{
+  my ($hash,$blocking,$lon_ne,$lat_ne,$lon_sw,$lat_sw) = @_;
+  my $name = $hash->{NAME};
+
+  my $iohash = $hash->{IODev};
+  $iohash = $hash if( !defined($iohash) );
+
+  if( !defined($lat_ne) ) {
+    my $s = $lon_ne;
+    $s = 0.025 if ( !defined($s) );
+    my $lat = AttrVal("global","latitude", 50.112);
+    my $lon = AttrVal("global","longitude", 8.686);
+
+    $lon_ne = $lon + $s;
+    $lat_ne = $lat + $s;
+    $lon_sw = $lon - $s;
+    $lat_sw = $lat - $s;
+  } elsif( !defined($lat_sw) ) {
+    my $lat = $lat_ne;
+    my $lon = $lon_ne;
+    my $s = $lon_sw;
+    $s = 0.025 if ( !defined($s) );
+
+    $lon_ne = $lon + $s;
+    $lat_ne = $lat + $s;
+    $lon_sw = $lon - $s;
+    $lat_sw = $lat - $s;
+  }
+  Log3 $name, 4, "$name getpublicdata: $lon_ne, $lon_sw, $lat_ne, $lat_sw";
+
+  netatmo_refreshToken($iohash);
+
+  if( $blocking ) {
+    my($err,$data) = HttpUtils_BlockingGet({
+      url => "$iohash->{https}://api.netatmo.net/api/getpublicdata",
+      noshutdown => 1,
+      data => { access_token => $iohash->{access_token}, lat_ne => $lat_ne, lon_ne => $lon_ne, lat_sw => $lat_sw, lon_sw => $lon_sw },
+    });
+
+      return netatmo_dispatch( {hash=>$hash,type=>'publicdata'},$err,$data );
+  } else {
+    HttpUtils_NonblockingGet({
+      url => "$iohash->{https}://api.netatmo.net/api/getpublicdata",
+      noshutdown => 1,
+      data => { access_token => $iohash->{access_token}, lat_ne => $lat_ne, lon_ne => $lon_ne, lat_sw => $lat_sw, lon_sw => $lon_sw },
+      hash => $hash,
+      type => 'publicdata',
+      callback => \&netatmo_dispatch,
+    });
+  }
+}
+
+sub
+netatmo_getAddress($$$$)
+{
+  my ($hash,$blocking,$lon,$lat) = @_;
+  my $name = $hash->{NAME};
+
+  my $iohash = $hash->{IODev};
+  $iohash = $hash if( !defined($iohash) );
+
+  if( $blocking ) {
+    my($err,$data) = HttpUtils_BlockingGet({
+      url => "$iohash->{https}://maps.googleapis.com/maps/api/geocode/json?latlng=$lat,$lon",
+      noshutdown => 1,
+    });
+
+      return netatmo_dispatch( {hash=>$hash,type=>'address'},$err,$data );
+  } else {
+    HttpUtils_NonblockingGet({
+      url => "$iohash->{https}://maps.googleapis.com/maps/api/geocode/json?latlng=$lat,$lon",
+      noshutdown => 1,
+      hash => $hash,
+      type => 'address',
+      callback => \&netatmo_dispatch,
+    });
+  }
+}
+sub
+netatmo_getLatLong($$$)
+{
+  my ($hash,$blocking,$addr) = @_;
+  my $name = $hash->{NAME};
+
+  my $iohash = $hash->{IODev};
+  $iohash = $hash if( !defined($iohash) );
+
+  if( $blocking ) {
+    my($err,$data) = HttpUtils_BlockingGet({
+      url => "$iohash->{https}://maps.googleapis.com/maps/api/geocode/json?address=germany+$addr",
+      noshutdown => 1,
+    });
+
+      return netatmo_dispatch( {hash=>$hash,type=>'latlng'},$err,$data );
+  } else {
+    HttpUtils_NonblockingGet({
+      url => "$iohash->{https}://maps.googleapis.com/maps/api/geocode/json?address=germany+$addr",
+      noshutdown => 1,
+      hash => $hash,
+      type => 'latlng',
+      callback => \&netatmo_dispatch,
+    });
+  }
+}
+
 sub
 netatmo_getDeviceDetail($$)
 {
@@ -313,29 +486,31 @@ netatmo_getDeviceDetail($$)
 sub
 netatmo_requestDeviceReadings($@)
 {
-  my ($hash,$id,$module) = @_;
+  my ($hash,$id,$type,$module) = @_;
   my $name = $hash->{NAME};
 
   return undef if( !defined($hash->{IODev}) );
 
   my $iohash = $hash->{IODev};
-  my $type = $hash->{dataTypes};
+  $type = $hash->{dataTypes} if( !$type );
+  $type = "Temperature,Co2,Humidity,Noise,Pressure" if( !$type );
 
   netatmo_refreshToken( $iohash );
 
-  my %data = (access_token => $iohash->{access_token}, scope => 'read_station', device_id => $id, scale => "max", type => $type);
+  my %data = (access_token => $iohash->{access_token}, device_id => $id, scale => "max", type => $type);
   $data{"module_id"} = $module if( $module );
 
   my $lastupdate = ReadingsVal( $name, ".lastupdate", undef );
   $data{"date_begin"} = $lastupdate if( defined($lastupdate) );
 
   HttpUtils_NonblockingGet({
-    url => 'http://api.netatmo.net/api/getmeasure',
+    url => "$iohash->{https}://api.netatmo.net/api/getmeasure",
     timeout => 10,
     noshutdown => 1,
     data => \%data,
     hash => $hash,
     type => 'getmeasure',
+    requested => $type,
     callback => \&netatmo_dispatch,
   });
 }
@@ -368,17 +543,25 @@ netatmo_dispatch($$$)
   my $hash = $param->{hash};
   my $name = $hash->{NAME};
 
+  $hash->{openRequests} -= 1 if( $param->{type} eq 'getmeasure' );
+
   if( $err ) {
     Log3 $name, 2, "$name: http request failed: $err";
   } elsif( $data ) {
     Log3 $name, 4, "$name: $data";
 
-    if( $data !~ m/^{.*}$/ ) {
-      Log3 $name, 2, "$name: invalid json detected: $data";
+    $data =~ s/\n//g;
+    if( $data !~ m/^{.*}$/m ) {
+      Log3 $name, 2, "$name: invalid json detected: >>$data<<";
       return undef;
     }
 
-    my $json = JSON->new->utf8(0)->decode($data);
+    my $json;
+    if( netatmo_isFritzBox() ) {
+      $json = decode_json($data);
+    } else {
+      $json = JSON->new->utf8(0)->decode($data);
+    }
 
     if( $json->{error} ) {
       #$hash->{lastError} = $json->{error}{message};
@@ -389,7 +572,13 @@ netatmo_dispatch($$$)
     } elsif( $param->{type} eq 'devicelist' ) {
       netatmo_parseDeviceList($hash,$json);
     } elsif( $param->{type} eq 'getmeasure' ) {
-      netatmo_parseReadings($hash,$json);
+      netatmo_parseReadings($hash,$json,$param->{requested});
+    } elsif( $param->{type} eq 'publicdata' ) {
+      return netatmo_parsePublic($hash,$json);
+    } elsif( $param->{type} eq 'address' ) {
+      return netatmo_parseAddress($hash,$json);
+    } elsif( $param->{type} eq 'latlng' ) {
+      return netatmo_parseLatLng($hash,$json);
     }
   }
 }
@@ -495,7 +684,86 @@ netatmo_parseDeviceList($$)
 }
 
 sub
-netatmo_parseReadings($$)
+netatmo_updateReadings($$)
+{
+  my($hash, $readings) = @_;
+
+  my ($seconds) = gettimeofday();
+
+  my $latest = 0;
+  if( $readings && @{$readings} ) {
+    readingsBeginUpdate($hash);
+    my $i = 0;
+    foreach my $reading (sort { $a->[0] <=> $b->[0] } @{$readings}) {
+      $hash->{".updateTimestamp"} = FmtDateTime($reading->[0]);
+      $hash->{CHANGETIME}[$i++] = FmtDateTime($reading->[0]);
+      readingsBulkUpdate( $hash, $reading->[1], $reading->[2] );
+      $latest = $reading->[0] if( $reading->[0] > $latest );
+    }
+    #$hash->{helper}{update_count} = int(@{$readings});
+
+    #$seconds = $latest + 1 if( $latest );
+    readingsBulkUpdate( $hash, ".lastupdate", $seconds, 0 );
+
+    readingsEndUpdate($hash,1);
+
+    delete $hash->{CHANGETIME};
+  }
+
+  return ($seconds,$latest);
+}
+sub
+netatmo_parseReadings($$;$)
+{
+  my($hash, $json, $requested) = @_;
+  my $name = $hash->{NAME};
+
+  my $reading_names = $hash->{helper}{readingNames};
+  if( $requested ) {
+    my @readings = split( ',', $requested );
+    $reading_names = \@readings;
+  }
+
+  if( $json ) {
+    $hash->{status} = $json->{status};
+    $hash->{status} = $json->{error}{message} if( $json->{error} );
+    my $lastupdate = ReadingsVal( $name, ".lastupdate", 0 );
+    my @r = ();
+    my $readings = \@r;
+    $readings = $hash->{readings} if( defined($hash->{readings}) );
+    if( $hash->{status} eq "ok" ) {
+      foreach my $values ( @{$json->{body}}) {
+        my $time = $values->{beg_time};
+        my $step_time = $values->{step_time};
+
+        foreach my $value (@{$values->{value}}) {
+          my $i = 0;
+          foreach my $reading (@{$value}) {
+            next if( !defined($reading) );
+
+            #my $name = $hash->{helper}{readingNames}[$i];
+            my $name = lc($reading_names->[$i++]);
+
+            push(@{$readings}, [$time, $name, $reading]);
+          }
+
+          $time += $step_time if( $step_time );
+        }
+      }
+
+      if( $hash->{openRequests} ) {
+        $hash->{readings} = $readings;
+      } else {
+        my ($seconds,undef) = netatmo_updateReadings( $hash, $readings );
+        $hash->{LAST_POLL} = FmtDateTime( $seconds );
+        delete $hash->{readings};
+      }
+    }
+  }
+}
+
+sub
+netatmo_parsePublic($$)
 {
   my($hash, $json) = @_;
   my $name = $hash->{NAME};
@@ -503,50 +771,83 @@ netatmo_parseReadings($$)
   if( $json ) {
     $hash->{status} = $json->{status};
     $hash->{status} = $json->{error}{message} if( $json->{error} );
-    my $lastupdate = ReadingsVal( $name, ".lastupdate", 0 );
-    my @readings = ();
     if( $hash->{status} eq "ok" ) {
-      foreach my $values ( @{$json->{body}}) {
-        my $time = $values->{beg_time};
-        my $step_time = $values->{step_time};
+      if( $hash->{Lat} ) {
+        my $found = 0;
+        my @readings = ();
+        my $devices = $json->{body};
+        if( ref($devices) eq "ARRAY" ) {
+          foreach my $device (@{$devices}) {
+            next if( $device->{_id} ne $hash->{Device} );
+            next if( ref($device->{measures}) ne "HASH" );
+            Log3 $name, 4, "$name found:  $device->{_id}: $device->{place}->{location}->[0] $device->{place}->{location}->[1]";
+            foreach my $module ( keys %{$device->{measures}}) {
+              next if( ref($device->{measures}->{$module}->{res}) ne "HASH" );
+              foreach my $timestamp ( keys %{$device->{measures}->{$module}->{res}} ) {
+                next if( $hash->{LAST_POLL} && $timestamp <= $hash->{LAST_POLL} );
+                my $i = 0;
+                foreach my $value ( @{$device->{measures}->{$module}->{res}->{$timestamp}} ) {
+                  my $type = $device->{measures}->{$module}->{type}[$i];
 
-        my $i = -1;
-        foreach my $value (@{$values->{value}}) {
-          foreach my $reading (@{$value}) {
-            $i++;
-            next if( !defined($reading) );
+                  push(@readings, [$timestamp, lc($type), $value]);
 
-            my $name = $hash->{helper}{readingNames}[$i];
+                  ++$i;
+                }
+              }
+            }
 
-            push(@readings, [$time, $name, $reading]);
+            $found = 1;
+            last;
           }
-
-          $time += $step_time if( $step_time );
         }
+
+        my (undef,$latest) = netatmo_updateReadings( $hash, \@readings );
+        $hash->{LAST_POLL} = $latest if( @readings );
+
+        $hash->{STATE} = "Error: device not found" if( !$found );
+      } else {
+        return $json->{body};
       }
+    } else {
+      return $hash->{status};
+    }
+  }
+}
 
-      my $latest = 0;
-      if( @readings ) {
-        readingsBeginUpdate($hash);
-        my $i = 0;
-        foreach my $reading (sort { $a->[0] <=> $b->[0] } @readings) {
-          $hash->{".updateTimestamp"} = FmtDateTime($reading->[0]);
-          $hash->{CHANGETIME}[$i++] = FmtDateTime($reading->[0]);
-          readingsBulkUpdate( $hash, $reading->[1], $reading->[2], 1 );
-          $latest = $reading->[0] if( $reading->[0] > $latest );
-        }
-        #$hash->{helper}{update_count} = int(@readings);
+sub
+netatmo_parseAddress($$)
+{
+  my($hash, $json) = @_;
+  my $name = $hash->{NAME};
 
-        my ($seconds) = gettimeofday();
-        $hash->{LAST_POLL} = FmtDateTime( $seconds );
-
-        #$seconds = $latest + 1 if( $latest );
-        readingsBulkUpdate( $hash, ".lastupdate", $seconds, 0 );
-
-        readingsEndUpdate($hash,1);
-
-        delete $hash->{CHANGETIME};
+  if( $json ) {
+    $hash->{status} = $json->{status};
+    $hash->{status} = $json->{error}{message} if( $json->{error} );
+    if( $hash->{status} eq "OK" ) {
+      if( $json->{results} ) {
+        return $json->{results}->[0]->{formatted_address};
       }
+    } else {
+      return $hash->{status};
+    }
+  }
+}
+
+sub
+netatmo_parseLatLng($$)
+{
+  my($hash, $json) = @_;
+  my $name = $hash->{NAME};
+
+  if( $json ) {
+    $hash->{status} = $json->{status};
+    $hash->{status} = $json->{error}{message} if( $json->{error} );
+    if( $hash->{status} eq "OK" ) {
+      if( $json->{results} ) {
+        return $json->{results}->[0]->{geometry}->{bounds};
+      }
+    } else {
+      return $hash->{status};
     }
   }
 }
@@ -556,18 +857,32 @@ netatmo_pollDevice($)
 {
   my ($hash) = @_;
 
-  my $json;
+  $hash->{openRequests} = 0 if ( !defined(  $hash->{openRequests}) );
+
   if( $hash->{Module} ) {
-    $json = netatmo_requestDeviceReadings( $hash, $hash->{Device}, $hash->{Module} );
+    my @types = split( ' ', $hash->{dataTypes} );
+    my $lastupdate = ReadingsVal( $hash->{NAME}, ".lastupdate", undef );
+    #$lastupdate = "2014-07-18 14:06:54";
+    $hash->{openRequests} += int(@types);
+    foreach my $module (split( ' ', $hash->{Module} ) ) {
+      my $type;
+      $type = shift(@types) if( $hash->{Module} =~ m/ / );
+      readingsSingleUpdate($hash, ".lastupdate", $lastupdate, 0);
+      netatmo_requestDeviceReadings( $hash, $hash->{Device}, $type, $module ne $hash->{Device}?$module:undef );
+    }
+  } elsif( defined($hash->{Lat}) ) {
+    $hash->{openRequests} += 1;
+    netatmo_getPublicDevices($hash, 0, $hash->{Lon}, $hash->{Lat}, $hash->{Rad} );
   } else {
-    $json = netatmo_requestDeviceReadings( $hash, $hash->{Device} );
+    $hash->{openRequests} += 1;
+    netatmo_requestDeviceReadings( $hash, $hash->{Device} );
   }
 }
 
 sub
 netatmo_Get($$@)
 {
-  my ($hash, $name, $cmd) = @_;
+  my ($hash, $name, $cmd, @args) = @_;
 
   my $list;
   if( $hash->{SUBTYPE} eq "DEVICE"
@@ -584,16 +899,85 @@ netatmo_Get($$@)
       return undef;
     }
   } elsif( $hash->{SUBTYPE} eq "ACCOUNT" ) {
-    $list = "devices:noArg";
+    $list = "devices:noArg public";
 
     if( $cmd eq "devices" ) {
       my $devices = netatmo_getDevices($hash,1);
       my $ret;
       foreach my $device (@{$devices}) {
-        $ret .= "$device->{_id}\t$device->{module_name}\t$device->{hw_version}\t$device->{firmware}\n";
+        $ret .= "\n" if( $ret );
+        $ret .= "$device->{_id}\t$device->{module_name}\t$device->{hw_version}\t$device->{firmware}";
       }
 
       $ret = "id\t\t\tname\t\thw\tfw\n" . $ret if( $ret );
+      $ret = "no devices found" if( !$ret );
+      return $ret;
+    } elsif( $cmd eq "public" ) {
+      my $station;
+      $station = shift @args if( $args[0] && $args[0] =~ m/[\da-f]{2}(:[\da-f]{2}){5}/ );
+
+      if( $args[0] && ( $args[0] =~ m/\d{5}/
+                        || $args[0] =~ m/^a:/ ) ) {
+        my $addr = shift @args;
+        $addr = substr($addr,2) if( $addr =~ m/^a:/ );
+
+        my $bounds =  netatmo_getLatLong( $hash,1,$addr );
+        $args[0] = $bounds->{northeast}->{lng};
+        $args[1] = $bounds->{northeast}->{lat};
+        $args[2] = $bounds->{southwest}->{lng};
+        $args[3] = $bounds->{southwest}->{lat};
+      }
+
+      my $devices = netatmo_getPublicDevices($hash, 1, $args[0], $args[1], $args[2], $args[3] );
+      my $ret;
+
+      if( ref($devices) eq "ARRAY" ) {
+        foreach my $device (@{$devices}) {
+          next if( $station && $station ne $device->{_id} );
+          $ret .= "\n" if( $ret );
+          $ret .= sprintf( "%s\t%.8f\t%.8f\t%i", $device->{_id},
+                                                 $device->{place}->{location}->[0], $device->{place}->{location}->[1],
+                                                 $device->{place}->{altitude} );
+          my $addr .= netatmo_getAddress( $hash, 1, $device->{place}->{location}->[0], $device->{place}->{location}->[1] );
+          next if( ref($device->{measures}) ne "HASH" );
+          my $ext;
+          foreach my $module ( keys %{$device->{measures}}) {
+            next if( ref($device->{measures}->{$module}->{res}) ne "HASH" );
+            $ext .= "$module ";
+            $ext .= join(',', @{$device->{measures}->{$module}->{type}});
+            $ext .= " ";
+            foreach my $timestamp ( keys %{$device->{measures}->{$module}->{res}} ) {
+              my $i = 0;
+              $ret .= "\t";
+              foreach my $value ( @{$device->{measures}->{$module}->{res}->{$timestamp}} ) {
+                my $type = $device->{measures}->{$module}->{type}[$i];
+
+                if( $type eq "temperature" ) {
+                  $ret .= sprintf( "\t%.1f \xc2\xb0C", $value );
+                } elsif( $type eq "humidity" ) {
+                  $ret .= sprintf( "\t%i %%", $value );
+                } elsif( $type eq "pressure" ) {
+                  $ret .= sprintf( "\t%i hPa", $value );
+                } elsif( $type eq "rain" ) {
+                  $ret .= sprintf( "\t%i mm", $value );
+                }
+
+              ++$i;
+              }
+              last;
+            }
+          }
+
+          #$ret .= "\n\t\t";
+          $ret .= "\t$addr";
+
+          $ret .= "\n\tdefine netatmo_P$device->{_id} netatmo PUBLIC $device->{_id} $ext" if( $station );
+        }
+      } else {
+        $ret = $devices if( !ref($devices) );
+      }
+
+      $ret = "id\t\t\tlongitude\tlatitude\taltitude\n" . $ret if( $ret );
       $ret = "no devices found" if( !$ret );
       return $ret;
     }
@@ -622,6 +1006,17 @@ netatmo_Attr($$$)
     } else {
       $attr{$name}{$attrName} = 0;
       netatmo_poll($hash);
+    }
+  } elsif( $attrName eq "nossl" ) {
+    my $hash = $defs{$name};
+    if( $hash->{SUBTYPE} eq "ACCOUNT" ) {
+      if( $cmd eq "set" && $attrVal ne "0" ) {
+        $hash->{https} = "http";
+      } else {
+        $hash->{https} = "https";
+      }
+    } else {
+      return $attrName ." not allowed for netatmo $hash->{SUBTYPE}";
     }
   }
 
@@ -655,6 +1050,7 @@ netatmo_Attr($$$)
   <b>Define</b>
   <ul>
     <code>define &lt;name&gt; netatmo &lt;device&gt;</code><br>
+    <code>define &lt;name&gt; netatmo PUBLIC &lt;device&gt; &lt;latitude&gt; &lt;longitude&gt; [&lt;radius&gt;]</code><br>
     <code>define &lt;name&gt; netatmo [ACCOUNT] &lt;username&gt; &lt;password&gt; &lt;client_id&gt; &lt;client_secret&gt;</code><br>
     <br>
 
@@ -673,9 +1069,6 @@ netatmo_Attr($$$)
   <a name="netatmo_Readings"></a>
   <b>Readings</b>
   <ul>
-    <li>co2</li>
-    <li>battery</li>
-    <li>batteryLevel</li>
   </ul><br>
 
   <a name="netatmo_Get"></a>
@@ -683,6 +1076,13 @@ netatmo_Attr($$$)
   <ul>
     <li>update<br>
       trigger an update</li>
+    <li>public [&lt;station&gt;] [&lt;address&gt;] &lt;args&gt;<br>
+      no arguments -> get all public stations in a radius of 0.025&deg; around global fhem longitude/latitude<br>
+      &lt;rad&gt; -> get all public stations in a radius of &lt;rad&gt;&deg; around global fhem longitude/latitude<br>
+      &lt;lon&gt; &lt;lat&gt; [&lt;rad&gt;] -> get all public stations in a radius of 0.025&deg; or &lt;rad&gt;&deg; around &lt;lon&gt;/&lt;lat&gt;<br>
+      &lt;lon_ne&gt; &lt;lat_ne&gt; &lt;lon_sw&gt; &lt;lat_sw&gt; -> get all public stations in the area of &lt;lon_ne&gt; &lt;lat_ne&gt; &lt;lon_sw&gt; &lt;lat_sw&gt;<br>
+      if &lt;address&gt; is given then list stations in the area of this address. can be given as 5 digit german postal code or a: followed by a textual address. all spaces have to be replaced by a +.<br></li>
+      if &lt;station&gt; is given then print fhem define for this station<br></li>
   </ul><br>
 
   <a name="netatmo_Attr"></a>
@@ -692,6 +1092,8 @@ netatmo_Attr($$$)
       the interval in seconds used to check for new values.</li>
     <li>disable<br>
       1 -> stop polling</li>
+    <li>nossl<br>
+      1 -> don't use ssl.</li><br>
   </ul>
 </ul>
 
