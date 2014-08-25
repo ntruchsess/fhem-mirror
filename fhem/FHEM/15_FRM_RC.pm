@@ -4,20 +4,13 @@ package main;
 use strict;
 use warnings;
 
-#add FHEM/lib to @INC if it's not already included. Should rather be in fhem.pl than here though...
-BEGIN {
-	if (!grep(/FHEM\/lib$/,@INC)) {
-		foreach my $inc (grep(/FHEM$/,@INC)) {
-			push @INC,$inc."/lib";
-		};
-	};
-};
-
 use Device::Firmata::Constants  qw/ :all /;
 
 #####################################
 
+
 our %rcAttributes = (
+  "IODev"            => "",
   "vccPin"           => PIN_HIGH,
   "gndPin"           => PIN_LOW,
 );
@@ -37,68 +30,72 @@ my $RC_TRISTATE_CHARS = {
 
 my %RC_TRISTATE_BITS = reverse %$RC_TRISTATE_CHARS;
 
-my @rc_observer = []; # TODO empty on reset, unload etc.
+my @rc_observers = [];
 
 
 sub
 FRM_RC_Initialize($)
 {
-  my ($hash) = @_;
   LoadModule("FRM");
 }
 
 sub
-FRM_RC_Init($$$$$$)
+FRM_RC_UnDef($$)
 {
-  my ($hash, $pinmode, $observer, $r, $m, $args) = @_;
-  my %rcswitchAttributes = %$r;
-  my %moduleAttributes = %$m;
+  my ($hash, $name) = @_;
+  my $pin = $hash->{PIN};
+  FRM_RC_unregister_observer($hash, $pin);
+  FRM_Client_Undef($hash, $name);
+}
+
+sub
+FRM_RC_Init($$$$$)
+{
+  my ($hash, $pinmode, $observer_method, $rcswitchAttributes, $args) = @_;
+
+  # Initialize pin for firmata 
   my $ret = FRM_Init_Pin_Client($hash, $args, $pinmode);
   return $ret if (defined $ret);
-  my $pin = $hash->{PIN};
+
+  my $pin  = $hash->{PIN};
+  my $name = $hash->{NAME};
+  Log3($hash, 5, "$name: initialization start");
   eval {
-    FRM_RC_register_observer($pin, $observer, $hash);
-    my $name = $hash->{NAME};
-    foreach my $attribute (keys %moduleAttributes) {
-      FRM_RCOUT_Attr("set", $name, $attribute, $moduleAttributes{$attribute});
-    }
-    my @a = (keys %rcswitchAttributes, keys %rcAttributes);
-    foreach my $attribute (@a) { # send attribute values to the board
+    # Register observer for messages from the controller  
+    FRM_RC_register_observer($hash, $pin, $observer_method);
+
+    # Read all attributes values - they have been set before by FHEM - and
+    # apply them without setting them again    
+    my %attributes = (%rcAttributes, %$rcswitchAttributes);
+    foreach my $attribute (keys %attributes) {
       if ($main::attr{$name}{$attribute}) {
-        Log3($hash, 4, "$attribute := $main::attr{$name}{$attribute}");
-        FRM_RC_apply_attribute($hash, $attribute, %rcswitchAttributes);
+        FRM_RC_apply_attribute($hash, $attribute, %$rcswitchAttributes);
       } else {
-        Log3($hash, 4, "$attribute is undefined");
-      }
+        Log3($hash, 5, "$name: $attribute is undefined");
+      }  
     }
   };
   return FRM_Catch($@) if $@;
   readingsSingleUpdate($hash, "state", "Initialized", 1);
+  Log3($hash, 5, "$name: initialization end");
   return undef;
 }
 
 sub
-FRM_RC_Attr($$$$$) {
-  my ($command, $name, $attribute, $value, $r) = @_;
-  my %rcswitchAttributes = %$r;
+FRM_RC_Attr($$$$$)
+{
+  my ($command, $name, $attribute, $value, $rcswitchAttributes) = @_;
   my $hash = $main::defs{$name};
+
   eval {
     if ($command eq "set") {
-      ARGUMENT_HANDLER: {
-        $attribute eq "IODev" and do {
-          if ($main::init_done and (!defined ($hash->{IODev}) or $hash->{IODev}->{NAME} ne $value)) {
-            FRM_Client_AssignIOPort($hash, $value);
-            FRM_Init_Client($hash) if (defined ($hash->{IODev}));
-          }
-          last;
-        };
-        defined($rcswitchAttributes{$attribute}) and do {
-          $main::attr{$name}{$attribute} = $value; # store value, but don't send it to the the board until everything is up
-          if ($main::init_done) {
-            FRM_RC_apply_attribute($hash, $attribute, %rcswitchAttributes);
-          }
-          last;
-        };
+      Log3($name, 4, "$name: $attribute := $value");
+      $main::attr{$name}{$attribute} = $value;
+      my %attributes = (%rcAttributes, %$rcswitchAttributes);
+      if (defined $attributes{$attribute}) {
+        FRM_RC_apply_attribute($hash, $attribute, %$rcswitchAttributes);
+      } else {
+      	Log3($name, 5, "$name: no further processing for $attribute");
       }
     }
   };
@@ -111,72 +108,87 @@ FRM_RC_Attr($$$$$) {
 }
 
 sub FRM_RC_register_observer {
-  my ( $pin, $observer, $context ) = @_;
-  $rc_observer[$pin] =  {
-      method  => $observer,
-      context => $context,
+  my ($hash, $pin, $observer_method) = @_;
+  my $name = $hash->{NAME};
+  $rc_observers[$pin] =  {
+      method  => $observer_method,
+      context => $hash,
   };
-  my $firmata = FRM_Client_FirmataDevice($context);
+  my $firmata = FRM_Client_FirmataDevice($hash);
   my $currentObserver = $firmata->{sysex_observer};
-  if (defined $currentObserver and $currentObserver->{method} eq \&FRM_RC_sysex_observer) {
-      main::Log3($context, 3, "Reusing existing sysex observer");
+  if (defined $currentObserver and $currentObserver->{method} eq \&FRM_RC_observe_sysex) {
+      Log3($hash, 4, "$name: Reusing existing sysex observer $currentObserver->{method}");
   } else {
     if (defined $currentObserver) {
-      main::Log3($context, 2, "Overwriting existing observer");
+      Log3($hash, 2, "$name: Overwriting existing sysex observer $currentObserver with "
+                     . \&FRM_RC_observe_sysex);
     } else {
-      main::Log3($context, 3, "Registering new sysex observer");
+      Log3($hash, 4, "$name: Registering new sysex observer");
     }
     $firmata->observe_sysex(\&FRM_RC_observe_sysex, undef);
   }
-
   return 1;
 }
 
-# The attribute is not applied within this module; instead, it is sent to the
-# microcontroller. When the change was successful, a response message will
-# arrive in the observer sub.
-sub FRM_RC_apply_attribute {
-  my ($hash, $attribute, %moduleAttributes) = @_;
-  my $name = $hash->{NAME};
-  
-  my %attributes = (%rcAttributes, %moduleAttributes);
+sub FRM_RC_unregister_observer {
+  my ($hash, $pin) = @_;
+  Log3($hash, 4, "$hash->{NAME}: removing observer");
+  $rc_observers[$pin] = undef;
+}
 
+# apply an attribute (whose value is already set)
+sub FRM_RC_apply_attribute {
+  my ($hash, $attribute, %rcswitchAttributes) = @_;
+  my $name = $hash->{NAME};
+
+  if (!$main::init_done) {
+    Log3($hash, 4, "$name: $attribute is not applied during initialization");
+    return undef;
+  }
+  
+  my %attributes = (%rcAttributes, %rcswitchAttributes);
   return "Unknown attribute $attribute, choose one of " . join(" ", sort keys %attributes)
     if(!defined($attributes{$attribute}));
 
-  if (defined($rcAttributes{$attribute})) {
-    my $pin = $main::attr{$hash->{NAME}}{$attribute};
-    Log3($hash, 5, "$hash->{NAME}: $attribute := $pin");
+  my $value = $main::attr{$name}{$attribute};
+  if ($attribute eq "IODev") {
+    if (!defined ($hash->{IODev}) or $hash->{IODev}->{NAME} ne $value) {
+      Log3($hash, 4, "$name: Initializing as firmata client");      
+      FRM_Client_AssignIOPort($hash, $value);
+      FRM_Init_Client($hash) if (defined ($hash->{IODev}));
+    }
+  } elsif (defined($rcAttributes{$attribute})) {
+    my $pin = $value;
     my $pinValue = $attributes{$attribute};
+    Log3($hash, 4, "$name: pin $pin := " . (!$pinValue ? "LOW" : "HIGH"));
     my $device = FRM_Client_FirmataDevice($hash);
     $device->pin_mode($pin, PIN_OUTPUT);
     $device->digital_write($pin, $pinValue);
   } else {
-    FRM_RC_set_parameter(FRM_Client_FirmataDevice($hash),
-                         $moduleAttributes{$attribute},
+    Log3($hash, 4, "$name: Sending $attribute := $value to the controller");
+    FRM_RC_set_parameter($hash,
+                         $rcswitchAttributes{$attribute},
                          $hash->{PIN},
-                         $main::attr{$name}{$attribute});
+                         $value);
   }
 }
 
 sub FRM_RC_set_parameter {
-  my ( $firmata, $subcommand, $pin, $value ) = @_;
-
+  my ( $hash, $subcommand, $pin, $value ) = @_;
   my @data = ($value & 0xFF, ($value>>8) & 0xFF);
-
-  return FRM_RC_send_message($firmata, $subcommand, $pin, @data);
+  return FRM_RC_send_message($hash, $subcommand, $pin, @data);
 }
 
 
 sub FRM_RC_observe_sysex {
-  my ( $sysex_message, undef ) = @_;
+  my ($sysex_message, undef) = @_;
   
   my $command            = $sysex_message->{command};
   my $sysex_message_data = $sysex_message->{data};
   my $subcommand         = shift @$sysex_message_data;
   my $pin                = shift @$sysex_message_data;
   my @data               = Device::Firmata::Protocol::unpack_from_7bit(@$sysex_message_data);
-  my $observer           = $rc_observer[$pin];
+  my $observer           = $rc_observers[$pin];
 
   if (defined $observer) {
     $observer->{method}( $observer->{context}, $subcommand, @data );
@@ -195,7 +207,7 @@ sub FRM_RC_get_tristate_bits {
   return map {$RC_TRISTATE_BITS{$_}} split("", uc($v));
 }
 
-sub FRM_RC_align {
+sub FRM_RC_get_tristate_byte {
   my @transferSymbols = @_;
   while ((@transferSymbols & 0x03) != 0) {
     push @transferSymbols, $RC_TRISTATE_BIT_VALUES->{TRISTATE_RESERVED};
@@ -204,16 +216,17 @@ sub FRM_RC_align {
 }
 
 sub FRM_RC_send_message {
-  my ($firmata, $subcommand, $pin, @data) = @_;
-  my $protocol = $firmata->{protocol};
-  my $protocol_version  = $protocol->{protocol_version};
-  my $protocol_commands = $COMMANDS->{$protocol_version};
-
-  my $message = $protocol->packet_sysex($protocol_commands->{RESERVED_COMMAND},
-                                        $subcommand,
-                                        $pin,
-                                        Device::Firmata::Protocol::pack_as_7bit(@data) );
-  return $firmata->{io}->data_write($message);
+  my ($hash, $subcommand, $pin, @data) = @_;
+  my $firmata = FRM_Client_FirmataDevice($hash);
+  my $command
+    = $COMMANDS->{$firmata->{protocol}->{protocol_version}}->{RESERVED_COMMAND};
+  Log3($hash, 4, "$hash->{NAME}: Sending $command $subcommand $pin "
+                   . join(" ", @data));
+  
+  return $firmata->sysex_send($command,
+                              $subcommand,
+                              $pin,
+                              Device::Firmata::Protocol::pack_as_7bit(@data));
 }
 
 1;

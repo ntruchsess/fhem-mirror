@@ -7,19 +7,16 @@ use warnings;
 #####################################
 
 use constant {
-  PINMODE_RCINPUT  => 11,
+  PINMODE_RCINPUT   => 11,
 
-  RCINPUT_TOLERANCE             => 0x31,
-  RCINPUT_RAW_DATA              => 0x32,
-  RCINPUT_MESSAGE               => 0x41,
+  RCINPUT_TOLERANCE => 0x31,
+  RCINPUT_RAW_DATA  => 0x32,
+  RCINPUT_MESSAGE   => 0x41,
 };
 
 my %rcswitchAttributes = (
   "tolerance"        => RCINPUT_TOLERANCE,
   "rawDataEnabled"   => RCINPUT_RAW_DATA,
-);
-
-my %moduleAttributes = (
 );
 
 sub
@@ -28,14 +25,13 @@ FRM_RCIN_Initialize($)
   my ($hash) = @_;
 
   $hash->{DefFn}     = "FRM_Client_Define";
-  $hash->{UndefFn}   = "FRM_Client_Undef";
+  $hash->{UndefFn}   = "FRM_RC_UnDef";
   $hash->{InitFn}    = "FRM_RCIN_Init";
   $hash->{AttrFn}    = "FRM_RCIN_Attr";
   
   LoadModule("FRM_RC");
 
-  $hash->{AttrList}  = "IODev"
-                       . " " . join(" ", keys %rcswitchAttributes)
+  $hash->{AttrList}  = join(" ", keys %rcswitchAttributes)
                        . " " . join(" ", keys %main::rcAttributes)
                        . " " . $main::readingFnAttributes;
 }
@@ -44,7 +40,8 @@ sub
 FRM_RCIN_Init($$)
 {
   my ($hash, $args) = @_;
-  FRM_RC_Init($hash, PINMODE_RCINPUT, \&FRM_RCIN_handle_rc_response, \%rcswitchAttributes, \%moduleAttributes, $args);
+  FRM_RC_Init($hash, PINMODE_RCINPUT, \&FRM_RCIN_handle_rc_response,
+              \%rcswitchAttributes, $args);
 }
 
 sub
@@ -73,10 +70,10 @@ sub FRM_RCIN_handle_rc_response {
       push @data, (shift @data) + ((shift @data) << 8);
   }
 
-  FRM_RCIN_observer($command, \@data, $hash);
+  FRM_RCIN_notify($command, \@data, $hash);
 }
 
-sub FRM_RCIN_observer
+sub FRM_RCIN_notify
 {
   my ( $key, $value, $hash ) = @_;
   my $name = $hash->{NAME};
@@ -84,7 +81,7 @@ sub FRM_RCIN_observer
   my %a = reverse(%rcswitchAttributes);
   my $attrName = $a{$key};
   
-COMMAND_HANDLER: {
+  COMMAND_HANDLER: {
     ($key eq RCINPUT_MESSAGE) and do {
 
       my ($longCode, $bitCount, $delay, $protocol, $tristateCode, $rawData) = @$value;
@@ -93,7 +90,7 @@ COMMAND_HANDLER: {
 
       Log3($hash, 4, "message: " . join(", ", @$value));
       my $verboseLevel = $main::attr{$name}{"verbose"};
-      if (defined $verboseLevel and $verboseLevel > 3) {
+      if (defined $verboseLevel and $verboseLevel > 3 and defined $rawHex and $rawHex) {
         my $s = $rawHex;
         my $rawBlock = "";
         while ($s) {
@@ -122,7 +119,7 @@ COMMAND_HANDLER: {
       # TODO refresh web GUI somehow?
       last;
     };
-};
+  };
 }
 
 sub FRM_RCIN_long_to_tristate_code {

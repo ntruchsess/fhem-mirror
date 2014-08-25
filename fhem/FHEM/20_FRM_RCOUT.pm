@@ -48,7 +48,7 @@ FRM_RCOUT_Initialize($)
   my ($hash) = @_;
 
   $hash->{DefFn}     = "FRM_Client_Define";
-  $hash->{UndefFn}   = "FRM_Client_Undef";
+  $hash->{UndefFn}   = "FRM_RC_UnDef";
   $hash->{InitFn}    = "FRM_RCOUT_Init";
   $hash->{AttrFn}    = "FRM_RCOUT_Attr";
   $hash->{GetFn}     = "FRM_RCOUT_Get";
@@ -56,10 +56,9 @@ FRM_RCOUT_Initialize($)
  
   LoadModule("FRM_RC");
   
-  $hash->{AttrList}  = "IODev"
-                         . " " . join(" ", keys %rcswitchAttributes)
-                         . " " . join(" ", keys %moduleAttributes)
+  $hash->{AttrList}  = join(" ", keys %rcswitchAttributes)
                          . " " . join(" ", keys %main::rcAttributes)
+                         . " " . join(" ", keys %moduleAttributes)
                          . " " . $main::readingFnAttributes;
 
   $hash->{Clients} = join (':', @clients);
@@ -69,28 +68,28 @@ sub
 FRM_RCOUT_Init($$)
 {
   my ($hash, $args) = @_;
-  FRM_RC_Init($hash, PINMODE_RCOUTPUT, \&FRM_RCOUT_handle_rc_response, \%rcswitchAttributes, \%moduleAttributes, $args);
+  FRM_RC_Init($hash, PINMODE_RCOUTPUT, \&FRM_RCOUT_handle_rc_response,
+              \%rcswitchAttributes, $args);
 }
 
 sub
 FRM_RCOUT_Attr($$$$)
 {
-  my ($command, $name, $attribute, $value) = @_;
-  return FRM_RC_Attr($command, $name, $attribute, $value, \%rcswitchAttributes);
+  return FRM_RC_Attr(@_, \%rcswitchAttributes);
 }
 
 # FRM_RCOUT_Get behaves as CUL_Get so that 10_IT can use FRM_RCOUT as IODev
 sub
 FRM_RCOUT_Get($@)
 {
-  my ($self, $name, $get, $codeCommand) = @_;
+  my ($hash, $name, $get, $codeCommand) = @_;
 
   if(!defined($get) or !defined($gets{$get})) {
     return undef;
   }
 
   my ($code) = $codeCommand =~ /is([01fF]+)/;
-  my $set = FRM_RCOUT_Set($self, $self->{NAME}, "tristateCode", $code);
+  my $set = FRM_RCOUT_Set($hash, $hash->{NAME}, "tristateCode", $code);
   return "raw => $codeCommand";
 }
 
@@ -115,7 +114,7 @@ FRM_RCOUT_Set($@)
     } elsif ($command eq RCOUTPUT_CODE_CHAR) {
         @code = map {ord($_)} split("", $a[2]);
     }
-     FRM_RCOUT_send_code(FRM_Client_FirmataDevice($hash), $command, $hash->{PIN}, @code);
+     FRM_RCOUT_send_code($hash, $command, $hash->{PIN}, @code);
   };
   return $@;
 }
@@ -147,10 +146,10 @@ sub FRM_RCOUT_handle_rc_response {
       push @data, (shift @data) + ((shift @data) << 8);
   }
   
-  FRM_RCOUT_observer($command, \@data, $hash);
+  FRM_RCOUT_notify($command, \@data, $hash);
 }
 
-sub FRM_RCOUT_observer
+sub FRM_RCOUT_notify
 {
   my ( $key, $data, $hash ) = @_;
   my $name = $hash->{NAME};
@@ -160,7 +159,7 @@ sub FRM_RCOUT_observer
   my $subcommand = $s{$key};
   my $attrName = $a{$key};
   
-COMMAND_HANDLER: {
+  COMMAND_HANDLER: {
     defined($subcommand) and do {
       if ("tristateCode" eq $subcommand) {
         my $tristateCode = shift @$data;
@@ -174,7 +173,7 @@ COMMAND_HANDLER: {
         readingsBulkUpdate($hash, $subcommand, $longCode);
         readingsBulkUpdate($hash, "bitCount", $bitCount);
         readingsEndUpdate($hash, 1);
-      } elsif ("charCode" eq $subcommand || "tristateString" eq $subcommand) {
+      } elsif ("charCode" eq $subcommand) {
         my $charCode = shift @$data; 
         Log3($name, 4, "$subcommand: $charCode");
         readingsSingleUpdate($hash, $subcommand, $charCode, 1);
@@ -191,20 +190,18 @@ COMMAND_HANDLER: {
       # TODO refresh web GUI somehow?
       last;
     };
-};
+  };
 }
 
 sub FRM_RCOUT_send_code {
-  my ( $firmata, $subcommand, $pin, @code ) = @_;
-  my $protocol = $firmata->{protocol};
-main::Log3("sender", 3, "pin $pin: " . join(",", @code));  
+  my ( $hash, $subcommand, $pin, @code ) = @_;
   my @transferCode = ();
   if ($subcommand eq RCOUTPUT_CODE_PACKED_TRISTATE) {
   
     # @code is a list of tristate bits.
     # 4 tristate bits per byte will be sent to the microcontroller;
     # the last byte has to be filled up with value-less data
-    my @transferSymbols = FRM_RC_align(@code);
+    my @transferSymbols = FRM_RC_get_tristate_byte(@code);
 
     # pack each 4 tristate bits into 1 byte
     for (my $i = 0; $i < @transferSymbols; $i++) {
@@ -230,7 +227,7 @@ main::Log3("sender", 3, "pin $pin: " . join(",", @code));
     die "Unsupported subcommand $subcommand";
   }
   
-  return FRM_RC_send_message($firmata, $subcommand, $pin, @transferCode);
+  return FRM_RC_send_message($hash,  $subcommand, $pin, @transferCode);
 }
 
 # extract tristate bit from byte (containing 4 tristate bits)
