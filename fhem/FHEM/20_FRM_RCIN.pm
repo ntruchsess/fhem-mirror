@@ -139,6 +139,7 @@ sub FRM_RCIN_long_to_tristate_code {
 1;
 
 =pod
+
 =begin html
 
 <a name="FRM_RCIN"></a>
@@ -146,14 +147,13 @@ sub FRM_RCIN_long_to_tristate_code {
   <p>
    Represents a pin of an <a href="http://www.arduino.cc">Arduino</a> running
    <a href="http://www.firmata.org">Firmata</a> configured to receive data via
-   the RCSwitch library.<br />
+   the <a href="https://code.google.com/p/rc-switch/">RCSwitch</a> library.<br />
    Requires a defined <a href="#FRM">FRM</a>-device to work.<br><br> 
   </p>
   <a name="FRM_RCINdefine"></a>
   <h4>Define</h4>
-   <p>
-    <code>define &lt;name&gt; FRM_RCIN &lt;pin&gt;</code> <br/>
-    Defines the FRM_RCIN device. &lt;pin&gt> is the arduino-pin to use.
+   <p><pre>    define &lt;name&gt; FRM_RCIN &lt;pin&gt;</pre> <br/>
+    Defines the FRM_RCIN device. <code>&lt;pin&gt</code> is the arduino-pin to use.
    </p>
   <a name="FRM_RCINset"></a>
   <h4>Set</h4>
@@ -168,20 +168,22 @@ sub FRM_RCIN_long_to_tristate_code {
   <a name="FRM_RCINattr"></a>
   <h4>Attributes</h4>
   <ul>
-    <li><a href="#IODev">IODev</a><br/>
-      Specify which <a href="#FRM">FRM</a> to use.
+    <li>
+     <a href="#IODev">IODev</a>: specify which <a href="#FRM">FRM</a> device
+     to use.
     </li>
     <li>
       <code>tolerance</code>: RCSwitch parameter <code>receiveTolerance</code> in percent
-      (default: 60; see RCSwitch for details)
+      (default: 60; see RCSwitch documentation for details)
     </li>
     <li>
       <code>rawDataEnabled</code>: If set to 1, an additional reading
       <code>rawData</code> will be created, containing the received data in raw
       format (default: 0 which means that reporting of raw data is disabled)
     </li>
-    <li><a href="#eventMap">eventMap</a><br></li>
-    <li><a href="#readingFnAttributes">readingFnAttributes</a><br></li>
+    <li><a href="#FRM_RCattr">FRM_RC attributes</a></li>
+    <li><a href="#eventMap">eventMap</a></li>
+    <li><a href="#readingFnAttributes">readingFnAttributes</a></li>
     </ul>
 <br>
 

@@ -4,7 +4,7 @@ package main;
 use strict;
 use warnings;
 
-#add FHEM/lib to @INC if it's not allready included. Should rather be in fhem.pl than here though...
+#add FHEM/lib to @INC if it's not already included. Should rather be in fhem.pl than here though...
 BEGIN {
 	if (!grep(/FHEM\/lib$/,@INC)) {
 		foreach my $inc (grep(/FHEM$/,@INC)) {
@@ -217,3 +217,40 @@ sub FRM_RC_send_message {
 }
 
 1;
+
+
+=pod
+
+=begin html
+
+<a name="FRM_RC"></a>
+<h3>FRM_RC</h3>
+  <p>
+   Support module for <a href="#FRM_RCIN">FRM_RCIN</a> and
+   <a href="#FRM_RCOUT">FRM_RCOUT</a>.
+  </p>
+  <a name="FRM_RCattr"></a>
+  <h4>Attributes</h4>
+  <ul>
+    <li>
+      <code>vccPin</code>: Arduino pin that is used as voltage source for the
+      RC device.
+    </li>
+    <li>
+      <code>gndPin</code>: Arduino pin that is used as ground for the RC device.
+    </li>
+  </ul>
+  <p>
+   These attributes allow an RC sender or receiver to be plugged in directly
+   into the Arduino pin sockets, without additional wiring.<br />
+   Example:
+  </p>
+  <pre>
+    define sender FRM_RCOUT 5
+    attr sender vccPin 6
+    attr sender gndPin 7
+  </pre>
+<br />
+
+=end html
+=cut

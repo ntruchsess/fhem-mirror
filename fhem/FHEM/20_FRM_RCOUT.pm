@@ -254,32 +254,35 @@ sub FRM_RCOUT_set_tristate_bit {
 1;
 
 =pod
+
 =begin html
 
 <a name="FRM_RCOUT"></a>
 <h3>FRM_RCOUT</h3>
   <p>
     Represents a pin of an <a href="http://www.arduino.cc">Arduino</a> running
-    <a href="http://www.firmata.org">Firmata</a> configured to send data via the
-    RCSwitch library.<br/>
+    <a href="http://www.firmata.org">Firmata</a> configured to send data via
+    the <a href="https://code.google.com/p/rc-switch/">RCSwitch</a> library.
+    <br/>
     Requires a defined <a href="#FRM">FRM</a>-device to work.
   </p>
   <a name="FRM_RCOUTdefine" />
   <h4>Define</h4>
   <p>
-    <code>define &lt;name&gt; FRM_RCOUT &lt;pin&gt;</code><br/>
-    Defines the FRM_RCOUT device. &lt;pin&gt; is the arduino-pin to use.
+    <pre>    define &lt;name&gt; FRM_RCOUT &lt;pin&gt;</pre> <br />
+    Defines the FRM_RCOUT device. <code>&lt;pin&gt;</code> is the arduino-pin to
+    use.
   </p>
   <a name="FRM_RCOUTset" />
   <h4>Set</h4>
   <ul>
    <li>
      <code>set &lt;name&gt; tristateCode &lt;code&gt;</code><br/>
-     Sends a tristate code, e.g. <code>00F0FF0FFF0F<code>
+     Sends a tristate code, e.g. <code>00F0FF0FFF0F</code>
    </li>
    <li>
-     <code>set &lt;name&gt; longCode &lt;code&gt; &lt;bitCount&gt;</code><br/>
-     Sends a code as long decimal, e.g. <code>282961 24<code>.
+     <code>set &lt;name&gt; longCode &lt;code&gt; &lt;bitCount&gt;</code> <br />
+     Sends a code as long decimal, e.g. <code>282961 24</code>.
      The first argument gives a bit pattern as long (32 bits),
      the second argument gives the number of bits that will actually be sent.
      For example, <code>5 8</code> will be sent as <code>0000 0101</code>
@@ -290,38 +293,54 @@ sub FRM_RCOUT_set_tristate_bit {
    </li>
    <li>
      <code>set &lt;name&gt; charCode &lt;code&gt;</code><br/>
-     sends a character code, e.g. <code>001011011101<code>
+     sends a character code, e.g. <code>001011011101</code>
    </li>
   </ul>
+
   <a name="FRM_RCOUTget" />
   <h4>Get</h4>
-    N/A
-  <br/>
+  <ul>
+   <li>
+     <code>get &lt;name&gt; raw is&lt;code&gt;</code> <br />
+     Sends a tristate code, e.g. <code>00F0FF0FFF0F</code>. This <em>get</em>
+     is for compatibility to the <a href="#CUL">CUL</a> module. It allows a
+     FRM_RCOUT device to be used as IODev for an <a href="#IT">IT</a> device.
+     Example:
+     <pre>
+       define firmata FRM COM9@57600
+       define sender FRM_RCOUT 4
+       attr sender IODev firmata
+       define switch IT 00F0FF0FFF 0F 00
+       attr switch IODev sender
+     </pre>
+   </li>
+  </ul>
+
   <a name="FRM_RCOUTattr" />
   <h4>Attributes</h4>
   <ul>
     <li>
-      <a href="#IODev">IODev</a><br/>
-      Specify which <a href="#FRM">FRM</a> to use.
+      <a href="#IODev">IODev</a>: specify which <a href="#FRM">FRM</a> to use.
     </li>
     <li>
       <code>protocol</code>: RCSwitch parameter <code>protocol</code>
-      (default: 1; see RCSwitch for details)
+      (default: 1; see RCSwitch documentation for details)
     </li>
     <li>
-      <code>pulseLength: RCSwitch parameter <code>pulseLength</code>
-      (default: 350; see RCSwitch for details)</code>
+      <code>pulseLength</code>: RCSwitch parameter <code>pulseLength</code>
+      (default: 350; see RCSwitch documentation for details)</code>
     </li>
     <li>
-      <code>repeatTransmit: RCSwitch parameter <code>repeatTransmit</code>
-      (default: 10; see RCSwitch for details)</code>
+      <code>repeatTransmit</code>: RCSwitch parameter <code>repeatTransmit</code>
+      (default: 10; see RCSwitch documentation for details)</code>
     </li>
     <li>
-      <code>defaultBitCount: Default for the <code>bitCount</code> parameter
+      <code>defaultBitCount</code>: Default for the <code>bitCount</code> parameter
       of the <code>longCode</code> command (default: 24) 
     </li>
-    <li><a href="#eventMap">eventMap</a><br></li>
-    <li><a href="#readingFnAttributes">readingFnAttributes</a><br></li>
+    <li><a href="#FRM_RCattr">FRM_RC attributes</a></li>
+    <li><a href="#eventMap">eventMap</a></li>
+    <li><a href="#readingFnAttributes">readingFnAttributes</a></li>
   </ul>
 
 =end html
