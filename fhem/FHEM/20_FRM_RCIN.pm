@@ -1,10 +1,9 @@
-#############################################
 package main;
 
 use strict;
 use warnings;
 
-#####################################
+our ($readingFnAttributes, %attr);
 
 use constant {
   PINMODE_RCINPUT   => 11,
@@ -14,26 +13,26 @@ use constant {
   RCINPUT_MESSAGE   => 0x41,
 };
 
-my %rcswitchAttributes = (
-  "tolerance"        => RCINPUT_TOLERANCE,
-  "rawDataEnabled"   => RCINPUT_RAW_DATA,
-);
+use constant RCIN_PARAMETERS => {
+  tolerance => RCINPUT_TOLERANCE,
+  rawData   => RCINPUT_RAW_DATA,
+};
 
 sub
 FRM_RCIN_Initialize($)
 {
   my ($hash) = @_;
 
-  $hash->{DefFn}     = "FRM_Client_Define";
-  $hash->{UndefFn}   = "FRM_RC_UnDef";
-  $hash->{InitFn}    = "FRM_RCIN_Init";
-  $hash->{AttrFn}    = "FRM_RCIN_Attr";
+  $hash->{DefFn}     = 'FRM_Client_Define';
+  $hash->{UndefFn}   = 'FRM_RC_UnDef';
+  $hash->{InitFn}    = 'FRM_RCIN_Init';
+  $hash->{AttrFn}    = 'FRM_RCIN_Attr';
   
-  LoadModule("FRM_RC");
+  LoadModule('FRM_RC');
 
-  $hash->{AttrList}  = join(" ", keys %rcswitchAttributes)
-                       . " " . join(" ", keys %main::rcAttributes)
-                       . " " . $main::readingFnAttributes;
+  $hash->{AttrList} = join(' ', FRM_RCIN_get_attributes(),
+                                keys %{RC_ATTRIBUTES()},
+                                $readingFnAttributes);
 }
 
 sub
@@ -41,13 +40,15 @@ FRM_RCIN_Init($$)
 {
   my ($hash, $args) = @_;
   FRM_RC_Init($hash, PINMODE_RCINPUT, \&FRM_RCIN_handle_rc_response,
-              \%rcswitchAttributes, $args);
+              RCIN_PARAMETERS, $args);
 }
 
 sub
 FRM_RCIN_Attr($$$$) {
   my ($command, $name, $attribute, $value) = @_;
-  return FRM_RC_Attr($command, $name, $attribute, $value, \%rcswitchAttributes);
+  return FRM_RC_Attr($command, $name, $attribute,
+                     FRM_RCIN_get_internal_value($attribute, $value),
+                     RCIN_PARAMETERS);
 }
 
 sub FRM_RCIN_handle_rc_response {
@@ -78,21 +79,21 @@ sub FRM_RCIN_notify
   my ( $key, $value, $hash ) = @_;
   my $name = $hash->{NAME};
   
-  my %a = reverse(%rcswitchAttributes);
+  my %a = reverse(%{RCIN_PARAMETERS()});
   my $attrName = $a{$key};
   
   COMMAND_HANDLER: {
     ($key eq RCINPUT_MESSAGE) and do {
 
       my ($longCode, $bitCount, $delay, $protocol, $tristateCode, $rawData) = @$value;
-      my $rawInt = join(" ", @$rawData);
-      my $rawHex = join(" ", map { sprintf "%04X", $_ } @$rawData);
+      my $rawInt = join(' ', @$rawData);
+      my $rawHex = join(' ', map { sprintf "%04X", $_ } @$rawData);
 
-      Log3($hash, 4, "message: " . join(", ", @$value));
-      my $verboseLevel = $main::attr{$name}{"verbose"};
+      Log3($hash, 4, 'message: ' . join(', ', @$value));
+      my $verboseLevel = $attr{$name}{'verbose'};
       if (defined $verboseLevel and $verboseLevel > 3 and defined $rawHex and $rawHex) {
         my $s = $rawHex;
-        my $rawBlock = "";
+        my $rawBlock = '';
         while ($s) {
           $rawBlock .= substr($s, 0, 40, '')."\n";
         }
@@ -105,17 +106,17 @@ sub FRM_RCIN_notify
       readingsBulkUpdate($hash, 'bitCount', $bitCount);
       readingsBulkUpdate($hash, 'delay', $delay);
       readingsBulkUpdate($hash, 'protocol', $protocol);
-      if (defined $main::attr{$name}{'rawDataEnabled'} and $main::attr{$name}{'rawDataEnabled'} ne 0) {
+      if (FRM_RCIN_is_rawdata_enabled($name)) {
         readingsBulkUpdate($hash, 'rawData', $rawHex);
       }
       readingsEndUpdate($hash, 1);
       last;
     };
     defined($attrName) and do {
-      $value = shift @$value;
+      $value = FRM_RCIN_get_user_value($attrName, shift @$value);
       Log3($name, 4, "$attrName: $value");
-
-      $main::attr{$name}{$attrName}=$value;
+    
+      $attr{$name}{$attrName}=$value;
       # TODO refresh web GUI somehow?
       last;
     };
@@ -132,6 +133,32 @@ sub FRM_RCIN_long_to_tristate_code {
   return $tristateCode;
 }
 
+sub FRM_RCIN_get_attributes {
+  return map({$_ eq 'rawData' ? $_ . ':enabled,disabled': $_}
+             keys %{RCIN_PARAMETERS()});
+}
+
+sub FRM_RCIN_get_internal_value($$) {
+  my ($attribute, $value) = @_;
+  if ($attribute eq 'rawData') {
+    $value = $value eq 'enabled' ? 1 : 0;
+  }
+  return $value;
+}
+
+sub FRM_RCIN_get_user_value($$) {
+  my ($attribute, $value) = @_;
+  if ($attribute eq 'rawData') {
+    $value = $value ? 'enabled' : 'disabled'; 
+  }
+  return $value;
+}
+
+sub FRM_RCIN_is_rawdata_enabled($) {
+  my $name = shift;
+  my $rawData = $attr{$name}{'rawData'};
+  return defined $rawData and $rawData eq 'enabled';	
+}
 
 1;
 

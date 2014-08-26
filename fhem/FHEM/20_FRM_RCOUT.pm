@@ -1,10 +1,9 @@
-#############################################
 package main;
 
 use strict;
 use warnings;
 
-#####################################
+our ($readingFnAttributes, %attr);
 
 use constant {
   PINMODE_RCOUTPUT              => 10,
@@ -19,49 +18,54 @@ use constant {
   RCOUTPUT_CODE_PACKED_TRISTATE => 0x28,
 };
 
+use constant RCOUT_GETS             => { 
+  raw => '',
+};
 
-my %gets = (
-  "raw" => 1,
-);
+use constant RCOUT_SETS             => {
+  tristateCode     => RCOUTPUT_CODE_PACKED_TRISTATE,
+  longCode         => RCOUTPUT_CODE_LONG,
+  charCode         => RCOUTPUT_CODE_CHAR,
+};
+use constant RCOUT_SET_NAMES        => { 
+  reverse(%{RCOUT_SETS()}),
+};
 
-my %sets = (
-  "tristateCode"     => RCOUTPUT_CODE_PACKED_TRISTATE,
-  "longCode"         => RCOUTPUT_CODE_LONG,
-  "charCode"         => RCOUTPUT_CODE_CHAR,
-);
+use constant RCOUT_PARAMETERS       => {
+  protocol         => RCOUTPUT_PROTOCOL,
+  pulseLength      => RCOUTPUT_PULSE_LENGTH,
+  repeatTransmit   => RCOUTPUT_REPEAT_TRANSMIT,
+};
+use constant RCOUT_PARAMETER_NAMES  => { 
+  reverse(%{RCOUT_PARAMETERS()}),
+};
 
-my %rcswitchAttributes = (
-  "protocol"         => RCOUTPUT_PROTOCOL,
-  "pulseLength"      => RCOUTPUT_PULSE_LENGTH,
-  "repeatTransmit"   => RCOUTPUT_REPEAT_TRANSMIT,
-);
-
-my %moduleAttributes = (
+use constant RCOUT_ATTRIBUTES       => {
   defaultBitCount  => 24,
-);
+};
 
-my @clients = qw( IT );
+use constant CLIENTS                => qw( IT );
+
 
 sub
 FRM_RCOUT_Initialize($)
 {
   my ($hash) = @_;
 
-  $hash->{DefFn}     = "FRM_Client_Define";
-  $hash->{UndefFn}   = "FRM_RC_UnDef";
-  $hash->{InitFn}    = "FRM_RCOUT_Init";
-  $hash->{AttrFn}    = "FRM_RCOUT_Attr";
-  $hash->{GetFn}     = "FRM_RCOUT_Get";
-  $hash->{SetFn}     = "FRM_RCOUT_Set";
- 
-  LoadModule("FRM_RC");
-  
-  $hash->{AttrList}  = join(" ", keys %rcswitchAttributes)
-                         . " " . join(" ", keys %main::rcAttributes)
-                         . " " . join(" ", keys %moduleAttributes)
-                         . " " . $main::readingFnAttributes;
+  $hash->{DefFn}     = 'FRM_Client_Define';
+  $hash->{UndefFn}   = 'FRM_RC_UnDef';
+  $hash->{InitFn}    = 'FRM_RCOUT_Init';
+  $hash->{AttrFn}    = 'FRM_RCOUT_Attr';
+  $hash->{GetFn}     = 'FRM_RCOUT_Get';
+  $hash->{SetFn}     = 'FRM_RCOUT_Set'; 
 
-  $hash->{Clients} = join (':', @clients);
+  LoadModule('FRM_RC');
+
+  $hash->{AttrList} = join(' ', keys %{RCOUT_PARAMETERS()},
+                                keys %{RC_ATTRIBUTES()},
+                                keys %{RCOUT_ATTRIBUTES()},
+                                $readingFnAttributes);
+  $hash->{Clients}  = join (':', CLIENTS);
 }
 
 sub
@@ -69,13 +73,13 @@ FRM_RCOUT_Init($$)
 {
   my ($hash, $args) = @_;
   FRM_RC_Init($hash, PINMODE_RCOUTPUT, \&FRM_RCOUT_handle_rc_response,
-              \%rcswitchAttributes, $args);
+              RCOUT_PARAMETERS, $args);
 }
 
 sub
 FRM_RCOUT_Attr($$$$)
 {
-  return FRM_RC_Attr(@_, \%rcswitchAttributes);
+  return FRM_RC_Attr(@_, RCOUT_PARAMETERS);
 }
 
 # FRM_RCOUT_Get behaves as CUL_Get so that 10_IT can use FRM_RCOUT as IODev
@@ -84,12 +88,12 @@ FRM_RCOUT_Get($@)
 {
   my ($hash, $name, $get, $codeCommand) = @_;
 
-  if(!defined($get) or !defined($gets{$get})) {
+  if(!defined($get) or !defined(RCOUT_GETS->{$get})) {
     return undef;
   }
 
   my ($code) = $codeCommand =~ /is([01fF]+)/;
-  my $set = FRM_RCOUT_Set($hash, $hash->{NAME}, "tristateCode", $code);
+  my $set = FRM_RCOUT_Set($hash, $hash->{NAME}, 'tristateCode', $code);
   return "raw => $codeCommand";
 }
 
@@ -97,9 +101,9 @@ sub
 FRM_RCOUT_Set($@)
 {
   my ($hash, @a) = @_;
-  return "Need at least 2 parameters" if(@a < 2);
-  my $command = $sets{$a[1]};
-  return "Unknown argument $a[1], choose one of " . join(" ", sort keys %sets)
+  return 'Need at least 2 parameters' if(@a < 2);
+  my $command = RCOUT_SETS->{$a[1]};
+  return "Unknown argument $a[1], choose one of " . join(' ', sort keys %{RCOUT_PARAMETERS()})
     if(!defined($command));
   my @code;
   eval {
@@ -108,11 +112,11 @@ FRM_RCOUT_Set($@)
     } elsif ($command eq RCOUTPUT_CODE_LONG) {
       my $value = $a[2];
       my $bitCount = $a[3];
-      $bitCount = $main::attr{$hash->{NAME}}{defaultBitCount} if not defined $bitCount;
-      $bitCount = $moduleAttributes{defaultBitCount} if not defined $bitCount; # if defaultBitCount was deleted
+      $bitCount = $attr{$hash->{NAME}}{defaultBitCount} if not defined $bitCount;
+      $bitCount = RCOUT_ATTRIBUTES->{defaultBitCount} if not defined $bitCount; # if defaultBitCount was deleted
       @code = ($bitCount, $value);
     } elsif ($command eq RCOUTPUT_CODE_CHAR) {
-        @code = map {ord($_)} split("", $a[2]);
+        @code = map {ord($_)} split('', $a[2]);
     }
      FRM_RCOUT_send_code($hash, $command, $hash->{PIN}, @code);
   };
@@ -140,7 +144,7 @@ sub FRM_RCOUT_handle_rc_response {
                + ((shift @data) << 16) + ((shift @data) << 24);
 
   } elsif ($command eq RCOUTPUT_CODE_CHAR) {
-    my $charCode = join("", map { chr($_); } @data);
+    my $charCode = join('', map { chr($_); } @data);
     @data = ($charCode);
   } else { # parameter as int
       push @data, (shift @data) + ((shift @data) << 8);
@@ -153,32 +157,29 @@ sub FRM_RCOUT_notify
 {
   my ( $key, $data, $hash ) = @_;
   my $name = $hash->{NAME};
-  
-  my %s = reverse(%sets);
-  my %a = reverse(%rcswitchAttributes);
-  my $subcommand = $s{$key};
-  my $attrName = $a{$key};
+  my $subcommand  = RCOUT_SET_NAMES->{$key};
+  my $attrName    = RCOUT_PARAMETER_NAMES->{$key};
   
   COMMAND_HANDLER: {
     defined($subcommand) and do {
-      if ("tristateCode" eq $subcommand) {
+      if ('tristateCode' eq $subcommand) {
         my $tristateCode = shift @$data;
         Log3($name, 4, "$subcommand: $tristateCode");
         readingsSingleUpdate($hash, $subcommand, $tristateCode, 1);
-      } elsif ("longCode" eq $subcommand) {
+      } elsif ('longCode' eq $subcommand) {
         my $bitCount = shift @$data;
         my $longCode  = shift @$data;
         Log3($name, 4, "$subcommand: $longCode/$bitCount");
         readingsBeginUpdate($hash);
         readingsBulkUpdate($hash, $subcommand, $longCode);
-        readingsBulkUpdate($hash, "bitCount", $bitCount);
+        readingsBulkUpdate($hash, 'bitCount', $bitCount);
         readingsEndUpdate($hash, 1);
-      } elsif ("charCode" eq $subcommand) {
+      } elsif ('charCode' eq $subcommand) {
         my $charCode = shift @$data; 
         Log3($name, 4, "$subcommand: $charCode");
         readingsSingleUpdate($hash, $subcommand, $charCode, 1);
       } else {
-        readingsSingleUpdate($hash, "state", "unknown subcommand $subcommand", 1);
+        readingsSingleUpdate($hash, 'state', "unknown subcommand $subcommand", 1);
       }
       last;
     };
@@ -186,7 +187,7 @@ sub FRM_RCOUT_notify
       my $value = shift @$data;
       Log3($name, 4, "$attrName: $value");
 
-      $main::attr{$name}{$attrName}=$value;
+      $attr{$name}{$attrName}=$value;
       # TODO refresh web GUI somehow?
       last;
     };

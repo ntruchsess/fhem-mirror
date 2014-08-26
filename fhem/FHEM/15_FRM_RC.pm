@@ -1,42 +1,40 @@
-#############################################
 package main;
 
 use strict;
 use warnings;
 
-use Device::Firmata::Constants  qw/ :all /;
+use Device::Firmata::Constants qw(PIN_OUTPUT PIN_LOW PIN_HIGH $COMMANDS);
+our (%attr, %defs, $init_done);
 
-#####################################
 
-
-our %rcAttributes = (
-  "IODev"            => "",
-  "vccPin"           => PIN_HIGH,
-  "gndPin"           => PIN_LOW,
-);
-
-my $RC_TRISTATE_BIT_VALUES = {
+use constant RC_ATTRIBUTES          => {
+  'IODev'            => '',
+  'vccPin'           => PIN_HIGH,
+  'gndPin'           => PIN_LOW,
+};
+	
+use constant RC_TRISTATE_BIT_VALUES => {
   TRISTATE_0        => 0,
   TRISTATE_F        => 1,
   TRISTATE_RESERVED => 2,
   TRISTATE_1        => 3,
 };
 
-my $RC_TRISTATE_CHARS = {
-  $RC_TRISTATE_BIT_VALUES->{TRISTATE_0} => "0",
-  $RC_TRISTATE_BIT_VALUES->{TRISTATE_F} => "F",
-  $RC_TRISTATE_BIT_VALUES->{TRISTATE_1} => "1",
+use constant RC_TRISTATE_CHARS      => {
+  RC_TRISTATE_BIT_VALUES->{TRISTATE_0} => '0',
+  RC_TRISTATE_BIT_VALUES->{TRISTATE_F} => 'F',
+  RC_TRISTATE_BIT_VALUES->{TRISTATE_1} => '1',
 };
 
-my %RC_TRISTATE_BITS = reverse %$RC_TRISTATE_CHARS;
+use constant RC_TRISTATE_BITS      => { reverse(%{RC_TRISTATE_CHARS()}) };
 
-my @rc_observers = [];
+my @rc_observers = ();
 
 
 sub
 FRM_RC_Initialize($)
 {
-  LoadModule("FRM");
+  LoadModule('FRM');
 }
 
 sub
@@ -66,9 +64,9 @@ FRM_RC_Init($$$$$)
 
     # Read all attributes values - they have been set before by FHEM - and
     # apply them without setting them again    
-    my %attributes = (%rcAttributes, %$rcswitchAttributes);
+    my %attributes = (%{RC_ATTRIBUTES()}, %$rcswitchAttributes);
     foreach my $attribute (keys %attributes) {
-      if ($main::attr{$name}{$attribute}) {
+      if ($attr{$name}{$attribute}) {
         FRM_RC_apply_attribute($hash, $attribute, %$rcswitchAttributes);
       } else {
         Log3($hash, 5, "$name: $attribute is undefined");
@@ -76,7 +74,7 @@ FRM_RC_Init($$$$$)
     }
   };
   return FRM_Catch($@) if $@;
-  readingsSingleUpdate($hash, "state", "Initialized", 1);
+  readingsSingleUpdate($hash, 'state', 'Initialized', 1);
   Log3($hash, 5, "$name: initialization end");
   return undef;
 }
@@ -85,13 +83,13 @@ sub
 FRM_RC_Attr($$$$$)
 {
   my ($command, $name, $attribute, $value, $rcswitchAttributes) = @_;
-  my $hash = $main::defs{$name};
+  my $hash = $defs{$name};
 
   eval {
-    if ($command eq "set") {
+    if ($command eq 'set') {
       Log3($name, 4, "$name: $attribute := $value");
-      $main::attr{$name}{$attribute} = $value;
-      my %attributes = (%rcAttributes, %$rcswitchAttributes);
+      $attr{$name}{$attribute} = $value;
+      my %attributes = (%{RC_ATTRIBUTES()}, %$rcswitchAttributes);
       if (defined $attributes{$attribute}) {
         FRM_RC_apply_attribute($hash, $attribute, %$rcswitchAttributes);
       } else {
@@ -141,26 +139,26 @@ sub FRM_RC_apply_attribute {
   my ($hash, $attribute, %rcswitchAttributes) = @_;
   my $name = $hash->{NAME};
 
-  if (!$main::init_done) {
+  if (!$init_done) {
     Log3($hash, 4, "$name: $attribute is not applied during initialization");
     return undef;
   }
   
-  my %attributes = (%rcAttributes, %rcswitchAttributes);
-  return "Unknown attribute $attribute, choose one of " . join(" ", sort keys %attributes)
+  my %attributes = (%{RC_ATTRIBUTES()}, %rcswitchAttributes);
+  return "Unknown attribute $attribute, choose one of " . join(' ', sort keys %attributes)
     if(!defined($attributes{$attribute}));
 
-  my $value = $main::attr{$name}{$attribute};
-  if ($attribute eq "IODev") {
+  my $value = $attr{$name}{$attribute};
+  if ($attribute eq 'IODev') {
     if (!defined ($hash->{IODev}) or $hash->{IODev}->{NAME} ne $value) {
       Log3($hash, 4, "$name: Initializing as firmata client");      
       FRM_Client_AssignIOPort($hash, $value);
       FRM_Init_Client($hash) if (defined ($hash->{IODev}));
     }
-  } elsif (defined($rcAttributes{$attribute})) {
+  } elsif (defined(RC_ATTRIBUTES->{$attribute})) {
     my $pin = $value;
     my $pinValue = $attributes{$attribute};
-    Log3($hash, 4, "$name: pin $pin := " . (!$pinValue ? "LOW" : "HIGH"));
+    Log3($hash, 4, "$name: pin $pin := " . (!$pinValue ? 'LOW' : 'HIGH'));
     my $device = FRM_Client_FirmataDevice($hash);
     $device->pin_mode($pin, PIN_OUTPUT);
     $device->digital_write($pin, $pinValue);
@@ -196,21 +194,21 @@ sub FRM_RC_observe_sysex {
 }
 
 sub FRM_RC_get_tristate_code {
-  return join("", map { my $v = $RC_TRISTATE_CHARS->{$_};
-                        defined $v ? $v : "X";
+  return join('', map { my $v = RC_TRISTATE_CHARS->{$_};
+                        defined $v ? $v : 'X';
                       }
                   @_);
 }	
 
 sub FRM_RC_get_tristate_bits {
   my ($v) = @_;
-  return map {$RC_TRISTATE_BITS{$_}} split("", uc($v));
+  return map {RC_TRISTATE_BITS->{$_}} split('', uc($v));
 }
 
 sub FRM_RC_get_tristate_byte {
   my @transferSymbols = @_;
   while ((@transferSymbols & 0x03) != 0) {
-    push @transferSymbols, $RC_TRISTATE_BIT_VALUES->{TRISTATE_RESERVED};
+    push @transferSymbols, RC_TRISTATE_BIT_VALUES->{TRISTATE_RESERVED};
   }
   return @transferSymbols;
 }
@@ -221,7 +219,7 @@ sub FRM_RC_send_message {
   my $command
     = $COMMANDS->{$firmata->{protocol}->{protocol_version}}->{RESERVED_COMMAND};
   Log3($hash, 4, "$hash->{NAME}: Sending $command $subcommand $pin "
-                   . join(" ", @data));
+                   . join(' ', @data));
   
   return $firmata->sysex_send($command,
                               $subcommand,
