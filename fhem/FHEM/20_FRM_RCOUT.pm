@@ -52,9 +52,10 @@ FRM_RCOUT_Initialize($)
 {
   my ($hash) = @_;
 
-  $hash->{DefFn}     = 'FRM_Client_Define';
-  $hash->{UndefFn}   = 'FRM_RC_UnDef';
+  $hash->{DefFn}     = 'FRM_RC_Define';
+  $hash->{UndefFn}   = 'FRM_RC_Undefine';
   $hash->{InitFn}    = 'FRM_RCOUT_Init';
+  $hash->{NotifyFn}  = 'FRM_RCOUT_Notify';
   $hash->{AttrFn}    = 'FRM_RCOUT_Attr';
   $hash->{GetFn}     = 'FRM_RCOUT_Get';
   $hash->{SetFn}     = 'FRM_RCOUT_Set'; 
@@ -72,8 +73,12 @@ sub
 FRM_RCOUT_Init($$)
 {
   my ($hash, $args) = @_;
-  FRM_RC_Init($hash, PINMODE_RCOUTPUT, \&FRM_RCOUT_handle_rc_response,
-              RCOUT_PARAMETERS, $args);
+  FRM_RC_Init($hash, PINMODE_RCOUTPUT, \&FRM_RCOUT_handle_rc_response, $args);
+}
+
+sub FRM_RCOUT_Notify {
+  my ($hash, $dev) = @_;
+  return FRM_RC_Notify($hash, $dev, RCOUT_PARAMETERS);
 }
 
 sub
@@ -88,7 +93,7 @@ FRM_RCOUT_Get($@)
 {
   my ($hash, $name, $get, $codeCommand) = @_;
 
-  if(!defined($get) or !defined(RCOUT_GETS->{$get})) {
+  if (!defined($get) or !defined(RCOUT_GETS->{$get})) {
     return undef;
   }
 
@@ -103,8 +108,10 @@ FRM_RCOUT_Set($@)
   my ($hash, @a) = @_;
   return 'Need at least 2 parameters' if(@a < 2);
   my $command = RCOUT_SETS->{$a[1]};
-  return "Unknown argument $a[1], choose one of " . join(' ', sort keys %{RCOUT_PARAMETERS()})
-    if(!defined($command));
+  if (!defined($command)) {
+	  return "Unknown argument $a[1], choose one of "
+	           . join(' ', sort keys %{RCOUT_PARAMETERS()})
+  }
   my @code;
   eval {
     if ($command eq RCOUTPUT_CODE_PACKED_TRISTATE) {
@@ -150,12 +157,12 @@ sub FRM_RCOUT_handle_rc_response {
       push @data, (shift @data) + ((shift @data) << 8);
   }
   
-  FRM_RCOUT_notify($command, \@data, $hash);
+  FRM_RCOUT_notify($hash, $command, \@data);
 }
 
 sub FRM_RCOUT_notify
 {
-  my ( $key, $data, $hash ) = @_;
+  my ($hash, $key, $data) = @_;
   my $name = $hash->{NAME};
   my $subcommand  = RCOUT_SET_NAMES->{$key};
   my $attrName    = RCOUT_PARAMETER_NAMES->{$key};
@@ -164,19 +171,19 @@ sub FRM_RCOUT_notify
     defined($subcommand) and do {
       if ('tristateCode' eq $subcommand) {
         my $tristateCode = shift @$data;
-        Log3($name, 4, "$subcommand: $tristateCode");
+        Log3($hash, 4, "$subcommand: $tristateCode");
         readingsSingleUpdate($hash, $subcommand, $tristateCode, 1);
       } elsif ('longCode' eq $subcommand) {
         my $bitCount = shift @$data;
         my $longCode  = shift @$data;
-        Log3($name, 4, "$subcommand: $longCode/$bitCount");
+        Log3($hash, 4, "$subcommand: $longCode/$bitCount");
         readingsBeginUpdate($hash);
         readingsBulkUpdate($hash, $subcommand, $longCode);
         readingsBulkUpdate($hash, 'bitCount', $bitCount);
         readingsEndUpdate($hash, 1);
       } elsif ('charCode' eq $subcommand) {
         my $charCode = shift @$data; 
-        Log3($name, 4, "$subcommand: $charCode");
+        Log3($hash, 4, "$subcommand: $charCode");
         readingsSingleUpdate($hash, $subcommand, $charCode, 1);
       } else {
         readingsSingleUpdate($hash, 'state', "unknown subcommand $subcommand", 1);
@@ -185,7 +192,7 @@ sub FRM_RCOUT_notify
     };
     defined($attrName) and do {
       my $value = shift @$data;
-      Log3($name, 4, "$attrName: $value");
+      Log3($hash, 4, "$attrName: $value");
 
       $attr{$name}{$attrName}=$value;
       # TODO refresh web GUI somehow?

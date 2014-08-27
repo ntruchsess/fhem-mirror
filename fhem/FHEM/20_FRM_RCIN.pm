@@ -17,15 +17,17 @@ use constant RCIN_PARAMETERS => {
   tolerance => RCINPUT_TOLERANCE,
   rawData   => RCINPUT_RAW_DATA,
 };
+use constant RCIN_PARAMETER_NAMES => { reverse(%{RCIN_PARAMETERS()}) };
 
 sub
 FRM_RCIN_Initialize($)
 {
   my ($hash) = @_;
 
-  $hash->{DefFn}     = 'FRM_Client_Define';
-  $hash->{UndefFn}   = 'FRM_RC_UnDef';
+  $hash->{DefFn}     = 'FRM_RC_Define';
+  $hash->{UndefFn}   = 'FRM_RC_Undefine';
   $hash->{InitFn}    = 'FRM_RCIN_Init';
+  $hash->{NotifyFn}  = 'FRM_RCIN_Notify';
   $hash->{AttrFn}    = 'FRM_RCIN_Attr';
   
   LoadModule('FRM_RC');
@@ -39,8 +41,12 @@ sub
 FRM_RCIN_Init($$)
 {
   my ($hash, $args) = @_;
-  FRM_RC_Init($hash, PINMODE_RCINPUT, \&FRM_RCIN_handle_rc_response,
-              RCIN_PARAMETERS, $args);
+  FRM_RC_Init($hash, PINMODE_RCINPUT, \&FRM_RCIN_handle_rc_response, $args);
+}
+
+sub FRM_RCIN_Notify {
+  my ($hash, $dev) = @_;
+  return FRM_RC_Notify($hash, $dev, RCIN_PARAMETERS);
 }
 
 sub
@@ -71,16 +77,14 @@ sub FRM_RCIN_handle_rc_response {
       push @data, (shift @data) + ((shift @data) << 8);
   }
 
-  FRM_RCIN_notify($command, \@data, $hash);
+  FRM_RCIN_notify($hash, $command, \@data);
 }
 
 sub FRM_RCIN_notify
 {
-  my ( $key, $value, $hash ) = @_;
+  my ($hash, $key, $value) = @_;
   my $name = $hash->{NAME};
-  
-  my %a = reverse(%{RCIN_PARAMETERS()});
-  my $attrName = $a{$key};
+  my $attrName = RCIN_PARAMETER_NAMES->{$key};
   
   COMMAND_HANDLER: {
     ($key eq RCINPUT_MESSAGE) and do {
@@ -114,7 +118,7 @@ sub FRM_RCIN_notify
     };
     defined($attrName) and do {
       $value = FRM_RCIN_get_user_value($attrName, shift @$value);
-      Log3($name, 4, "$attrName: $value");
+      Log3($hash, 4, "$attrName: $value");
     
       $attr{$name}{$attrName}=$value;
       # TODO refresh web GUI somehow?
@@ -201,9 +205,9 @@ sub FRM_RCIN_is_rawdata_enabled($) {
       (default: 60; see RCSwitch documentation for details)
     </li>
     <li>
-      <code>rawDataEnabled</code>: If set to 1, an additional reading
+      <code>rawData</code>: If set to <code>enabled</code>, an additional reading
       <code>rawData</code> will be created, containing the received data in raw
-      format (default: 0 which means that reporting of raw data is disabled)
+      format (default: <code>disabled</code>)
     </li>
     <li><a href="#FRM_RCattr">FRM_RC attributes</a></li>
     <li><a href="#eventMap">eventMap</a></li>

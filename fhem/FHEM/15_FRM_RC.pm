@@ -29,6 +29,7 @@ use constant RC_TRISTATE_CHARS      => {
 use constant RC_TRISTATE_BITS      => { reverse(%{RC_TRISTATE_CHARS()}) };
 
 my @rc_observers = ();
+my %force_apply = ();
 
 
 sub
@@ -37,46 +38,69 @@ FRM_RC_Initialize($)
   LoadModule('FRM');
 }
 
+sub FRM_RC_Define
+{
+  my ( $hash, $def ) = @_;
+  Log3($hash, 5, "$hash->{NAME}: FRM_RC_Define");
+  $hash->{NOTIFYDEV} = "global";
+  FRM_Client_Define($hash, $def);
+}
+
 sub
-FRM_RC_UnDef($$)
+FRM_RC_Undefine($$)
 {
   my ($hash, $name) = @_;
+  Log3($hash, 5, "$name: FRM_RC_Undefine");
   my $pin = $hash->{PIN};
   FRM_RC_unregister_observer($hash, $pin);
   FRM_Client_Undef($hash, $name);
 }
 
 sub
-FRM_RC_Init($$$$$)
+FRM_RC_Init($$$$)
 {
-  my ($hash, $pinmode, $observer_method, $rcswitchAttributes, $args) = @_;
+  my ($hash, $pinmode, $observer_method, $args) = @_;
+  my $name = $hash->{NAME};
 
   # Initialize pin for firmata 
   my $ret = FRM_Init_Pin_Client($hash, $args, $pinmode);
   return $ret if (defined $ret);
 
   my $pin  = $hash->{PIN};
-  my $name = $hash->{NAME};
-  Log3($hash, 5, "$name: initialization start");
   eval {
     # Register observer for messages from the controller  
     FRM_RC_register_observer($hash, $pin, $observer_method);
+  };
+  return FRM_Catch($@) if $@;
+  readingsSingleUpdate($hash, 'state', 'Initialized', 1);
+  return undef;
+}
 
+sub FRM_RC_Notify {
+  my ($hash, $dev, $rcswitchAttributes) = @_;
+  my $name  = $hash->{NAME};
+  my $type  = $hash->{TYPE};
+
+  my @a = @{$dev->{CHANGED}};
+  Log3($hash, 5, "$name: FRM_RC_Notify: " . join(",",@a));
+  if( grep(m/^(INITIALIZED|REREADCFG)$/, @a) ) {
+    $force_apply{$hash} = 1;
     # Read all attributes values - they have been set before by FHEM - and
-    # apply them without setting them again    
-    my %attributes = (%{RC_ATTRIBUTES()}, %$rcswitchAttributes);
-    foreach my $attribute (keys %attributes) {
+    # apply them without setting them again.
+    # order may be an issue because of dependencies:
+    # first IODev, then vccPin and gndPin, then rcswitchAttributes
+    my @attributes = ('IODev',
+                      grep { $_ ne 'IODev' } keys %{RC_ATTRIBUTES()},
+                      keys %$rcswitchAttributes);
+    foreach my $attribute (@attributes) { 
       if ($attr{$name}{$attribute}) {
         FRM_RC_apply_attribute($hash, $attribute, %$rcswitchAttributes);
       } else {
         Log3($hash, 5, "$name: $attribute is undefined");
       }  
     }
-  };
-  return FRM_Catch($@) if $@;
-  readingsSingleUpdate($hash, 'state', 'Initialized', 1);
-  Log3($hash, 5, "$name: initialization end");
-  return undef;
+    $force_apply{$hash} = 0;
+  }
 }
 
 sub
@@ -87,13 +111,13 @@ FRM_RC_Attr($$$$$)
 
   eval {
     if ($command eq 'set') {
-      Log3($name, 4, "$name: $attribute := $value");
+      Log3($hash, 4, "$name: $attribute := $value");
       $attr{$name}{$attribute} = $value;
       my %attributes = (%{RC_ATTRIBUTES()}, %$rcswitchAttributes);
       if (defined $attributes{$attribute}) {
         FRM_RC_apply_attribute($hash, $attribute, %$rcswitchAttributes);
       } else {
-      	Log3($name, 5, "$name: no further processing for $attribute");
+      	Log3($hash, 5, "$name: no further processing for $attribute");
       }
     }
   };
@@ -104,7 +128,6 @@ FRM_RC_Attr($$$$$)
   }
   return undef;
 }
-
 sub FRM_RC_register_observer {
   my ($hash, $pin, $observer_method) = @_;
   my $name = $hash->{NAME};
@@ -139,8 +162,8 @@ sub FRM_RC_apply_attribute {
   my ($hash, $attribute, %rcswitchAttributes) = @_;
   my $name = $hash->{NAME};
 
-  if (!$init_done) {
-    Log3($hash, 4, "$name: $attribute is not applied during initialization");
+  if (!$force_apply{$hash} && !$init_done) {
+    Log3($hash, 4, "$name: $attribute is not applied during init");
     return undef;
   }
   
@@ -154,6 +177,8 @@ sub FRM_RC_apply_attribute {
       Log3($hash, 4, "$name: Initializing as firmata client");      
       FRM_Client_AssignIOPort($hash, $value);
       FRM_Init_Client($hash) if (defined ($hash->{IODev}));
+    } else {
+      Log3($hash, 4, "$name: $attribute is already configured");
     }
   } elsif (defined(RC_ATTRIBUTES->{$attribute})) {
     my $pin = $value;
@@ -183,6 +208,9 @@ sub FRM_RC_observe_sysex {
   
   my $command            = $sysex_message->{command};
   my $sysex_message_data = $sysex_message->{data};
+  if (ref($sysex_message_data) ne 'ARRAY') {
+    die "sysex data is not an array: $sysex_message_data";
+  }
   my $subcommand         = shift @$sysex_message_data;
   my $pin                = shift @$sysex_message_data;
   my @data               = Device::Firmata::Protocol::unpack_from_7bit(@$sysex_message_data);
