@@ -209,7 +209,7 @@ sub FRM_RC_observe_sysex {
   my $command            = $sysex_message->{command};
   my $sysex_message_data = $sysex_message->{data};
   if (ref($sysex_message_data) ne 'ARRAY') {
-    die "sysex data is not an array: $sysex_message_data";
+    return "sysex data is not an array: $sysex_message_data";
   }
   my $subcommand         = shift @$sysex_message_data;
   my $pin                = shift @$sysex_message_data;

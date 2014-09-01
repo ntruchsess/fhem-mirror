@@ -113,6 +113,9 @@ FRM_RCOUT_Set($@)
 	  return "Unknown argument $a[1], choose one of "
 	           . join(' ', sort keys %{RCOUT_SETS()})
   }
+  if (!defined $a[2]) {
+    return "Second parameter is undefined: $hash, " . join(", ", @a);
+  }
   my @code;
   eval {
     if ($command eq RCOUTPUT_CODE_PACKED_TRISTATE) {
