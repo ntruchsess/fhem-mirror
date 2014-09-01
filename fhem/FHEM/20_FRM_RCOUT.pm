@@ -84,7 +84,8 @@ sub FRM_RCOUT_Notify {
 sub
 FRM_RCOUT_Attr($$$$)
 {
-  return FRM_RC_Attr(@_, RCOUT_PARAMETERS);
+  my ($command, $name, $attribute, $value) = @_;
+  return FRM_RC_Attr($command, $name, $attribute, $value, RCOUT_PARAMETERS);
 }
 
 # FRM_RCOUT_Get behaves as CUL_Get so that 10_IT can use FRM_RCOUT as IODev
@@ -110,7 +111,7 @@ FRM_RCOUT_Set($@)
   my $command = RCOUT_SETS->{$a[1]};
   if (!defined($command)) {
 	  return "Unknown argument $a[1], choose one of "
-	           . join(' ', sort keys %{RCOUT_PARAMETERS()})
+	           . join(' ', sort keys %{RCOUT_SETS()})
   }
   my @code;
   eval {
