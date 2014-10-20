@@ -201,17 +201,18 @@ sub onRequestMessage($$) {
 
 sub onInternalMessage($$) {
   my ($hash,$msg) = @_;
+  my $name = $hash->{NAME};
   my $type = $msg->{subType};
   my $typeStr = internalMessageTypeToStr($type);
   INTERNALMESSAGE: {
     $type == I_BATTERY_LEVEL and do {
       readingsSingleUpdate($hash,"batterylevel",$msg->{payload},1);
-      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: batterylevel $msg->{payload}");
+      Log3 ($name,4,"MYSENSORS_DEVICE $name: batterylevel $msg->{payload}");
       last;
     };
     $type == I_TIME and do {
       sendClientMessage($hash,cmd => C_INTERNAL, subType => I_TIME, payload => time);
-      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: update of time requested");
+      Log3 ($name,4,"MYSENSORS_DEVICE $name: update of time requested");
       last;
     };
     $type == I_VERSION and do {
@@ -231,8 +232,8 @@ sub onInternalMessage($$) {
       last;
     };
     $type == I_CONFIG and do {
-      sendClientMessage($hash,cmd => C_INTERNAL, subType => I_CONFIG, payload => AttrVal($hash->{NAME},"config","M"));
-      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: respond to config-request");
+      sendClientMessage($hash,cmd => C_INTERNAL, subType => I_CONFIG, payload => AttrVal($name,"config","M"));
+      Log3 ($name,4,"MYSENSORS_DEVICE $name: respond to config-request");
       last;
     };
     $type == I_PING and do {
@@ -249,7 +250,7 @@ sub onInternalMessage($$) {
     };
     $type == I_CHILDREN and do {
       readingsSingleUpdate($hash,"state","routingtable cleared",1);
-      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: routingtable cleared");
+      Log3 ($name,4,"MYSENSORS_DEVICE $name: routingtable cleared");
       last;
     };
     $type == I_SKETCH_NAME and do {
