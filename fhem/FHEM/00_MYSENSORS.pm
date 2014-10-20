@@ -214,7 +214,7 @@ sub Timer($) {
   foreach my $msg (keys %{$hash->{messages}}) {
     if ($now > $hash->{messages}->{$msg}) {
       Log3 ($hash->{NAME},5,"MYSENSORS outstanding ack, re-send: ".$msg);
-      DevIo_SimpleWrite($hash,"$msg\n");
+      DevIo_SimpleWrite($hash,"$msg\n", undef);
     }
   }
   InternalTimer(gettimeofday()+1, "MYSENSORS::Timer", $hash, 0);
@@ -368,7 +368,7 @@ sub sendMessage($%) {
   $msg{ack} = $hash->{ack};
   my $txt = createMsg(%msg);
   Log3 ($hash->{NAME},5,"MYSENSORS send: ".dumpMsg(\%msg));
-  DevIo_SimpleWrite($hash,"$txt\n");
+  DevIo_SimpleWrite($hash,"$txt\n",undef);
   if ($msg{ack}) {
     $hash->{messages}->{$txt} = gettimeofday() + 1,
     $hash->{outstandingAck} = keys %{$hash->{messages}};

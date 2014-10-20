@@ -84,6 +84,8 @@ sub Define($$) {
 
 sub UnDefine($) {
   my ($hash) = @_;
+  
+  return undef;
 }
 
 sub Set($@) {
