@@ -33,25 +33,28 @@ my %gets = (
   "version"   => "",
 );
 
-sub MYSENSORS_NODE_Initialize($) {
+sub MYSENSORS_DEVICE_Initialize($) {
 
   my $hash = shift @_;
 
   # Consumer
-  $hash->{DefFn}    = "MYSENSORS::NODE::Define";
-  $hash->{UndefFn}  = "MYSENSORS::NODE::UnDefine";
-  $hash->{SetFn}    = "MYSENSORS::NODE::Set";
-  $hash->{AttrFn}   = "MYSENSORS::NODE::Attr";
+  $hash->{DefFn}    = "MYSENSORS::DEVICE::Define";
+  $hash->{UndefFn}  = "MYSENSORS::DEVICE::UnDefine";
+  $hash->{SetFn}    = "MYSENSORS::DEVICE::Set";
+  $hash->{AttrFn}   = "MYSENSORS::DEVICE::Attr";
   
   $hash->{AttrList} =
     "config:M,I ".
+    "setCommands ".
+    "set_.+_\\d+ ".
+    "requestAck:yes,no". 
     "IODev ".
-    "stateFormat";
+    $main::readingFnAttributes;
 
   main::LoadModule("MYSENSORS");
 }
 
-package MYSENSORS::NODE;
+package MYSENSORS::DEVICE;
 
 use strict;
 use warnings;
@@ -73,22 +76,9 @@ BEGIN {
 
 sub Define($$) {
   my ( $hash, $def ) = @_;
-  my ($name, $type, $sensorType, $radioId, $childId) = split("[ \t]+", $def);
-  return "requires 3 parameters" unless (defined $childId and $childId ne "");
-  return "unknown sensor type $sensorType, must be one of ".join(" ",map { $_ =~ /^S_(.+)$/; $1 } (sensorTypes)) unless grep { $_ eq "S_$sensorType"} (sensorTypes);
-  $hash->{sensorType} = sensorTypeToIdx("S_$sensorType");
+  my ($name, $type, $radioId) = split("[ \t]+", $def);
+  return "requires 1 parameters" unless (defined $radioId and $radioId ne "");
   $hash->{radioId} = $radioId;
-  $hash->{childId} = $childId;
-  if ($hash->{sensorType} == S_ARDUINO_REPEATER_NODE) {
-    $hash->{sets} = { 
-        'time'  => [],
-        'clear' => [],
-      };
-  } else {
-    $hash->{sets} = {
-        'time'  => [],
-      };
-  }
   AssignIoPort($hash);
 };
 
@@ -97,22 +87,36 @@ sub UnDefine($) {
 }
 
 sub Set($@) {
-  my ($hash, @a) = @_;
-  return "Need at least one parameters" if(@a < 2);
-  return "Unknown argument $a[1], choose one of " . join(" ", map {@{$hash->{sets}->{$_}} ? $_.':'.join ',', @{$hash->{sets}->{$_}} : $_} sort keys %{$hash->{sets}})
-    if(!defined($hash->{sets}->{$a[1]}));
-  my $command = $a[1];
-  my $value = $a[2];
-
+  my ($hash,$name,$command,@values) = @_;
+  return "Need at least one parameters" unless defined $command;
+  return "Unknown argument $command, choose one of " . join(" ", map {$hash->{sets}->{$_} ne "" ? "$_:$hash->{sets}->{$_}" : $_} sort keys %{$hash->{sets}})
+    if(!defined($hash->{sets}->{$command}));
   COMMAND_HANDLER: {
     $command eq "clear" and do {
-      sendClientMessage($hash,cmd => C_INTERNAL, ack => 0, subType => I_CHILDREN, payload => "C");
+      sendClientMessage($hash, clientId => 255, cmd => C_INTERNAL, ack => 0, subType => I_CHILDREN, payload => "C");
       last;
     };
     $command eq "time" and do {
-      sendClientMessage($hash,cmd => C_INTERNAL, akk => 0, subType => I_TIME, payload => time);
+      sendClientMessage($hash, clientId => 255, cmd => C_INTERNAL, akk => 0, subType => I_TIME, payload => time);
       last;
-    }
+    };
+    $command =~ /^(.+)_(\d+)$/ and do {
+      my $value = @values ? join " ",@values : "";
+      sendClientMessage($hash, childId => $2, cmd => C_SET, subType => variableTypeToIdx("V_".$1), payload => $value);  # set myLight on/off => set LIGHT_45 1/0
+      readingsSingleUpdate($hash,$command,$value,1);
+      last;
+    };
+    (defined ($hash->{setcommands}->{$command})) and do {
+      sendClientMessage($hash,
+        childId => $hash->{setcommands}->{$command}->{id},
+        cmd => C_SET,
+        subType => variableTypeToIdx($hash->{setcommands}->{$command}->{var}),
+        payload => $hash->{setcommands}->{$command}->{val}
+      );
+      readingsSingleUpdate($hash,"state",$command,1);
+      last;
+    };
+    return "$command not defined by attr setCommands";
   }
 }
 
@@ -127,22 +131,59 @@ sub Attr($$$$) {
       }
       last;
     };
+    $attribute eq "setCommands" and do {
+      if ($command eq "set") {
+        foreach my $setCmd (split ("[, \t]+",$value)) {
+          $setCmd =~ /^(.+):(.+)_(\d+):(.+)$/;
+          $hash->{sets}->{$1}="";
+          $hash->{setcommands}->{$1} = {
+            var => "V_".$2,
+            id  => $3,
+            val => $4,
+          };
+        }
+      } else {
+        foreach my $set (keys %{$hash->{setcommands}}) {
+          delete $hash->{sets}->{$set};
+        }
+        $hash->{setcommands} = {};
+      }
+      last;
+    };
+    $attribute =~ /^set_(.+)_(\d+)$/ and do {
+      if ($command eq "set") {
+        $hash->{sets}->{"$1\_$2"}=join(",",split ("[, \t]+",$value));
+      } else {
+        CommandDeleteReading(undef,"$hash->{NAME} $1");
+        delete $hash->{sets}->{$1};
+      }
+      last;
+    };
   }
+}
+
+sub onGatewayStarted($) {
+  my ($hash) = @_;
+}
+
+sub onPresentationMessage($$) {
+  my ($hash,$msg) = @_;
 }
 
 sub onSetMessage($$) {
   my ($hash,$msg) = @_;
   variableTypeToStr($msg->{subType}) =~ /^V_(.+)$/;
-  readingsSingleUpdate($hash,$1,$msg->{payload},1);
+  readingsSingleUpdate($hash,"$1\_$msg->{childId}",$msg->{payload},1);
 }
 
 sub onRequestMessage($$) {
   my ($hash,$msg) = @_;
   variableTypeToStr($msg->{subType}) =~ /^V_(.+)$/;
   sendClientMessage($hash,
+    childId => $msg->{childId},
     cmd => C_SET, 
     subType => $msg->{subType},
-    payload => ReadingsVal($hash->{NAME},$1,"")
+    payload => ReadingsVal($hash->{NAME},"$1\_$msg->{childId}","")
   );
 }
 
@@ -153,12 +194,12 @@ sub onInternalMessage($$) {
   INTERNALMESSAGE: {
     $type == I_BATTERY_LEVEL and do {
       readingsSingleUpdate($hash,"batterylevel",$msg->{payload},1);
-      Log3 ($hash->{NAME},4,"MYSENSORS_NODE $hash->{name}: batterylevel $msg->{payload}");
+      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: batterylevel $msg->{payload}");
       last;
     };
     $type == I_TIME and do {
       sendClientMessage($hash,cmd => C_INTERNAL, ack => 0, subType => I_TIME, payload => time);
-      Log3 ($hash->{NAME},4,"MYSENSORS_NODE $hash->{name}: update of time requested");
+      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: update of time requested");
       last;
     };
     $type == I_VERSION and do {
@@ -179,7 +220,7 @@ sub onInternalMessage($$) {
     };
     $type == I_CONFIG and do {
       sendClientMessage($hash,cmd => C_INTERNAL, ack => 0, subType => I_CONFIG, payload => AttrVal($hash->{NAME},"config","M"));
-      Log3 ($hash->{NAME},4,"MYSENSORS_NODE $hash->{name}: respond to config-request");
+      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: respond to config-request");
       last;
     };
     $type == I_PING and do {
@@ -196,7 +237,7 @@ sub onInternalMessage($$) {
     };
     $type == I_CHILDREN and do {
       readingsSingleUpdate($hash,"state","routingtable cleared",1);
-      Log3 ($hash->{NAME},4,"MYSENSORS_NODE $hash->{name}: routingtable cleared");
+      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: routingtable cleared");
       last;
     };
     $type == I_SKETCH_NAME and do {
@@ -214,26 +255,30 @@ sub onInternalMessage($$) {
   }
 }
 
+sub sendClientMessage($%) {
+  my ($hash,%msg) = @_;
+  $msg{radioId} = $hash->{radioId};
+  $msg{ack} = 1;
+  sendMessage($hash->{IODev},%msg);
+}
+
 1;
 
 =pod
 =begin html
 
-<a name="MYSENSORS_NODE"></a>
-<h3>MYSENSORS_NODE</h3>
+<a name="MYSENSORS_DEVICE"></a>
+<h3>MYSENSORS_DEVICE</h3>
 <ul>
   <p>represents a mysensors sensor attached to a mysensor-node</p>
   <p>requires a <a href="#MYSENSOR">MYSENSOR</a>-device as IODev</p>
-  <a name="MYSENSORS_NODEdefine"></a>
+  <a name="MYSENSORS_DEVICEdefine"></a>
   <p><b>Define</b></p>
   <ul>
-    <p><code>define &lt;name&gt; MYSENSORS_NODE &lt;Sensor-type&gt; &lt;node-id&gt; &lt;sensor-id&gt;</code><br/>
-      Specifies the MYSENSOR_NODE device.
-      Sensor-type is on of
-      <li>ARDUINO_NODE</li>
-      <li>ARDUINO_REPEATER_NODE</li></p>
+    <p><code>define &lt;name&gt; MYSENSORS_DEVICE &lt;Sensor-type&gt; &lt;node-id&gt;</code><br/>
+      Specifies the MYSENSOR_DEVICE device.</p>
   </ul>
-  <a name="MYSENSORS_NODEattr"></a>
+  <a name="MYSENSORS_DEVICEattr"></a>
   <p><b>Attributes</b></p>
   <ul>
     <li>

@@ -34,8 +34,7 @@ my %gets = (
 );
 
 my @clients = qw(
-  MYSENSORS_NODE
-  MYSENSORS_SENSOR
+  MYSENSORS_DEVICE
 );
 
 sub MYSENSORS_Initialize($) {
@@ -66,7 +65,7 @@ package MYSENSORS;
 
 use Exporter ('import');
 @EXPORT = ();
-@EXPORT_OK = qw(sendClientMessage);
+@EXPORT_OK = qw(sendMessage);
 %EXPORT_TAGS = (all => [@EXPORT_OK]);
 
 use strict;
@@ -248,47 +247,26 @@ sub Read {
 sub onPresentationMsg($$) {
   my ($hash,$msg) = @_;
   my $client = matchClient($hash,$msg);
-  
+  my $clientname;
   my $sensorType = $msg->{subType};
-  sensorTypeToStr($sensorType) =~ /^S_(.+)$/;
-  my $sensorTypeStr = $1;
-  my $module = ($sensorType == S_ARDUINO_NODE or $sensorType == S_ARDUINO_REPEATER_NODE) ? 'MYSENSORS_NODE' : 'MYSENSORS_SENSOR';
-  if ($client) {
-    if ($client->{sensorType} != $sensorType) {
-      if ($hash->{'inclusion-mode'}) {
-        CommandModify(undef,"$client->{NAME} $module $sensorTypeStr $msg->{radioId} $msg->{childId}");
-        readingsSingleUpdate($client,"state","TYPE changed after presentation received for different sensorType $sensorTypeStr",1);
-      } else {
-        Log3($hash->{NAME},3,"MYSENSORS: ignoring presentation-msg different type $sensorType for $client->{NAME} radioId $msg->{radioId}, childId $msg->{childId}, type $client->{sensorType}");
-        readingsSingleUpdate($client,"state","presentation received for different sensorType $sensorTypeStr",1);
-      }
-    } else {
-      readingsSingleUpdate($client,"state","presentation received ok",1)
-    }
-  } else {
+  unless ($client) {
     if ($hash->{'inclusion-mode'}) {
-      my $clientname = "MY_$sensorTypeStr\_$msg->{radioId}_$msg->{childId}";
-      CommandDefine(undef,"$clientname $module $sensorTypeStr $msg->{radioId} $msg->{childId}");
-      readingsSingleUpdate($main::defs{$clientname},"state","defined after presentation received ok",1);
-      if ($sensorAttr{$sensorTypeStr}) {
-        foreach my $attr (@{$sensorAttr{$sensorTypeStr}}) {
-          CommandAttr(undef,"$clientname $attr");
-        }
-      }
+      $clientname = "MYSENSOR_$msg->{radioId}";
+      CommandDefine(undef,"$clientname MYSENSORS_DEVICE $msg->{radioId}");
+      $client = $main::defs{$clientname};
+      return unless ($client);
     } else {
       Log3($hash->{NAME},3,"MYSENSORS: ignoring presentation-msg from unknown radioId $msg->{radioId}, childId $msg->{childId}, sensorType $sensorType");
+      return;
     }
   }
+  MYSENSORS::DEVICE::onPresentationMessage($client,$msg);
 };
 
 sub onSetMsg($$) {
   my ($hash,$msg) = @_;
   if (my $client = matchClient($hash,$msg)) {
-    if ($client->{TYPE} eq 'MYSENSORS_NODE') {
-      MYSENSORS::NODE::onSetMessage($client,$msg);
-    } else {
-      MYSENSORS::SENSOR::onSetMessage($client,$msg);
-    }
+    MYSENSORS::DEVICE::onSetMessage($client,$msg);
   } else {
     Log3($hash->{NAME},3,"MYSENSORS: ignoring set-msg from unknown radioId $msg->{radioId}, childId $msg->{childId} for ".variableTypeToStr($msg->{subType}));
   }
@@ -297,11 +275,7 @@ sub onSetMsg($$) {
 sub onRequestMsg($$) {
   my ($hash,$msg) = @_;
   if (my $client = matchClient($hash,$msg)) {
-    if ($client->{TYPE} eq 'MYSENSORS_NODE') {
-      MYSENSORS::NODE::onRequestMessage($client,$msg);
-    } else {
-      MYSENSORS::SENSOR::onRequestMessage($client,$msg);
-    }
+    MYSENSORS::DEVICE::onRequestMessage($client,$msg);
   } else {
     Log3($hash->{NAME},3,"MYSENSORS: ignoring req-msg from unknown radioId $msg->{radioId}, childId $msg->{childId} for ".variableTypeToStr($msg->{subType}));
   }
@@ -325,6 +299,10 @@ sub onInternalMsg($$) {
       };
       $type == I_STARTUP_COMPLETE and do {
         readingsSingleUpdate($hash,'connection','startup complete',1);
+        GP_ForallClients($hash,sub {
+          my $client = shift;
+          MYSENSORS::DEVICE::onGatewayStarted($client);
+        });
         last;
       };
       $type == I_LOG_MESSAGE and do {
@@ -348,7 +326,7 @@ sub onInternalMsg($$) {
       };
     }
   } elsif (my $client = matchClient($hash,$msg)) {
-    MYSENSORS::NODE::onInternalMessage($client,$msg);
+    MYSENSORS::DEVICE::onInternalMessage($client,$msg);
   } else {
     Log3($hash->{NAME},3,"MYSENSORS: ignoring internal-msg from unknown radioId $msg->{radioId}, childId $msg->{childId} for ".internalMessageTypeToStr($msg->{subType}));
   }
@@ -368,24 +346,15 @@ sub sendMessage($%) {
 sub matchClient($$) {
   my ($hash,$msg) = @_;
   my $radioId = $msg->{radioId};
-  my $childId = $msg->{childId};
   my $found;
   GP_ForallClients($hash,sub {
     return if $found;
     my $client = shift;
-    if ($client->{radioId} == $radioId and $client->{childId} == $childId) {
+    if ($client->{radioId} == $radioId) {
       $found = $client;
     }
   });
   return $found;
-}
-
-sub sendClientMessage($%) {
-  my ($client,%msg) = @_;
-  $msg{radioId} = $client->{radioId};
-  $msg{childId} = $client->{childId};
-  $msg{ack} = 0;
-  sendMessage($client->{IODev},%msg);
 }
 
 1;
@@ -397,9 +366,8 @@ sub sendClientMessage($%) {
 <h3>MYSENSORS</h3>
 <ul>
   <p>connects fhem to <a href="http://MYSENSORS.org">MYSENSORS</a>.</p>
-  <p>A single MYSENSORS device can serve multiple <a href="#MYSENSORS_NODE">MYSENSORS_NODE</a> and <a href="#MYSENSORS_SENSOR">MYSENSORS_SENSOR</a> clients.<br/>
-     Each <a href="#MYSENSORS_NODE">MYSENSORS_NODE</a> represents a mysensors node.<br/>
-     Each <a href="#MYSENSORS_SENSOR">MYSENSORS_SENSOR</a> represents a sensor attached to a mysensors node.<br/>
+  <p>A single MYSENSORS device can serve multiple <a href="#MYSENSORS_DEVICE">MYSENSORS_DEVICE</a> clients.<br/>
+     Each <a href="#MYSENSORS_DEVICE">MYSENSORS_DEVICE</a> represents a mysensors node.<br/>
   <a name="MYSENSORSdefine"></a>
   <p><b>Define</b></p>
   <ul>
@@ -427,7 +395,7 @@ sub sendClientMessage($%) {
   <ul>
     <li>
       <p>autocreate<br/>
-         enables auto-creation of MYSENSOR_NODE and MYSENSOR_SENSOR-devices on receival of presentation-messages</p>
+         enables auto-creation of MYSENSOR_DEVICE-devices on receival of presentation-messages</p>
     </li>
     <li>
       <p>first-sensorid<br/>
