@@ -47,7 +47,7 @@ sub MYSENSORS_DEVICE_Initialize($) {
     "config:M,I ".
     "setCommands ".
     "set_.+_\\d+ ".
-    "requestAck:yes,no". 
+    "requestAck:yes,no ". 
     "IODev ".
     $main::readingFnAttributes;
 
@@ -93,27 +93,28 @@ sub Set($@) {
     if(!defined($hash->{sets}->{$command}));
   COMMAND_HANDLER: {
     $command eq "clear" and do {
-      sendClientMessage($hash, clientId => 255, cmd => C_INTERNAL, ack => 0, subType => I_CHILDREN, payload => "C");
+      sendClientMessage($hash, clientId => 255, cmd => C_INTERNAL, subType => I_CHILDREN, payload => "C");
       last;
     };
     $command eq "time" and do {
-      sendClientMessage($hash, clientId => 255, cmd => C_INTERNAL, akk => 0, subType => I_TIME, payload => time);
+      sendClientMessage($hash, clientId => 255, cmd => C_INTERNAL, subType => I_TIME, payload => time);
       last;
     };
     $command =~ /^(.+)_(\d+)$/ and do {
       my $value = @values ? join " ",@values : "";
-      sendClientMessage($hash, childId => $2, cmd => C_SET, subType => variableTypeToIdx("V_".$1), payload => $value);  # set myLight on/off => set LIGHT_45 1/0
-      readingsSingleUpdate($hash,$command,$value,1);
+      sendClientMessage($hash, childId => $2, cmd => C_SET, subType => variableTypeToIdx("V_".$1), payload => $value);
+      readingsSingleUpdate($hash,$command,$value,1) unless ($hash->{IODev}->{ack});
       last;
     };
     (defined ($hash->{setcommands}->{$command})) and do {
+      my $setcommand = $hash->{setcommands}->{$command};
       sendClientMessage($hash,
-        childId => $hash->{setcommands}->{$command}->{id},
+        childId => $setcommand->{id},
         cmd => C_SET,
-        subType => variableTypeToIdx($hash->{setcommands}->{$command}->{var}),
-        payload => $hash->{setcommands}->{$command}->{val}
+        subType => $setcommand->{type},
+        payload => $setcommand->{val}
       );
-      readingsSingleUpdate($hash,"state",$command,1);
+      readingsSingleUpdate($hash,$setcommand->{var},$setcommand->{val},1) unless ($hash->{IODev}->{ack});
       last;
     };
     return "$command not defined by attr setCommands";
@@ -137,7 +138,8 @@ sub Attr($$$$) {
           $setCmd =~ /^(.+):(.+)_(\d+):(.+)$/;
           $hash->{sets}->{$1}="";
           $hash->{setcommands}->{$1} = {
-            var => "V_".$2,
+            type => variableTypeToIdx("V_".$2),
+            var  => "$2\_$3",
             id  => $3,
             val => $4,
           };
@@ -181,7 +183,7 @@ sub onRequestMessage($$) {
   variableTypeToStr($msg->{subType}) =~ /^V_(.+)$/;
   sendClientMessage($hash,
     childId => $msg->{childId},
-    cmd => C_SET, 
+    cmd => C_SET,
     subType => $msg->{subType},
     payload => ReadingsVal($hash->{NAME},"$1\_$msg->{childId}","")
   );
@@ -258,7 +260,6 @@ sub onInternalMessage($$) {
 sub sendClientMessage($%) {
   my ($hash,%msg) = @_;
   $msg{radioId} = $hash->{radioId};
-  $msg{ack} = 1;
   sendMessage($hash->{IODev},%msg);
 }
 

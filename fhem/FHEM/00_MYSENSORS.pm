@@ -57,6 +57,7 @@ sub MYSENSORS_Initialize($) {
 
   $hash->{AttrList} = 
     "autocreate:1 ".
+    "requestAck:1 ".
     "first-sensorid ".
     "stateFormat";
 }
@@ -152,6 +153,16 @@ sub Attr($$$$) {
       }
       last;
     };
+    $attribute eq "requestAck" and do {
+      if ($command eq "set") {
+        $hash->{ack} = 1;
+      } else {
+        $hash->{ack} = 0;
+        $hash->{messages} = {};
+        $hash->{outstandingAck} = 0;
+      }
+      last;
+    };
   }
 }
 
@@ -186,7 +197,11 @@ sub Ready($) {
 
 sub Init($) {
   my $hash = shift;
-  $hash->{'inclusion-mode'} = AttrVal($hash->{NAME},"autocreate",0);
+  my $name = $hash->{NAME};
+  $hash->{'inclusion-mode'} = AttrVal($name,"autocreate",0);
+  $hash->{ack} = AttrVal($name,"requestAck",0);
+  $hash->{messages} = {};
+  $hash->{outstandingAck} = 0;
   readingsSingleUpdate($hash,"connection","connected",1);
   Timer($hash);
   return undef;
@@ -195,7 +210,14 @@ sub Init($) {
 sub Timer($) {
   my $hash = shift;
   RemoveInternalTimer($hash);
-#  InternalTimer(gettimeofday()+$hash->{timeout}, "MYSENSORS::Timer", $hash, 0);
+  my $now = time;
+  foreach my $msg (keys %{$hash->{messages}}) {
+    if ($now > $hash->{messages}->{$msg}) {
+      Log3 ($hash->{NAME},5,"MYSENSORS outstanding ack, re-send: ".$msg);
+      DevIo_SimpleWrite($hash,"$msg\n");
+    }
+  }
+  InternalTimer(gettimeofday()+1, "MYSENSORS::Timer", $hash, 0);
 }
 
 sub Read {
@@ -215,6 +237,11 @@ sub Read {
     $txt =~ s/\r//;
     my $msg = parseMsg($txt);
     Log3 ($name,5,"MYSENSORS Read: ".dumpMsg($msg));
+
+    if ($msg->{ack}) {
+      delete $hash->{messages}->{$txt};
+      $hash->{outstandingAck} = keys %{$hash->{messages}};
+    }
 
     my $type = $msg->{cmd};
     MESSAGE_TYPE: {
@@ -338,9 +365,14 @@ sub onStreamMsg($$) {
 
 sub sendMessage($%) {
   my ($hash,%msg) = @_;
+  $msg{ack} = $hash->{ack};
   my $txt = createMsg(%msg);
   Log3 ($hash->{NAME},5,"MYSENSORS send: ".dumpMsg(\%msg));
   DevIo_SimpleWrite($hash,"$txt\n");
+  if ($msg{ack}) {
+    $hash->{messages}->{$txt} = gettimeofday() + 1,
+    $hash->{outstandingAck} = keys %{$hash->{messages}};
+  }
 };
 
 sub matchClient($$) {
@@ -396,6 +428,12 @@ sub matchClient($$) {
     <li>
       <p>autocreate<br/>
          enables auto-creation of MYSENSOR_DEVICE-devices on receival of presentation-messages</p>
+    </li>
+    <li>
+      <p>requestAck<br/>
+         request acknowledge from nodes.<br/>
+         if set the Readings of nodes are updated not before requested acknowledge is received<br/>
+         if not set the Readings of nodes are updated immediatly (not awaiting the acknowledge)./p>
     </li>
     <li>
       <p>first-sensorid<br/>
