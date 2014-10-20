@@ -33,6 +33,13 @@ my %gets = (
   "version"   => "",
 );
 
+my %static_mappings = (
+  "TEMP"        => "temperature",
+  "HUM"         => "humidity",
+  "PRESSURE"    => "pressure",
+  "LIGHT_LEVEL" => "brightness",
+);
+
 sub MYSENSORS_DEVICE_Initialize($) {
 
   my $hash = shift @_;
@@ -47,6 +54,7 @@ sub MYSENSORS_DEVICE_Initialize($) {
     "config:M,I ".
     "setCommands ".
     "set_.+_\\d+ ".
+    "map_.* ".
     "requestAck:yes,no ". 
     "IODev ".
     $main::readingFnAttributes;
@@ -71,6 +79,7 @@ BEGIN {
     readingsSingleUpdate
     AssignIoPort
     Log3
+    CommandDeleteReading
   ))
 };
 
@@ -163,6 +172,15 @@ sub Attr($$$$) {
       }
       last;
     };
+    $attribute =~ /^map_(.+)/ and do {
+    	if ($command eq "set") {
+    		$hash->{mappings}->{$1}=join(",",split ("[, \t]+",$value));
+    	} else {
+    		CommandDeleteReading(undef,"$hash->{NAME} $1");
+    		delete $hash->{mappings}->{$1};
+    	}
+    	last;
+    };
   }
 }
 
@@ -177,7 +195,8 @@ sub onPresentationMessage($$) {
 sub onSetMessage($$) {
   my ($hash,$msg) = @_;
   variableTypeToStr($msg->{subType}) =~ /^V_(.+)$/;
-  readingsSingleUpdate($hash,"$1\_$msg->{childId}",$msg->{payload},1);
+  #readingsSingleUpdate($hash,mapReadings($hash,"$1\_$msg->{childId}"),$msg->{payload},1);
+  readingsSingleUpdate($hash,mapReadings($hash,"$1")."\_$msg->{childId}",$msg->{payload},1);
 }
 
 sub onRequestMessage($$) {
@@ -265,6 +284,20 @@ sub sendClientMessage($%) {
   sendMessage($hash->{IODev},%msg);
 }
 
+sub mapReadings($$) {
+	my($hash, $rName) = @_;
+	
+	if(defined($hash->{mappings}->{$rName})) {
+		return $hash->{mappings}->{$rName};
+	}
+	
+	if(defined(%static_mappings->{$rName})) {
+		return %static_mappings->{$rName};
+	}
+	
+	return $rName;
+}
+
 1;
 
 =pod
@@ -287,6 +320,11 @@ sub sendClientMessage($%) {
     <li>
       <p><code>attr &lt;name&gt; config [&lt;M|I&gt;]</code><br/>
          configures metric (M) or inch (I). Defaults to 'M'</p>
+    </li>
+    <li>
+      <p><code>attr &lt;name&gt; map_&lt;reading&gt; [&lt;new reading name&gt;]</code><br/>
+         configures reading user names that should be used instead of technical names<br/>
+         E.g.: <code>attr xxx map_TEMP temperature</code></p>
     </li>
   </ul>
 </ul>
