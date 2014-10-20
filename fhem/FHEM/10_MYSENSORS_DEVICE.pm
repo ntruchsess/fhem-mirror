@@ -26,9 +26,6 @@
 use strict;
 use warnings;
 
-my %sets = (
-);
-
 my %gets = (
   "version"   => "",
 );
@@ -69,6 +66,7 @@ BEGIN {
   GP_Import(qw(
     AttrVal
     readingsSingleUpdate
+    CommandDeleteReading
     AssignIoPort
     Log3
   ))
@@ -79,6 +77,11 @@ sub Define($$) {
   my ($name, $type, $radioId) = split("[ \t]+", $def);
   return "requires 1 parameters" unless (defined $radioId and $radioId ne "");
   $hash->{radioId} = $radioId;
+  $hash->{sets} = {
+    'time' => "",
+    clear  => "",
+    reboot => "",
+  };
   AssignIoPort($hash);
 };
 
@@ -93,11 +96,15 @@ sub Set($@) {
     if(!defined($hash->{sets}->{$command}));
   COMMAND_HANDLER: {
     $command eq "clear" and do {
-      sendClientMessage($hash, clientId => 255, cmd => C_INTERNAL, subType => I_CHILDREN, payload => "C");
+      sendClientMessage($hash, childId => 255, cmd => C_INTERNAL, subType => I_CHILDREN, payload => "C");
       last;
     };
     $command eq "time" and do {
-      sendClientMessage($hash, clientId => 255, cmd => C_INTERNAL, subType => I_TIME, payload => time);
+      sendClientMessage($hash, childId => 255, cmd => C_INTERNAL, subType => I_TIME, payload => time);
+      last;
+    };
+    $command eq "reboot" and do {
+      sendClientMessage($hash, childId => 255, cmd => C_INTERNAL, subType => I_REBOOT);
       last;
     };
     $command =~ /^(.+)_(\d+)$/ and do {
@@ -153,11 +160,12 @@ sub Attr($$$$) {
       last;
     };
     $attribute =~ /^set_(.+)_(\d+)$/ and do {
+      my $var = "$1\_$2";
       if ($command eq "set") {
-        $hash->{sets}->{"$1\_$2"}=join(",",split ("[, \t]+",$value));
+        $hash->{sets}->{$var}=join(",",split ("[, \t]+",$value));
       } else {
-        CommandDeleteReading(undef,"$hash->{NAME} $1");
-        delete $hash->{sets}->{$1};
+        CommandDeleteReading(undef,"$hash->{NAME} $var");
+        delete $hash->{sets}->{$var};
       }
       last;
     };
@@ -200,7 +208,7 @@ sub onInternalMessage($$) {
       last;
     };
     $type == I_TIME and do {
-      sendClientMessage($hash,cmd => C_INTERNAL, ack => 0, subType => I_TIME, payload => time);
+      sendClientMessage($hash,cmd => C_INTERNAL, subType => I_TIME, payload => time);
       Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: update of time requested");
       last;
     };
@@ -221,7 +229,7 @@ sub onInternalMessage($$) {
       last;
     };
     $type == I_CONFIG and do {
-      sendClientMessage($hash,cmd => C_INTERNAL, ack => 0, subType => I_CONFIG, payload => AttrVal($hash->{NAME},"config","M"));
+      sendClientMessage($hash,cmd => C_INTERNAL, subType => I_CONFIG, payload => AttrVal($hash->{NAME},"config","M"));
       Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: respond to config-request");
       last;
     };
