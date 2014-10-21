@@ -33,13 +33,6 @@ my %gets = (
   "version"   => "",
 );
 
-my %static_mappings = (
-  "TEMP"        => "temperature",
-  "HUM"         => "humidity",
-  "PRESSURE"    => "pressure",
-  "LIGHT_LEVEL" => "brightness",
-);
-
 sub MYSENSORS_DEVICE_Initialize($) {
 
   my $hash = shift @_;
@@ -54,7 +47,7 @@ sub MYSENSORS_DEVICE_Initialize($) {
     "config:M,I ".
     "setCommands ".
     "set_.+_\\d+ ".
-    "map_.* ".
+    "mapReadingType_.+ ".
     "requestAck:yes,no ". 
     "IODev ".
     $main::readingFnAttributes;
@@ -83,11 +76,21 @@ BEGIN {
   ))
 };
 
+my %static_mappings = (
+  V_TEMP        => { type => "temperature" },
+  V_HUM         => { type => "humidity" },
+  V_PRESSURE    => { type => "pressure" },
+  V_LIGHT_LEVEL => { type => "brightness" },
+  V_LIGHT       => { type => "switch", val => { 0 => 'off', 1 => 'on' }},
+);
+
 sub Define($$) {
   my ( $hash, $def ) = @_;
   my ($name, $type, $radioId) = split("[ \t]+", $def);
   return "requires 1 parameters" unless (defined $radioId and $radioId ne "");
   $hash->{radioId} = $radioId;
+  $hash->{typeMappings} = {map {variableTypeToIdx($_) => $static_mappings{$_}} keys %static_mappings};
+  $hash->{readingMappings} = {};
   AssignIoPort($hash);
 };
 
@@ -172,14 +175,23 @@ sub Attr($$$$) {
       }
       last;
     };
-    $attribute =~ /^map_(.+)/ and do {
-    	if ($command eq "set") {
-    		$hash->{mappings}->{$1}=join(",",split ("[, \t]+",$value));
-    	} else {
-    		CommandDeleteReading(undef,"$hash->{NAME} $1");
-    		delete $hash->{mappings}->{$1};
-    	}
-    	last;
+    $attribute =~ /^mapReadingType_(.+)/ and do {
+      my $type = variableTypeToIdx("V_$1");
+      if ($command eq "set") {
+        my @values = split (" ",$value);
+        $hash->{typeMappings}->{$type}={
+          type => shift @values,
+          val => {map {$_ =~ /^(.+):(.+)$/; $1 => $2} @values},
+        }
+      } else {
+        if ($static_mappings{"V_$1"}) {
+          $hash->{typeMappings}->{$type}=$static_mappings{"V_$1"};
+        } else {
+          delete $hash->{typeMappings}->{$type};
+        }
+        CommandDeleteReading(undef,"$hash->{NAME} $1"); #TODO do propper remap of existing readings
+      }
+      last;
     };
   }
 }
@@ -194,9 +206,8 @@ sub onPresentationMessage($$) {
 
 sub onSetMessage($$) {
   my ($hash,$msg) = @_;
-  variableTypeToStr($msg->{subType}) =~ /^V_(.+)$/;
-  #readingsSingleUpdate($hash,mapReadings($hash,"$1\_$msg->{childId}"),$msg->{payload},1);
-  readingsSingleUpdate($hash,mapReadings($hash,"$1")."\_$msg->{childId}",$msg->{payload},1);
+  my ($reading,$value) = mapReading($hash,$msg->{subType},$msg->{childId},$msg->{payload});
+  readingsSingleUpdate($hash,$reading,$value,1);
 }
 
 sub onRequestMessage($$) {
@@ -284,18 +295,14 @@ sub sendClientMessage($%) {
   sendMessage($hash->{IODev},%msg);
 }
 
-sub mapReadings($$) {
-	my($hash, $rName) = @_;
-	
-	if(defined($hash->{mappings}->{$rName})) {
-		return $hash->{mappings}->{$rName};
-	}
-	
-	if(defined(%static_mappings->{$rName})) {
-		return %static_mappings->{$rName};
-	}
-	
-	return $rName;
+sub mapReading($$) {
+  my($hash, $type, $childId, $value) = @_;
+
+  if(defined (my $mapping = $hash->{typeMappings}->{$type})) {
+    return ("$mapping->{type}_$childId",defined $mapping->{val}->{$value} ? $mapping->{val}->{$value} : $value);
+  } else {
+    return (variableTypeToStr($type)."_$childId",$value);
+  }
 }
 
 1;
@@ -322,9 +329,9 @@ sub mapReadings($$) {
          configures metric (M) or inch (I). Defaults to 'M'</p>
     </li>
     <li>
-      <p><code>attr &lt;name&gt; map_&lt;reading&gt; [&lt;new reading name&gt;]</code><br/>
+      <p><code>attr &lt;name&gt; mapReadingType_&lt;reading&gt; &lt;new reading name&gt; [&lt;value&gt;:&lt;mappedvalue&gt;]*</code><br/>
          configures reading user names that should be used instead of technical names<br/>
-         E.g.: <code>attr xxx map_TEMP temperature</code></p>
+         E.g.: <code>attr xxx mapReadingType_LIGHT switch 0:on 1:off</code></p>
     </li>
   </ul>
 </ul>
