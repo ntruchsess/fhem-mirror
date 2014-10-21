@@ -26,18 +26,8 @@
 use strict;
 use warnings;
 
-my %sets = (
-);
-
 my %gets = (
   "version"   => "",
-);
-
-my %static_mappings = (
-  "TEMP"        => "temperature",
-  "HUM"         => "humidity",
-  "PRESSURE"    => "pressure",
-  "LIGHT_LEVEL" => "brightness",
 );
 
 sub MYSENSORS_DEVICE_Initialize($) {
@@ -54,7 +44,7 @@ sub MYSENSORS_DEVICE_Initialize($) {
     "config:M,I ".
     "setCommands ".
     "set_.+_\\d+ ".
-    "map_.* ".
+    "mapReadingType_.+ ".
     "requestAck:yes,no ". 
     "IODev ".
     $main::readingFnAttributes;
@@ -77,17 +67,32 @@ BEGIN {
   GP_Import(qw(
     AttrVal
     readingsSingleUpdate
+    CommandDeleteReading
     AssignIoPort
     Log3
-    CommandDeleteReading
   ))
 };
+
+my %static_mappings = (
+  V_TEMP        => { type => "temperature" },
+  V_HUM         => { type => "humidity" },
+  V_PRESSURE    => { type => "pressure" },
+  V_LIGHT_LEVEL => { type => "brightness" },
+  V_LIGHT       => { type => "switch", val => { 0 => 'off', 1 => 'on' }},
+);
 
 sub Define($$) {
   my ( $hash, $def ) = @_;
   my ($name, $type, $radioId) = split("[ \t]+", $def);
   return "requires 1 parameters" unless (defined $radioId and $radioId ne "");
   $hash->{radioId} = $radioId;
+  $hash->{sets} = {
+    'time' => "",
+    clear  => "",
+    reboot => "",
+  };
+  $hash->{typeMappings} = {map {variableTypeToIdx($_) => $static_mappings{$_}} keys %static_mappings};
+  $hash->{readingMappings} = {};
   AssignIoPort($hash);
 };
 
@@ -104,26 +109,32 @@ sub Set($@) {
     if(!defined($hash->{sets}->{$command}));
   COMMAND_HANDLER: {
     $command eq "clear" and do {
-      sendClientMessage($hash, clientId => 255, cmd => C_INTERNAL, subType => I_CHILDREN, payload => "C");
+      sendClientMessage($hash, childId => 255, cmd => C_INTERNAL, subType => I_CHILDREN, payload => "C");
       last;
     };
     $command eq "time" and do {
-      sendClientMessage($hash, clientId => 255, cmd => C_INTERNAL, subType => I_TIME, payload => time);
+      sendClientMessage($hash, childId => 255, cmd => C_INTERNAL, subType => I_TIME, payload => time);
       last;
     };
-    $command =~ /^(.+)_(\d+)$/ and do {
+    $command eq "reboot" and do {
+      sendClientMessage($hash, childId => 255, cmd => C_INTERNAL, subType => I_REBOOT);
+      last;
+    };
+    $command =~ /^(.+_\d+)$/ and do {
       my $value = @values ? join " ",@values : "";
-      sendClientMessage($hash, childId => $2, cmd => C_SET, subType => variableTypeToIdx("V_".$1), payload => $value);
+      my ($type,$childId,$mappedValue) = readingToType($hash,$1,$value);
+      sendClientMessage($hash, childId => $childId, cmd => C_SET, subType => $type, payload => $mappedValue);
       readingsSingleUpdate($hash,$command,$value,1) unless ($hash->{IODev}->{ack});
       last;
     };
     (defined ($hash->{setcommands}->{$command})) and do {
       my $setcommand = $hash->{setcommands}->{$command};
+      my ($type,$childId,$mappedValue) = readingToType($hash,$setcommand->{var},$setcommand->{val});
       sendClientMessage($hash,
-        childId => $setcommand->{id},
+        childId => $childId,
         cmd => C_SET,
-        subType => $setcommand->{type},
-        payload => $setcommand->{val}
+        subType => $type,
+        payload => $mappedValue,
       );
       readingsSingleUpdate($hash,$setcommand->{var},$setcommand->{val},1) unless ($hash->{IODev}->{ack});
       last;
@@ -146,13 +157,11 @@ sub Attr($$$$) {
     $attribute eq "setCommands" and do {
       if ($command eq "set") {
         foreach my $setCmd (split ("[, \t]+",$value)) {
-          $setCmd =~ /^(.+):(.+)_(\d+):(.+)$/;
+          $setCmd =~ /^(.+):(.+_\d+):(.+)$/;
           $hash->{sets}->{$1}="";
           $hash->{setcommands}->{$1} = {
-            type => variableTypeToIdx("V_".$2),
-            var  => "$2\_$3",
-            id  => $3,
-            val => $4,
+            var => $2,
+            val => $3,
           };
         }
       } else {
@@ -163,23 +172,32 @@ sub Attr($$$$) {
       }
       last;
     };
-    $attribute =~ /^set_(.+)_(\d+)$/ and do {
+    $attribute =~ /^set_(.+_\d+)$/ and do {
       if ($command eq "set") {
-        $hash->{sets}->{"$1\_$2"}=join(",",split ("[, \t]+",$value));
+        $hash->{sets}->{$1}=join(",",split ("[, \t]+",$value));
       } else {
         CommandDeleteReading(undef,"$hash->{NAME} $1");
         delete $hash->{sets}->{$1};
       }
       last;
     };
-    $attribute =~ /^map_(.+)/ and do {
-    	if ($command eq "set") {
-    		$hash->{mappings}->{$1}=join(",",split ("[, \t]+",$value));
-    	} else {
-    		CommandDeleteReading(undef,"$hash->{NAME} $1");
-    		delete $hash->{mappings}->{$1};
-    	}
-    	last;
+    $attribute =~ /^mapReadingType_(.+)/ and do {
+      my $type = variableTypeToIdx("V_$1");
+      if ($command eq "set") {
+        my @values = split ("[, \t]",$value);
+        $hash->{typeMappings}->{$type}={
+          type => shift @values,
+          val => {map {$_ =~ /^(.+):(.+)$/; $1 => $2} @values},
+        }
+      } else {
+        if ($static_mappings{"V_$1"}) {
+          $hash->{typeMappings}->{$type}=$static_mappings{"V_$1"};
+        } else {
+          delete $hash->{typeMappings}->{$type};
+        }
+        CommandDeleteReading(undef,"$hash->{NAME} $1"); #TODO do propper remap of existing readings
+      }
+      last;
     };
   }
 }
@@ -194,9 +212,8 @@ sub onPresentationMessage($$) {
 
 sub onSetMessage($$) {
   my ($hash,$msg) = @_;
-  variableTypeToStr($msg->{subType}) =~ /^V_(.+)$/;
-  #readingsSingleUpdate($hash,mapReadings($hash,"$1\_$msg->{childId}"),$msg->{payload},1);
-  readingsSingleUpdate($hash,mapReadings($hash,"$1")."\_$msg->{childId}",$msg->{payload},1);
+  my ($reading,$value) = mapReading($hash,$msg->{subType},$msg->{childId},$msg->{payload});
+  readingsSingleUpdate($hash,$reading,$value,1);
 }
 
 sub onRequestMessage($$) {
@@ -212,17 +229,18 @@ sub onRequestMessage($$) {
 
 sub onInternalMessage($$) {
   my ($hash,$msg) = @_;
+  my $name = $hash->{NAME};
   my $type = $msg->{subType};
   my $typeStr = internalMessageTypeToStr($type);
   INTERNALMESSAGE: {
     $type == I_BATTERY_LEVEL and do {
       readingsSingleUpdate($hash,"batterylevel",$msg->{payload},1);
-      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: batterylevel $msg->{payload}");
+      Log3 ($name,4,"MYSENSORS_DEVICE $name: batterylevel $msg->{payload}");
       last;
     };
     $type == I_TIME and do {
-      sendClientMessage($hash,cmd => C_INTERNAL, ack => 0, subType => I_TIME, payload => time);
-      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: update of time requested");
+      sendClientMessage($hash,cmd => C_INTERNAL, subType => I_TIME, payload => time);
+      Log3 ($name,4,"MYSENSORS_DEVICE $name: update of time requested");
       last;
     };
     $type == I_VERSION and do {
@@ -242,8 +260,8 @@ sub onInternalMessage($$) {
       last;
     };
     $type == I_CONFIG and do {
-      sendClientMessage($hash,cmd => C_INTERNAL, ack => 0, subType => I_CONFIG, payload => AttrVal($hash->{NAME},"config","M"));
-      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: respond to config-request");
+      sendClientMessage($hash,cmd => C_INTERNAL, subType => I_CONFIG, payload => AttrVal($name,"config","M"));
+      Log3 ($name,4,"MYSENSORS_DEVICE $name: respond to config-request");
       last;
     };
     $type == I_PING and do {
@@ -260,7 +278,7 @@ sub onInternalMessage($$) {
     };
     $type == I_CHILDREN and do {
       readingsSingleUpdate($hash,"state","routingtable cleared",1);
-      Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{name}: routingtable cleared");
+      Log3 ($name,4,"MYSENSORS_DEVICE $name: routingtable cleared");
       last;
     };
     $type == I_SKETCH_NAME and do {
@@ -284,18 +302,28 @@ sub sendClientMessage($%) {
   sendMessage($hash->{IODev},%msg);
 }
 
-sub mapReadings($$) {
-	my($hash, $rName) = @_;
-	
-	if(defined($hash->{mappings}->{$rName})) {
-		return $hash->{mappings}->{$rName};
-	}
-	
-	if(defined(%static_mappings->{$rName})) {
-		return %static_mappings->{$rName};
-	}
-	
-	return $rName;
+sub mapReading($$) {
+  my($hash, $type, $childId, $value) = @_;
+
+  if(defined (my $mapping = $hash->{typeMappings}->{$type})) {
+    return ("$mapping->{type}_$childId",defined $mapping->{val}->{$value} ? $mapping->{val}->{$value} : $value);
+  } else {
+    return (variableTypeToStr($type)."_$childId",$value);
+  }
+}
+
+sub readingToType($$$) {
+  my ($hash,$reading,$value) = @_;
+  $reading =~ /^(.+)_(\d+)$/;
+  if (my @types = grep {$hash->{typeMappings}->{$_}->{type} eq $1} keys %{$hash->{typeMappings}}) {
+    my $type = shift @types;
+    my $valueMappings = $hash->{typeMappings}->{$type}->{val};
+    if (my @mappedValues = grep {$valueMappings->{$_} eq $value} keys %$valueMappings) {
+      return ($type,$2,shift @mappedValues);
+    }
+    return ($type,$2,$value);
+  }
+  return (variableTypeToIdx("V_$1"),$2,$value);
 }
 
 1;
@@ -322,9 +350,9 @@ sub mapReadings($$) {
          configures metric (M) or inch (I). Defaults to 'M'</p>
     </li>
     <li>
-      <p><code>attr &lt;name&gt; map_&lt;reading&gt; [&lt;new reading name&gt;]</code><br/>
+      <p><code>attr &lt;name&gt; mapReadingType_&lt;reading&gt; &lt;new reading name&gt; [&lt;value&gt;:&lt;mappedvalue&gt;]*</code><br/>
          configures reading user names that should be used instead of technical names<br/>
-         E.g.: <code>attr xxx map_TEMP temperature</code></p>
+         E.g.: <code>attr xxx mapReadingType_LIGHT switch 0:on 1:off</code></p>
     </li>
   </ul>
 </ul>
