@@ -120,19 +120,21 @@ sub Set($@) {
       sendClientMessage($hash, childId => 255, cmd => C_INTERNAL, subType => I_REBOOT);
       last;
     };
-    $command =~ /^(.+)_(\d+)$/ and do {
+    $command =~ /^(.+_\d+)$/ and do {
       my $value = @values ? join " ",@values : "";
-      sendClientMessage($hash, childId => $2, cmd => C_SET, subType => variableTypeToIdx("V_".$1), payload => $value);
+      my ($type,$childId,$mappedValue) = readingToType($hash,$1,$value);
+      sendClientMessage($hash, childId => $childId, cmd => C_SET, subType => $type, payload => $mappedValue);
       readingsSingleUpdate($hash,$command,$value,1) unless ($hash->{IODev}->{ack});
       last;
     };
     (defined ($hash->{setcommands}->{$command})) and do {
       my $setcommand = $hash->{setcommands}->{$command};
+      my ($type,$childId,$mappedValue) = readingToType($hash,$setcommand->{var},$setcommand->{val});
       sendClientMessage($hash,
-        childId => $setcommand->{id},
+        childId => $childId,
         cmd => C_SET,
-        subType => $setcommand->{type},
-        payload => $setcommand->{val}
+        subType => $type,
+        payload => $mappedValue,
       );
       readingsSingleUpdate($hash,$setcommand->{var},$setcommand->{val},1) unless ($hash->{IODev}->{ack});
       last;
@@ -155,13 +157,11 @@ sub Attr($$$$) {
     $attribute eq "setCommands" and do {
       if ($command eq "set") {
         foreach my $setCmd (split ("[, \t]+",$value)) {
-          $setCmd =~ /^(.+):(.+)_(\d+):(.+)$/;
+          $setCmd =~ /^(.+):(.+_\d+):(.+)$/;
           $hash->{sets}->{$1}="";
           $hash->{setcommands}->{$1} = {
-            type => variableTypeToIdx("V_".$2),
-            var  => "$2\_$3",
-            id  => $3,
-            val => $4,
+            var => $2,
+            val => $3,
           };
         }
       } else {
@@ -172,20 +172,19 @@ sub Attr($$$$) {
       }
       last;
     };
-    $attribute =~ /^set_(.+)_(\d+)$/ and do {
-      my $var = "$1\_$2";
+    $attribute =~ /^set_(.+_\d+)$/ and do {
       if ($command eq "set") {
-        $hash->{sets}->{$var}=join(",",split ("[, \t]+",$value));
+        $hash->{sets}->{$1}=join(",",split ("[, \t]+",$value));
       } else {
-        CommandDeleteReading(undef,"$hash->{NAME} $var");
-        delete $hash->{sets}->{$var};
+        CommandDeleteReading(undef,"$hash->{NAME} $1");
+        delete $hash->{sets}->{$1};
       }
       last;
     };
     $attribute =~ /^mapReadingType_(.+)/ and do {
       my $type = variableTypeToIdx("V_$1");
       if ($command eq "set") {
-        my @values = split (" ",$value);
+        my @values = split ("[, \t]",$value);
         $hash->{typeMappings}->{$type}={
           type => shift @values,
           val => {map {$_ =~ /^(.+):(.+)$/; $1 => $2} @values},
@@ -311,6 +310,20 @@ sub mapReading($$) {
   } else {
     return (variableTypeToStr($type)."_$childId",$value);
   }
+}
+
+sub readingToType($$$) {
+  my ($hash,$reading,$value) = @_;
+  $reading =~ /^(.+)_(\d+)$/;
+  if (my @types = grep {$hash->{typeMappings}->{$_}->{type} eq $1} keys %{$hash->{typeMappings}}) {
+    my $type = shift @types;
+    my $valueMappings = $hash->{typeMappings}->{$type}->{val};
+    if (my @mappedValues = grep {$valueMappings->{$_} eq $value} keys %$valueMappings) {
+      return ($type,$2,shift @mappedValues);
+    }
+    return ($type,$2,$value);
+  }
+  return (variableTypeToIdx("V_$1"),$2,$value);
 }
 
 1;
