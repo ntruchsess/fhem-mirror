@@ -43,9 +43,9 @@ sub MYSENSORS_DEVICE_Initialize($) {
   $hash->{AttrList} =
     "config:M,I ".
     "setCommands ".
-    "set_.+_\\d+ ".
+    "setReading_.+_\\d+ ".
     "mapReadingType_.+ ".
-    "requestAck:yes,no ". 
+    "requestAck:1 ". 
     "IODev ".
     $main::readingFnAttributes;
 
@@ -91,6 +91,7 @@ sub Define($$) {
     clear  => "",
     reboot => "",
   };
+  $hash->{ack} = 0;
   $hash->{typeMappings} = {map {variableTypeToIdx($_) => $static_mappings{$_}} keys %static_mappings};
   $hash->{readingMappings} = {};
   AssignIoPort($hash);
@@ -124,7 +125,7 @@ sub Set($@) {
       my $value = @values ? join " ",@values : "";
       my ($type,$childId,$mappedValue) = readingToType($hash,$1,$value);
       sendClientMessage($hash, childId => $childId, cmd => C_SET, subType => $type, payload => $mappedValue);
-      readingsSingleUpdate($hash,$command,$value,1) unless ($hash->{IODev}->{ack});
+      readingsSingleUpdate($hash,$command,$value,1) unless ($hash->{ack} or $hash->{IODev}->{ack});
       last;
     };
     (defined ($hash->{setcommands}->{$command})) and do {
@@ -136,7 +137,7 @@ sub Set($@) {
         subType => $type,
         payload => $mappedValue,
       );
-      readingsSingleUpdate($hash,$setcommand->{var},$setcommand->{val},1) unless ($hash->{IODev}->{ack});
+      readingsSingleUpdate($hash,$setcommand->{var},$setcommand->{val},1) unless ($hash->{ack} or $hash->{IODev}->{ack});
       last;
     };
     return "$command not defined by attr setCommands";
@@ -172,7 +173,7 @@ sub Attr($$$$) {
       }
       last;
     };
-    $attribute =~ /^set_(.+_\d+)$/ and do {
+    $attribute =~ /^setReading_(.+_\d+)$/ and do {
       if ($command eq "set") {
         $hash->{sets}->{$1}=join(",",split ("[, \t]+",$value));
       } else {
@@ -199,6 +200,14 @@ sub Attr($$$$) {
       }
       last;
     };
+    $attribute eq "requestAck" and do {
+      if ($command eq "set") {
+        $hash->{ack} = 1;
+      } else {
+        $hash->{ack} = 0;
+      }
+      last;
+    };
   }
 }
 
@@ -212,8 +221,12 @@ sub onPresentationMessage($$) {
 
 sub onSetMessage($$) {
   my ($hash,$msg) = @_;
-  my ($reading,$value) = mapReading($hash,$msg->{subType},$msg->{childId},$msg->{payload});
-  readingsSingleUpdate($hash,$reading,$value,1);
+  if (defined $msg->{payload}) {
+    my ($reading,$value) = mapReading($hash,$msg->{subType},$msg->{childId},$msg->{payload});
+    readingsSingleUpdate($hash,$reading,$value,1);
+  } else {
+    Log3 ($hash->{NAME},5,"MYSENSORS_DEVICE $hash->{NAME}: ignoring C_SET-message without payload");
+  }
 }
 
 sub onRequestMessage($$) {
@@ -299,6 +312,7 @@ sub onInternalMessage($$) {
 sub sendClientMessage($%) {
   my ($hash,%msg) = @_;
   $msg{radioId} = $hash->{radioId};
+  $msg{ack} = 1 if $hash->{ack};
   sendMessage($hash->{IODev},%msg);
 }
 
@@ -342,6 +356,24 @@ sub readingToType($$$) {
     <p><code>define &lt;name&gt; MYSENSORS_DEVICE &lt;Sensor-type&gt; &lt;node-id&gt;</code><br/>
       Specifies the MYSENSOR_DEVICE device.</p>
   </ul>
+  <a name="MYSENSORS_DEVICEset"></a>
+  <p><b>Set</b></p>
+  <ul>
+    <li>
+      <p><code>set &lt;name&gt; clear</code><br/>
+         clears routing-table of a repeater-node</p>
+    </li>
+    <li>
+      <p><code>set &lt;name&gt; time</code><br/>
+         sets time for nodes (that support it)</p>
+    </li>
+    <li>
+      <p><code>set &lt;name&gt; reboot</code><br/>
+         reboots a node (requires a bootloader that supports it).<br/>
+         Attention: Nodes that run the standard arduino-bootloader will enter a bootloop!<br/>
+         Dis- and reconnect the nodes power to restart in this case.</p>
+    </li>
+  </ul>
   <a name="MYSENSORS_DEVICEattr"></a>
   <p><b>Attributes</b></p>
   <ul>
@@ -350,9 +382,26 @@ sub readingToType($$$) {
          configures metric (M) or inch (I). Defaults to 'M'</p>
     </li>
     <li>
+      <p><code>attr &lt;name&gt; setCommands [&lt;command:reading:value&gt;]*</code><br/>
+         configures one or more commands that can be executed by set.<br/>
+         e.g.: <code>attr &lt;name&gt; setCommands on:switch_1:on off:switch_1:off</code></p>
+    </li>
+    <li>
+      <p><code>attr &lt;name&gt; setReading_&lt;reading&gt; [&lt;value&gt;]*</code><br/>
+         configures a reading that can be modified by set-command<br/>
+         e.g.: <code>attr &lt;name&gt; setReading_switch_1 on,off</code></p>
+    </li>
+    <li>
       <p><code>attr &lt;name&gt; mapReadingType_&lt;reading&gt; &lt;new reading name&gt; [&lt;value&gt;:&lt;mappedvalue&gt;]*</code><br/>
          configures reading user names that should be used instead of technical names<br/>
          E.g.: <code>attr xxx mapReadingType_LIGHT switch 0:on 1:off</code></p>
+    </li>
+    <li>
+      <p><code>att &lt;name&gt; requestAck</code><br/>
+         request acknowledge from nodes.<br/>
+         if set the Readings of nodes are updated not before requested acknowledge is received<br/>
+         if not set the Readings of nodes are updated immediatly (not awaiting the acknowledge).<br/>
+         May also be configured on the gateway for all nodes at once</p>
     </li>
   </ul>
 </ul>

@@ -337,17 +337,21 @@ sub onInternalMsg($$) {
         last;
       };
       $type == I_ID_REQUEST and do {
-        my %nodes = map {$_ => 1} (AttrVal($hash->{NAME},"first-sensorid",20) ... 254);
-        GP_ForallClients($hash,sub {
-          my $client = shift;
-          delete $nodes{$client->{radioId}};
-        });
-        if (keys %nodes) {
-          my $newid = (keys %nodes)[0];
-          sendMessage($hash,radioId => 255, childId => 255, cmd => C_INTERNAL, ack => 0, subType => I_ID_RESPONSE, payload => $newid);
-          Log3($hash->{NAME},4,"MYSENSORS $hash->{NAME} assigned new nodeid $newid");
+        if ($hash->{'inclusion-mode'}) {
+          my %nodes = map {$_ => 1} (AttrVal($hash->{NAME},"first-sensorid",20) ... 254);
+          GP_ForallClients($hash,sub {
+            my $client = shift;
+            delete $nodes{$client->{radioId}};
+          });
+          if (keys %nodes) {
+            my $newid = (keys %nodes)[0];
+            sendMessage($hash,radioId => 255, childId => 255, cmd => C_INTERNAL, ack => 0, subType => I_ID_RESPONSE, payload => $newid);
+            Log3($hash->{NAME},4,"MYSENSORS $hash->{NAME} assigned new nodeid $newid");
+          } else {
+            Log3($hash->{NAME},4,"MYSENSORS $hash->{NAME} cannot assign new nodeid");
+          }
         } else {
-          Log3($hash->{NAME},4,"MYSENSORS $hash->{NAME} cannot assign new nodeid");
+          Log3($hash->{NAME},4,"MYSENSORS: ignoring id-request-msg from unknown radioId $msg->{radioId}");
         }
         last;
       };
@@ -365,7 +369,7 @@ sub onStreamMsg($$) {
 
 sub sendMessage($%) {
   my ($hash,%msg) = @_;
-  $msg{ack} = $hash->{ack};
+  $msg{ack} = $hash->{ack} unless $msg{ack};
   my $txt = createMsg(%msg);
   Log3 ($hash->{NAME},5,"MYSENSORS send: ".dumpMsg(\%msg));
   DevIo_SimpleWrite($hash,"$txt\n",undef);
@@ -426,17 +430,18 @@ sub matchClient($$) {
   <p><b>Attributes</b></p>
   <ul>
     <li>
-      <p>autocreate<br/>
+      <p><code>att &lt;name&gt; autocreate</code><br/>
          enables auto-creation of MYSENSOR_DEVICE-devices on receival of presentation-messages</p>
     </li>
     <li>
-      <p>requestAck<br/>
+      <p><code>att &lt;name&gt; requestAck</code><br/>
          request acknowledge from nodes.<br/>
          if set the Readings of nodes are updated not before requested acknowledge is received<br/>
-         if not set the Readings of nodes are updated immediatly (not awaiting the acknowledge)./p>
+         if not set the Readings of nodes are updated immediatly (not awaiting the acknowledge).
+         May also be configured for individual nodes if not set for gateway.</p>
     </li>
     <li>
-      <p>first-sensorid<br/>
+      <p><code>att &lt;name&gt; first-sensorid <&lt;number &lth; 255&gt;></code><br/>
          configures the lowest node-id assigned to a mysensor-node on request (defaults to 20)</p>
     </li>
   </ul>
