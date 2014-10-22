@@ -221,8 +221,12 @@ sub onPresentationMessage($$) {
 
 sub onSetMessage($$) {
   my ($hash,$msg) = @_;
-  my ($reading,$value) = mapReading($hash,$msg->{subType},$msg->{childId},$msg->{payload});
-  readingsSingleUpdate($hash,$reading,$value,1);
+  if (defined $msg->{payload}) {
+    my ($reading,$value) = mapReading($hash,$msg->{subType},$msg->{childId},$msg->{payload});
+    readingsSingleUpdate($hash,$reading,$value,1);
+  } else {
+    Log3 ($hash->{NAME},5,"MYSENSORS_DEVICE $hash->{NAME}: ignoring C_SET-message without payload");
+  }
 }
 
 sub onRequestMessage($$) {
