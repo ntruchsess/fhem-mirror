@@ -369,7 +369,7 @@ sub onStreamMsg($$) {
 
 sub sendMessage($%) {
   my ($hash,%msg) = @_;
-  $msg{ack} = $hash->{ack};
+  $msg{ack} = $hash->{ack} unless $msg{ack};
   my $txt = createMsg(%msg);
   Log3 ($hash->{NAME},5,"MYSENSORS send: ".dumpMsg(\%msg));
   DevIo_SimpleWrite($hash,"$txt\n",undef);
@@ -430,17 +430,18 @@ sub matchClient($$) {
   <p><b>Attributes</b></p>
   <ul>
     <li>
-      <p>autocreate<br/>
+      <p><code>att &lt;name&gt; autocreate</code><br/>
          enables auto-creation of MYSENSOR_DEVICE-devices on receival of presentation-messages</p>
     </li>
     <li>
-      <p>requestAck<br/>
+      <p><code>att &lt;name&gt; requestAck</code><br/>
          request acknowledge from nodes.<br/>
          if set the Readings of nodes are updated not before requested acknowledge is received<br/>
-         if not set the Readings of nodes are updated immediatly (not awaiting the acknowledge)./p>
+         if not set the Readings of nodes are updated immediatly (not awaiting the acknowledge).
+         May also be configured for individual nodes if not set for gateway.</p>
     </li>
     <li>
-      <p>first-sensorid<br/>
+      <p><code>att &lt;name&gt; first-sensorid <&lt;number &lth; 255&gt;></code><br/>
          configures the lowest node-id assigned to a mysensor-node on request (defaults to 20)</p>
     </li>
   </ul>
