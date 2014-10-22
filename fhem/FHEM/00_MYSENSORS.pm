@@ -337,17 +337,21 @@ sub onInternalMsg($$) {
         last;
       };
       $type == I_ID_REQUEST and do {
-        my %nodes = map {$_ => 1} (AttrVal($hash->{NAME},"first-sensorid",20) ... 254);
-        GP_ForallClients($hash,sub {
-          my $client = shift;
-          delete $nodes{$client->{radioId}};
-        });
-        if (keys %nodes) {
-          my $newid = (keys %nodes)[0];
-          sendMessage($hash,radioId => 255, childId => 255, cmd => C_INTERNAL, ack => 0, subType => I_ID_RESPONSE, payload => $newid);
-          Log3($hash->{NAME},4,"MYSENSORS $hash->{NAME} assigned new nodeid $newid");
+        if ($hash->{'inclusion-mode'}) {
+          my %nodes = map {$_ => 1} (AttrVal($hash->{NAME},"first-sensorid",20) ... 254);
+          GP_ForallClients($hash,sub {
+            my $client = shift;
+            delete $nodes{$client->{radioId}};
+          });
+          if (keys %nodes) {
+            my $newid = (keys %nodes)[0];
+            sendMessage($hash,radioId => 255, childId => 255, cmd => C_INTERNAL, ack => 0, subType => I_ID_RESPONSE, payload => $newid);
+            Log3($hash->{NAME},4,"MYSENSORS $hash->{NAME} assigned new nodeid $newid");
+          } else {
+            Log3($hash->{NAME},4,"MYSENSORS $hash->{NAME} cannot assign new nodeid");
+          }
         } else {
-          Log3($hash->{NAME},4,"MYSENSORS $hash->{NAME} cannot assign new nodeid");
+          Log3($hash->{NAME},4,"MYSENSORS: ignoring id-request-msg from unknown radioId $msg->{radioId}");
         }
         last;
       };
