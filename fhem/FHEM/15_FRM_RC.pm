@@ -28,7 +28,7 @@ use constant RC_TRISTATE_CHARS      => {
 
 use constant RC_TRISTATE_BITS      => { reverse(%{RC_TRISTATE_CHARS()}) };
 
-my @rc_observers = ();
+my %rc_observers = ();
 my %force_apply = ();
 
 
@@ -131,7 +131,7 @@ FRM_RC_Attr($$$$$)
 sub FRM_RC_register_observer {
   my ($hash, $pin, $observer_method) = @_;
   my $name = $hash->{NAME};
-  $rc_observers[$pin] =  {
+  $rc_observers{$pin} = {
       method  => $observer_method,
       context => $hash,
   };
@@ -154,7 +154,7 @@ sub FRM_RC_register_observer {
 sub FRM_RC_unregister_observer {
   my ($hash, $pin) = @_;
   Log3($hash, 4, "$hash->{NAME}: removing observer");
-  $rc_observers[$pin] = undef;
+  delete $rc_observers{$pin};
 }
 
 # apply an attribute (whose value is already set)
@@ -202,23 +202,38 @@ sub FRM_RC_set_parameter {
   return FRM_RC_send_message($hash, $subcommand, $pin, @data);
 }
 
-
-sub FRM_RC_observe_sysex {
+sub FRM_RC_observe_sysex { # may be called for any sysex message, not only for RC messages
   my ($sysex_message, undef) = @_;
   
   my $command            = $sysex_message->{command};
   my $sysex_message_data = $sysex_message->{data};
   if (ref($sysex_message_data) ne 'ARRAY') {
-    return "sysex data is not an array: $sysex_message_data";
+    return;
   }
-  my $subcommand         = shift @$sysex_message_data;
-  my $pin                = shift @$sysex_message_data;
-  my @data               = Device::Firmata::Protocol::unpack_from_7bit(@$sysex_message_data);
-  my $observer           = $rc_observers[$pin];
-
-  if (defined $observer) {
-    $observer->{method}( $observer->{context}, $subcommand, @data );
+  
+  my @message_data = @$sysex_message_data;
+  if (@message_data < 2) {
+    return;
   }
+  
+  my $subcommand = $message_data[0];
+  my $pin        = $message_data[1];
+  if (!defined($pin) || !defined($rc_observers{$pin})) {
+    return;
+  }
+  
+  my $observer          = $rc_observers{$pin};  
+  my $hash              = $observer->{context};
+  my $firmata           = FRM_Client_FirmataDevice($hash);
+  my $protocol          = $firmata->{protocol};
+  my $protocol_version  = $protocol->{protocol_version};
+  my $protocol_commands = $COMMANDS->{$protocol_version};
+  if ($command != $protocol_commands->{RESERVED_COMMAND}) {
+    return;
+  }
+  
+  my @data = Device::Firmata::Protocol::unpack_from_7bit(@message_data[2..@message_data-1]);
+  $observer->{method}($hash, $subcommand, @data);
 }
 
 sub FRM_RC_get_tristate_code {
