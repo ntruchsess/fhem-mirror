@@ -41,7 +41,7 @@ sub
 FRM_RCIN_Init($$)
 {
   my ($hash, $args) = @_;
-  FRM_RC_Init($hash, PINMODE_RCINPUT, \&FRM_RCIN_handle_rc_response, $args);
+  return FRM_RC_Init($hash, PINMODE_RCINPUT, \&FRM_RCIN_handle_rc_response, $args);
 }
 
 sub FRM_RCIN_Notify {
