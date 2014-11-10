@@ -27,21 +27,25 @@ package websocket;
 
 use strict;
 use warnings;
+
 use JSON;
+use Protocol::WebSocket::Handshake::Server;
+use Data::Dumper;
 
 use GPUtils qw(:all);
-
-use Protocol::WebSocket::Handshake::Server;
 
 BEGIN {GP_Import(qw(
   TcpServer_Open
   TcpServer_Accept
   TcpServer_SetSSL
   TcpServer_Close
+  RemoveInternalTimer
+  InternalTimer
   AnalyzeCommandChain
   CommandDelete
   CommandInform
   Log3
+  gettimeofday
 ))};
 
 ##########################
@@ -69,7 +73,7 @@ Define($$$)
     return $ret;
   }
   
-  $hash->{NOTIFYDEV} = 'global';
+  $hash->{NOTIFYDEV} = '*';
 }
 
 ##########################
@@ -78,15 +82,12 @@ Read($) {
   my ($hash) = @_;
   my $name = $hash->{NAME};
   if($hash->{SERVERSOCKET}) {   # Accept and create a child
-    my $chash = TcpServer_Accept($hash, "telnet");
+    my $chash = TcpServer_Accept($hash, "websocket");
     return if(!$chash);
-    my $env = {
-        HTTP_HOST => 'localhost',
-        HTTP_CONNECTION => 'Upgrade',
-    };
-    $chash->{handshake} = Protocol::WebSocket::Handshake::Server->new_from_psgi($env);
-    $chash->{NOTIFYDEV} = '*';
-    %main::ntfyHash = ();
+    $chash->{hs} = Protocol::WebSocket::Handshake::Server->new;
+    $chash->{ws} = 'new';
+    $chash->{timeout} = 10;
+    $chash->{pong_received} = 1;
     return;
   }
 
@@ -97,19 +98,24 @@ Read($) {
     return;
   }
 
-  my $frame = $hash->{frame};
-  unless (defined $frame) {
-    if (defined (my $hs = $hash->{handshake})) {
-      $hs->parse($buf);
-      if ($hs->is_done) { # tells us when handshake is done
-        $frame = $hs->build_frame;
-        $hash->{frame} = $frame;
-      }
-    } else {
+  $name = $hash->{SNAME};
+  Log3 ($name,5,$buf);
+
+  if ($hash->{ws} eq 'new') {
+    unless ($hash->{hs}->parse($buf) and $hash->{hs}->is_done) {
+      Log3 ($name,5,$hash->{hs}->error) if ($hash->{hs}->error);
       return;
     }
+    Log3 ($name,5,Dumper($hash->{hs}));
+    Log3 ($name,5,$hash->{hs}->to_string);
+    syswrite($hash->{CD},$hash->{hs}->to_string);
+    $hash->{ws} = 'open';
+    $hash->{frame} = $hash->{hs}->build_frame;
+    Timer($hash);
   }
-  if (defined $frame) {
+
+  if ($hash->{ws} eq 'open') {
+    my $frame = $hash->{frame};
     $frame->append($buf);
     while (defined(my $message = $frame->next)) {
       MESSAGE: {
@@ -132,6 +138,7 @@ Read($) {
         };
         $frame->is_pong and do {
           Log3 ($name,5,"websocket pong $message");
+          $hash->{pong_received} = 1;
           last;
         };
         $frame->is_close and do {
@@ -141,7 +148,6 @@ Read($) {
         };
       }
     }
-    return;
   }
 }
 
@@ -170,22 +176,62 @@ Undef($$) {
 
 sub Notify() {
   my ($hash,$dev) = @_;
-
-  return unless $hash->{CD}; # for connected clients only
-  my $json = encode_json {
-    event => {
-      name => $dev->{NAME},
-      changed => [map {$_=~ /^([^:]+)(: )?(.*)$/; ((defined $3) and ($3 ne "")) ? ($1 => $3) : ('state' => $1) } @{$dev->{CHANGED}}],
+  my $name = $hash->{NAME};
+  my @clients = grep {($main::defs{$_}{SNAME} || "") eq $name} keys %main::defs;
+  if (@clients) {
+    my $json = encode_json {
+      event => {
+        name => $dev->{NAME},
+        changed => [map {$_=~ /^([^:]+)(: )?(.*)$/; ((defined $3) and ($3 ne "")) ? ($1 => $3) : ('state' => $1) } @{$dev->{CHANGED}}],
+      }
+    };
+    Log3($name,5,"websocket notify: $json");
+    foreach my $clname (@clients) {
+      my $cl = $main::defs{$clname};
+      unless ($cl->{CD} and $cl->{hs}) {; # for connected clients only
+        Log3 ($name,5,"skip notify unconnected $clname for $dev->{NAME}");
+      } else {
+        Log3 ($name,5,"send notify to connected $clname for $dev->{NAME}");
+        sendMessage($cl, type => 'text', buffer => $json);
+      }
     }
-  };
-  Log3($hash->{NAME},5,"websocket notify: $json");
-  sendMessage($hash, buffer => $json);
+  }
+}
+
+sub Timer($) {
+  my $cl = shift;
+  RemoveInternalTimer($cl);
+  $cl->{ws} = "timeout" unless $cl->{pong_received};
+  $cl->{pong_received} = 0;
+  InternalTimer(gettimeofday()+$cl->{timeout}, "websocket::Timer", $cl, 0);
+  sendMessage($cl,type => 'ping');
 }
 
 sub
 onTextMessage($$) {
   my ($cl,$message) = @_;
   my $ret = AnalyzeCommandChain($cl, $message);
+  if (defined $ret) {
+    if ($message =~ /^json.*/) {
+      sendMessage($cl, type => 'text', buffer => $ret);
+    } else {
+      my @results = split ("[\n]+",$ret);
+      my $json = encode_json {
+        response => {
+          command => $message,
+          results  => \@results,
+        }
+      };
+      sendMessage($cl, type => 'text', buffer => $json);
+    }
+  } else {
+    my $json = encode_json {
+      response => {
+        command => $message,
+        results  => [],
+      }
+    }
+  }
 }
 
 sub
@@ -194,13 +240,14 @@ onClose($) {
   # Send close frame back
   sendMessage($cl, type => 'close'); #, version => $cl->{handshake}->version);
   TcpServer_Close($cl);
+  RemoveInternalTimer($cl);
   CommandDelete(undef, $cl->{NAME});
 }
 
 sub
 sendMessage($%) {
   my ($cl,%msg) = @_;
-  syswrite($cl->{CD}, $cl->{handshake}->build_frame(%msg)->to_bytes);
+  syswrite($cl->{CD}, $cl->{hs}->build_frame(%msg)->to_bytes);
 }
 1;
 
