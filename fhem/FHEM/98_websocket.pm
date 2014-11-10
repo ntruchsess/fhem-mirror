@@ -31,6 +31,8 @@ use JSON;
 
 use GPUtils qw(:all);
 
+use Protocol::WebSocket::Handshake::Server;
+
 BEGIN {GP_Import(qw(
   TcpServer_Open
   TcpServer_Accept
@@ -60,7 +62,7 @@ Define($$$)
   # Make sure that fhem only runs once
   if($isServer) {
     my $ret = TcpServer_Open($hash, $port, $global);
-    if($ret && !$init_done) {
+    if($ret && !$main::init_done) {
       Log3 $name, 1, "$ret. Exiting.";
       exit(1);
     }
@@ -78,9 +80,13 @@ Read($) {
   if($hash->{SERVERSOCKET}) {   # Accept and create a child
     my $chash = TcpServer_Accept($hash, "telnet");
     return if(!$chash);
-    $chash->{handshake} = Protocol::WebSocket::Handshake::Server->new;
+    my $env = {
+        HTTP_HOST => 'localhost',
+        HTTP_CONNECTION => 'Upgrade',
+    };
+    $chash->{handshake} = Protocol::WebSocket::Handshake::Server->new_from_psgi($env);
     $chash->{NOTIFYDEV} = '*';
-    %ntfyHash = ();
+    %main::ntfyHash = ();
     return;
   }
 
@@ -93,7 +99,7 @@ Read($) {
 
   my $frame = $hash->{frame};
   unless (defined $frame) {
-    if (defined my $hs = $hash->{handshake}) {
+    if (defined (my $hs = $hash->{handshake})) {
       $hs->parse($buf);
       if ($hs->is_done) { # tells us when handshake is done
         $frame = $hs->build_frame;
@@ -144,7 +150,7 @@ sub
 Attr(@)
 {
   my @a = @_;
-  my $hash = $defs{$a[1]};
+  my $hash = $main::defs{$a[1]};
 
   if($a[0] eq "set" && $a[2] eq "SSL") {
     TcpServer_SetSSL($hash);
@@ -169,7 +175,7 @@ sub Notify() {
   my $json = encode_json {
     event => {
       name => $dev->{NAME},
-      changed => [map {$_=~ /^([^:]+)(: )?(.*)$/; defined $3 and $3 ne "" ? $1 => $3 : 'state' => $1 } @{$dev->{CHANGED}}];
+      changed => [map {$_=~ /^([^:]+)(: )?(.*)$/; ((defined $3) and ($3 ne "")) ? ($1 => $3) : ('state' => $1) } @{$dev->{CHANGED}}],
     }
   };
   Log3($hash->{NAME},5,"websocket notify: $json");
@@ -179,7 +185,7 @@ sub Notify() {
 sub
 onTextMessage($$) {
   my ($cl,$message) = @_;
-  $ret = AnalyzeCommandChain($cl, $message);
+  my $ret = AnalyzeCommandChain($cl, $message);
 }
 
 sub
