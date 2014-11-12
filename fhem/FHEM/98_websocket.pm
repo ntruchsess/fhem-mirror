@@ -69,6 +69,7 @@ Define($$$)
   $hash->{global} = $global;
   $hash->{NOTIFYDEV} = '';
   $hash->{onopen} = {};
+  $hash->{onclose} = {};
 
   if ($main::init_done) {
     Init($hash);
@@ -271,6 +272,15 @@ closeSocket($) {
   sendMessage($cl, type => 'close');
   TcpServer_Close($cl);
   RemoveInternalTimer($cl);
+  my $sname = $cl->{SNAME};
+  if ($hash = $main::defs{$sname}) {
+    foreach my $arg (keys %{$hash->{onclose}}) {
+      eval {
+        &{$hash->{onclose}->{$arg}}($cl,$arg);
+      };
+      Log3 ($sname,4,"websocket: ".GP_Catch($@)) if $@;
+    }
+  }
   CommandDelete(undef, $cl->{NAME});
 }
 
@@ -324,6 +334,20 @@ unsubscribeOpen($$) {
   my ($hash,$arg) = @_;
   my $deleted = (delete $hash->{onopen}->{$arg}) // "- undefined -";
   Log3 ($hash->{NAME},5,"websocket unsubscribeOpen");
+}
+
+sub
+subscribeClose($$$) {
+  my ($hash,$fn,$arg) = @_;
+  $hash->{onclose}->{$arg} = $fn;
+  Log3 ($hash->{NAME},5,"websocket subscribeClose $fn");
+}
+
+sub
+unsubscribeClose($$) {
+  my ($hash,$arg) = @_;
+  my $deleted = (delete $hash->{onclose}->{$arg}) // "- undefined -";
+  Log3 ($hash->{NAME},5,"websocket unsubscribeClose");
 }
 
 # these are client hash API methods:
