@@ -10,7 +10,7 @@ openCon = function() {
   document.getElementById("status").value = "new";
   document.getElementById("error").value = "";
   document.getElementById("message").value = "";
-  con = new WebSocket('ws://localhost:8080/fhem', ['json','test']);
+  con = new WebSocket('ws://localhost:8080/fhem', ['json']);
   con.onopen = function() {
     document.getElementById("status").value = "open";
   };

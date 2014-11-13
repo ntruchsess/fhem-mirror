@@ -32,7 +32,7 @@ use GPUtils qw(:all);
 
 use JSON;
 use Protocol::WebSocket::Handshake::Server;
-use Data::Dumper;
+#use Data::Dumper;
 
 BEGIN {GP_Import(qw(
   TcpServer_Open
@@ -45,7 +45,6 @@ BEGIN {GP_Import(qw(
   AnalyzeCommandChain
   AttrVal
   CommandDelete
-  CommandInform
   Log3
   gettimeofday
 ))};
@@ -119,7 +118,7 @@ Read($) {
       #closeSocket($cl);
       return;
     }
-    Log3 ($sname,5,Dumper($cl->{hs}));
+    #Log3 ($sname,5,Dumper($cl->{hs}));
     Log3 ($sname,5,$cl->{hs}->to_string);
     syswrite($cl->{CD},$cl->{hs}->to_string);
     $cl->{ws} = 'open';
@@ -153,7 +152,7 @@ Read($) {
           if ($cl->{json}) {
             eval {
               if (my $json = decode_json $message) {
-                Log3 ($sname,5,"websocket jsonmessage: ".Dumper($json));
+                #Log3 ($sname,5,"websocket jsonmessage: ".Dumper($json));
                 if (defined (my $type = $json->{type})) {
                   if (defined (my $subscriptions = $cl->{typeSubscriptions}->{$type})) {
                     foreach my $arg (keys %$subscriptions) {
@@ -242,7 +241,7 @@ sub Notify() {
         foreach my $changed (@{$dev->{CHANGED}}) {
           push @changed,$changed if (grep {$changed =~ /$_/} keys %{$cl->{eventSubscriptions}->{$arg}});
         }
-        notify($cl,'event',{
+        sendTypedMessage($cl,'event',{
           name    => $dev->{NAME},
           arg     => $arg,
           changed => {map {$_=~ /^([^:]+)(: )?(.*)$/; ((defined $3) and ($3 ne "")) ? ($1 => $3) : ('STATE' => $1) } @changed},
@@ -273,7 +272,7 @@ closeSocket($) {
   TcpServer_Close($cl);
   RemoveInternalTimer($cl);
   my $sname = $cl->{SNAME};
-  if ($hash = $main::defs{$sname}) {
+  if (my $hash = $main::defs{$sname}) {
     foreach my $arg (keys %{$hash->{onclose}}) {
       eval {
         &{$hash->{onclose}->{$arg}}($cl,$arg);
@@ -310,8 +309,30 @@ onCommandMessage($$$) {
         unsubscribeEvent($cl,$message->{arg});
         last;
       };
+      $command eq "list" and do {
+        my $ret = AnalyzeCommand($cl,"jsonlist2 ".$message->{arg});
+        my $json;
+        eval {
+          $json = decode_json($ret) if (defined $ret);
+        };
+        my $ret = GP_Catch($@) if $@;
+        if ($ret) {
+          Log3 ($cl->{SNAME},4,"websocket error jsonlist2: $ret");
+          sendTypedMessage($cl,'commandreply',{
+            command => 'list',
+            reply   => {},
+            error   => $ret,
+          });
+        } else {
+          sendTypedMessage($cl,'commandreply',{
+            command => 'list',
+            reply   => $json,
+          });
+        }
+        last;
+      };
       my $ret = AnalyzeCommandChain($cl, $command);
-      notify($cl,'commandreply',{
+      sendTypedMessage($cl,'commandreply',{
         command => $command,
         reply   => $ret // '',
       });
@@ -381,7 +402,7 @@ unsubscribeEvent($$) {
 }
 
 sub
-notify($$$) {
+sendTypedMessage($$$) {
   my ($cl,$type,$arg) = @_;
   sendMessage($cl, type => 'text', buffer => encode_json {
     type => $type,
