@@ -239,10 +239,11 @@ sub Notify() {
       foreach my $arg (keys %{$cl->{eventSubscriptions}}) {
         my @changed = ();
         foreach my $changed (@{$dev->{CHANGED}}) {
-          push @changed,$changed if (grep {$changed =~ /$_/} keys %{$cl->{eventSubscriptions}->{$arg}});
+          push @changed,$changed if (grep {($dev->{NAME} =~ /$_->{name}/) and ($dev->{TYPE} =~ /$_->{type}/) and ($changed =~ /$_->{changed}/)} @{$cl->{eventSubscriptions}->{$arg}});
         }
         sendTypedMessage($cl,'event',{
           name    => $dev->{NAME},
+          type    => $dev->{TYPE},
           arg     => $arg,
           changed => {map {$_=~ /^([^:]+)(: )?(.*)$/; ((defined $3) and ($3 ne "")) ? ($1 => $3) : ('STATE' => $1) } @changed},
         }) if (@changed);
@@ -302,7 +303,7 @@ onCommandMessage($$$) {
   if (defined (my $command = $message->{command})) {
     COMMAND: {
       $command eq "subscribe" and do {
-        subscribeEvent($cl,$message->{regexp},$message->{arg});
+        subscribeEvent($cl,%$message);
         last;
       };
       $command eq "unsubscribe" and do {
@@ -310,13 +311,13 @@ onCommandMessage($$$) {
         last;
       };
       $command eq "list" and do {
-        my $ret = AnalyzeCommand($cl,"jsonlist2 ".$message->{arg});
+        my $ret = AnalyzeCommand($cl,"jsonlist2 ".$message->{arg}) // '';
         my $json;
         eval {
           $json = decode_json($ret) if (defined $ret);
         };
-        my $ret = GP_Catch($@) if $@;
-        if ($ret) {
+        $ret .= ": ".GP_Catch($@) if $@;
+        unless ($json) {
           Log3 ($cl->{SNAME},4,"websocket error jsonlist2: $ret");
           sendTypedMessage($cl,'commandreply',{
             command => 'list',
@@ -388,10 +389,23 @@ unsubscribeMsgType($$$) {
 }
 
 sub
-subscribeEvent($$) {
-  my ($cl,$regexp,$arg) = @_;
-  $cl->{eventSubscriptions}->{$arg // ''}->{$regexp // ''}++;
-  Log3 ($cl->{SNAME},5,"websocket subscribe for '".($arg // '').": '".($regexp // '')."'");
+subscribeEvent($@) {
+  my ($cl,%args) = @_;
+  my $arg     = $args{arg}     // '';
+  my $name    = $args{name}    // '';
+  my $type    = $args{type}    // '';
+  my $changed = $args{changed} // '';
+  my $subscriptions;
+  unless (defined ($subscriptions = $cl->{eventSubscriptions}->{$arg})) {
+    $subscriptions = [];
+    $cl->{eventSubscriptions}->{$arg} = $subscriptions;
+  }
+  push @$subscriptions,{
+    name    => $name,
+    type    => $type,
+    changed => $changed,
+  };
+  Log3 ($cl->{SNAME},5,"websocket subscribe for device /$name/, type /$type/, arg '$arg' changed /$changed/");
 }
 
 sub
