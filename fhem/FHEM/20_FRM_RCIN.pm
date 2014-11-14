@@ -19,6 +19,12 @@ use constant RCIN_PARAMETERS => {
 };
 use constant RCIN_PARAMETER_NAMES => { reverse(%{RCIN_PARAMETERS()}) };
 
+use constant CLIENTS              => qw( IT );
+
+my %matchListRCIN = (
+	"1:IT" => "^i......\$",
+);
+
 sub
 FRM_RCIN_Initialize($)
 {
@@ -35,6 +41,8 @@ FRM_RCIN_Initialize($)
   $hash->{AttrList} = join(' ', FRM_RCIN_get_attributes(),
                                 keys %{RC_ATTRIBUTES()},
                                 $readingFnAttributes);
+  $hash->{Clients}  = join (':', CLIENTS);
+  $hash->{MatchList} = \%matchListRCIN;
 }
 
 sub
@@ -114,6 +122,8 @@ sub FRM_RCIN_notify
         readingsBulkUpdate($hash, 'rawData', $rawHex);
       }
       readingsEndUpdate($hash, 1);
+ 	  my $icode = sprintf('i%06x', $longCode);
+	  Dispatch($hash, $icode, undef);
       last;
     };
     defined($attrName) and do {
