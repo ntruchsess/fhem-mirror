@@ -16,11 +16,8 @@ fhem.onerror = function(m) {
 }
 
 fhem.onconnected = function() {
-  fhem.subscribeAll();
-  fhem.sendCommand({
-    command: 'list',
-    arg:     '.*'
-  });
+  fhem.subscribe('all');
+  fhem.list();
 }
 
 fhem.onevent = function() {

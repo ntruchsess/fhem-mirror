@@ -11,6 +11,8 @@ function fhem() {
 	fhem.ondisconnected = null;
 	fhem.onevent = null;
 	fhem.onlist = null;
+	fhem.ongetreply = null;
+	fhem.oncommandreply = null;
 
 	function debug(m) {
 		if (fhem.ondebug != null) {
@@ -64,11 +66,20 @@ function fhem() {
 		}
 	};
 
+	function onGetreply(reply) {
+		if (fhem.ongetreply != null) {
+			fhem.ongetreply(reply.device,reply.property,reply.value);
+		};
+	};
+
 	function onCommand(cmd) {
 		switch(cmd.command) {
 		case 'not implemented yet':
 			break;
 		default:
+			if (fhem.oncommandreply != null) {
+				fhem.oncommandreply(cmd.command,cmd.reply);
+			};
 		}
 	};
 	
@@ -112,6 +123,9 @@ function fhem() {
 			case 'listentry':
 				onListentry(msg.payload);
 				break;
+			case 'getreply':
+				onGetreply(msg.payload);
+				break;
 			case 'commandreply':
 				onCommand(msg.payload);
 				break;
@@ -130,11 +144,41 @@ function fhem() {
 			payload: cmd
 		}));
 	};
-		
-	fhem.subscribeAll = function() {
+	
+	fhem.subscribe = function(id,type,name,changed) {
 		fhem.sendCommand({
 			command: 'subscribe',
-			arg: 'all'
+			arg:     id,
+			type:    type,
+			name:    name,
+			changed: changed
 		});
 	};
+	
+	fhem.unsubscribe = function(id) {
+		fhem.sendCommand({
+			command: 'unsubscribe',
+			arg:     id
+		});
+	};
+	
+	fhem.list = function(devspec) {
+		fhem.sendCommand({
+			command: 'list',
+			arg:     devspec
+		});
+	};
+	
+	fhem.set = function(device,property,value) {
+		fhem.sendCommand({
+			command: 'set '+device+' '+property+' '+value
+		});
+	};
+	
+	fhem.get = function(device,property) {
+		fhem.sendCommand({
+			command: 'get '+device+' '+property
+		});
+	};
+	
 };

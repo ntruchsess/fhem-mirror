@@ -343,6 +343,15 @@ onCommandMessage($$$) {
         }
         last;
       };
+      $command eq "get" and do {
+        my $ret = AnylyzeCommand($cl, 'get '.($message->{device} // '').' '.($message->{property} // ''));
+        sendTypedMessage($cl,'getreply',{
+          device   => $message->{device},
+          property => $message->{property},
+          value    => $ret
+        });
+        last;
+      };
       my $ret = AnalyzeCommandChain($cl, $command);
       sendTypedMessage($cl,'commandreply',{
         command => $command,
