@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <title>fhem websocket test</title>
+  <script src="./fhem.js" type="text/javascript"></script>
+  <script type="text/javascript">
+ 
+fhem.ondebug = function(m) {
+  document.getElementById("debug").value = m;
+}
+
+fhem.onerror = function(m) {
+  document.getElementById("error").value = m;
+}
+
+fhem.onconnected = function() {
+  fhem.subscribeAll();
+  fhem.sendCommand({
+    command: 'list',
+    arg:     '.*'
+  });
+}
+
+fhem.onevent = function() {
+  document.getElementById("fhem").value = JSON.stringify(fhem.devices);
+}
+
+
+fhem.onlist = function() {
+  document.getElementById("fhem").value = JSON.stringify(fhem.devices);
+}
+
+openCon = function() {
+  fhem.connect('localhost','8080');
+}
+
+closeCon = function() {
+  fhem.disconnect();
+}
+
+sendCommand = function() {
+	var input = document.getElementById("input").value;
+  fhem.sendCommand({
+    command: input
+  });
+}
+  </script>
+</head>
+<body>
+
+<p><input type="button" value="open" onclick="openCon();"/></p>
+<p><input type="button" value="close" onclick="closeCon();"/></p>
+<p><input id="input" type="text"/><input type="button" value="senden" onclick="sendCommand();"/></p>
+<p>debug: <output id="debug" type="text"/></p>
+<p>error: <output id="error" type="text"/></p>
+<p>fhem: <output id="fhem" type="text"/></p>
+
+</body>
+</html>
