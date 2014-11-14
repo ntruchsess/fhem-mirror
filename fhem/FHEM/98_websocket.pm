@@ -32,6 +32,9 @@ use GPUtils qw(:all);
 
 use JSON;
 use Protocol::WebSocket::Handshake::Server;
+use Time::Local;
+use POSIX qw(strftime);
+
 #use Data::Dumper;
 
 BEGIN {GP_Import(qw(
@@ -47,6 +50,11 @@ BEGIN {GP_Import(qw(
   CommandDelete
   Log3
   gettimeofday
+  devspec2array
+  IsIgnored
+  getAllSets
+  getAllGets
+  getAllAttr
 ))};
 
 ##########################
@@ -311,23 +319,23 @@ onCommandMessage($$$) {
         last;
       };
       $command eq "list" and do {
-        my $ret = AnalyzeCommand($cl,"jsonlist2 ".$message->{arg}) // '';
-        my $json;
-        eval {
-          $json = decode_json($ret) if (defined $ret);
-        };
-        $ret .= ": ".GP_Catch($@) if $@;
-        unless ($json) {
-          Log3 ($cl->{SNAME},4,"websocket error jsonlist2: $ret");
-          sendTypedMessage($cl,'commandreply',{
-            command => 'list',
-            reply   => {},
-            error   => $ret,
-          });
-        } else {
-          sendTypedMessage($cl,'commandreply',{
-            command => 'list',
-            reply   => $json,
+        my @devs = grep {!IsIgnored($_)} (defined $message->{arg}) ? devspec2array($message->{arg}) : keys %main::defs;
+        my $i = 0;
+        my $num = @devs;
+        foreach my $dev (@devs) {
+          my $h = $main::defs{$dev};
+          my $r = $h->{READINGS};
+          sendTypedMessage($cl,'listentry',{
+            arg        => $message->{arg},
+            name       => $dev,
+            'index'    => $i++,
+            num        => $num,
+            sets       => {map {if ($_ =~ /:/) { $_ =~ /^(.+):(.*)$/; $1 => [split (",",$2)] } else { $_ => undef } } split(/ /,getAllSets($dev))},
+            gets       => {map {if ($_ =~ /:/) { $_ =~ /^(.+):(.*)$/; $1 => [split (",",$2)] } else { $_ => undef } } split(/ /,getAllGets($dev))},
+            attrList   => {map {if ($_ =~ /:/) { $_ =~ /^(.+):(.*)$/; $1 => [split (",",$2)] } else { $_ => undef } } split(/ /,getAllAttr($dev))},
+            internals  => {map {(ref ($h->{$_}) eq "") ? ($_ => $h->{$_}) : ()} keys %$h},
+            readings   => {map {$_ => {value  => $r->{$_}->{VAL}, 'time' => strftime ("%c GMT", _fhemTimeGm($r->{$_}->{TIME}))}} keys %$r},
+            attributes => $main::attr{$dev},
           });
         }
         last;
@@ -341,6 +349,13 @@ onCommandMessage($$$) {
   } else {
     Log3 ($cl->{SNAME},4,"websocket no command in command-message");
   }
+}
+
+sub _fhemTimeGm($)
+{
+  my ($fhemtime) = @_;
+  $fhemtime =~ /^(\d+)-(\d+)-(\d+) (\d+):(\d+):(\d+)$/;
+  return gmtime timelocal($6,$5,$4,$3,$2-1,$1);
 }
 
 # these are master hash API methods:
