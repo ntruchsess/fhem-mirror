@@ -46,9 +46,9 @@ function fhem() {
 					time:  event.time
 				};
 			}
-		}
-		if (fhem.onevent != null) {
-			fhem.onevent();
+			if (fhem.onevent != null) {
+				fhem.onevent(event.name,key,event.changed[key],event.time);
+			}
 		}
 	};
 
