@@ -253,6 +253,7 @@ sub Notify() {
           name    => $dev->{NAME},
           type    => $dev->{TYPE},
           arg     => $arg,
+          'time'  => strftime ("%c GMT", _fhemTimeGm($dev->{NTFY_TRIGGERTIME})),
           changed => {map {$_=~ /^([^:]+)(: )?(.*)$/; ((defined $3) and ($3 ne "")) ? ($1 => $3) : ('STATE' => $1) } @changed},
         }) if (@changed);
       }
