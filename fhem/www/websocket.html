@@ -16,7 +16,7 @@ fhem.onerror = function(m) {
 }
 
 fhem.onconnected = function() {
-  fhem.subscribe('all');
+  fhem.subscribeEvent('all');
   fhem.list();
 }
 
