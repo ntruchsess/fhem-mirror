@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <title>fhem websocket test</title>
-  <script src="./fhem.js" type="text/javascript"></script>
-  <script type="text/javascript">
- 
+<title>fhem websocket test</title>
+<script src="./fhem.js" type="text/javascript"></script>
+<script type="text/javascript">
+
+var fhem = new fhem();
+
 fhem.ondebug = function(m) {
   document.getElementById("debug").value = m;
 }
@@ -44,7 +46,8 @@ sendCommand = function() {
     command: input
   });
 }
-  </script>
+
+</script>
 </head>
 <body>
 
