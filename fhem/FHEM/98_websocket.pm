@@ -35,7 +35,7 @@ use Protocol::WebSocket::Handshake::Server;
 use Time::Local;
 use POSIX qw(strftime);
 
-#use Data::Dumper;
+use Data::Dumper;
 
 BEGIN {GP_Import(qw(
   TcpServer_Open
@@ -296,6 +296,7 @@ closeSocket($) {
 sub
 sendMessage($%) {
   my ($cl,%msg) = @_;
+  Log3 ($cl->{SNAME},5,Dumper(\%msg));
   syswrite($cl->{CD}, $cl->{hs}->build_frame(%msg)->to_bytes);
 }
 
@@ -321,6 +322,7 @@ onCommandMessage($$$) {
       };
       $command eq "list" and do {
         my @devs = grep {!IsIgnored($_)} (defined $message->{arg}) ? devspec2array($message->{arg}) : keys %main::defs;
+        Log3 ($cl->{SNAME},5,"websocket command list devs: ".join(",",@devs));
         my $i = 0;
         my $num = @devs;
         foreach my $dev (@devs) {
