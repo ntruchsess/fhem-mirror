@@ -177,7 +177,9 @@ function fhem() {
 	
 	fhem.get = function(device,property) {
 		fhem.sendCommand({
-			command: 'get '+device+' '+property
+			command:  'get',
+			device:   device,
+			property: property
 		});
 	};
 	
