@@ -2,6 +2,7 @@ function fhem() {
 
 	var con = null;
 	var fhem = this;
+	var msgtypes = {};
 
 	fhem.connected = false;
 	fhem.devices = {};
@@ -89,9 +90,9 @@ function fhem() {
 			fhem.disconnect();
 		}
 		
-		fhem.con = new WebSocket('ws://'+address+':'+port, ['json']);
+		con = new WebSocket('ws://'+address+':'+port, ['json']);
 
-		fhem.con.onopen = function() {
+		con.onopen = function() {
 			fhem.connected = true;
 			debug('Connection opened to fhem server!');
 			if (fhem.onconnected!=null) {
@@ -99,7 +100,7 @@ function fhem() {
 			}
 		};
 
-		fhem.con.onclose = function() {
+		con.onclose = function() {
 			fhem.connected = false;
 			debug('Connection closed to fhem server!');
 			if (fhem.ondisconnected!=null) {
@@ -107,45 +108,33 @@ function fhem() {
 			}
 		};
 
-		fhem.con.onerror = function(e) {
+		con.onerror = function(e) {
 			fhem.error('Websocket error ' + e.data + '.');
 		};
 
-		fhem.con.onmessage = function(e) {
+		con.onmessage = function(e) {
 			debug("receiving data: "+e.data);
 			var msg = JSON.parse(e.data);
 			debug("receiving message: "+JSON.stringify(msg));
 
-			switch(msg.type) {
-			case 'event':
-				onEvent(msg.payload);
-				break;
-			case 'listentry':
-				onListentry(msg.payload);
-				break;
-			case 'getreply':
-				onGetreply(msg.payload);
-				break;
-			case 'commandreply':
-				onCommand(msg.payload);
-				break;
-			default:
+			for(id in msgtypes[msg.type]) {
+				msgtypes[msg.type][id](msg.payload);
 			}
 		};
 	},
 
 	fhem.disconnect = function() {
-		fhem.con.close();
+		con.close();
 	};
 
 	fhem.sendCommand = function(cmd) {
-		fhem.con.send(JSON.stringify({
+		con.send(JSON.stringify({
 			type: 'command',
 			payload: cmd
 		}));
 	};
 	
-	fhem.subscribe = function(id,type,name,changed) {
+	fhem.subscribeEvent = function(id,type,name,changed) {
 		fhem.sendCommand({
 			command: 'subscribe',
 			arg:     id,
@@ -155,7 +144,7 @@ function fhem() {
 		});
 	};
 	
-	fhem.unsubscribe = function(id) {
+	fhem.unsubscribeEvent = function(id) {
 		fhem.sendCommand({
 			command: 'unsubscribe',
 			arg:     id
@@ -182,5 +171,23 @@ function fhem() {
 			property: property
 		});
 	};
+
+	fhem.subscribeMsgType = function(type,fn,id) {
+		if (!msgtypes[type]) {
+			msgtypes[type] = {
+				id: fn
+			};
+		} else {
+			msgtypes[type][id] = fn;
+		}
+	};
 	
+	fhem.unsubscribeMsgType = function(type,id) {
+		delete msgtypes[type][id];
+	};
+
+	fhem.subscribeMsgType('event',onEvent,'fhem');
+	fhem.subscribeMsgType('listentry',onListentry,'fhem');
+	fhem.subscribeMsgType('getreply',onGetreply,'fhem');
+	fhem.subscribeMsgType('commandreply',onCommand,'fhem');
 };
