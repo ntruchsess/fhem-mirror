@@ -36,8 +36,8 @@ package main;
 #
 # There might be issues when turning to daylight saving time and back that
 # need further investigation. For reference please see
-# http://forum.fhem.de/index.php?topic=18707.new#new
-# http://forum.fhem.de/index.php?topic=15827.new;topicseen#new
+# http://forum.fhem.de/index.php?topic=18707.new
+# http://forum.fhem.de/index.php?topic=15827.new
 #
 # Potential future extensions: add support for EXDATE
 # http://forum.fhem.de/index.php?topic=24485.new#new
@@ -65,14 +65,25 @@ sub new {
 
 sub addproperty {
   my ($self,$line)= @_;
+  # contentline        = name *(";" param ) ":" value CRLF [Page 13]
+  # example:
   # TRIGGER;VALUE=DATE-TIME:20120531T150000Z
-  #main::Debug "line= $line";
-  my ($property,$parameter)= split(":", $line,2); # TRIGGER;VALUE=DATE-TIME    20120531T150000Z
-  #main::Debug "property= $property parameter= $parameter";
-  my ($key,$parts)= split(";", $property,2);
-  #main::Debug "key= $key parts= $parts";
-  $parts= "" unless(defined($parts));
-  $parameter= "" unless(defined($parameter));
+  #main::Debug "line=\'$line\'";
+  # for DTSTART, DTEND there are several variants:
+  #    DTSTART;TZID=Europe/Berlin:20140205T183600
+  #  * DTSTART;TZID="(UTC+01:00) Amsterdam, Berlin, Bern, Rome, Stockholm, Vienna":20140904T180000
+  #    DTSTART:20140211T212000Z
+  #    DTSTART;VALUE=DATE:20130619
+  my ($key,$parts,$parameter);
+  if($line =~ /^([\w\d\-]+)(;(.*))?:(.*)$/) {
+    $key= $1;
+    $parts= defined($3) ? $3 : "";
+    $parameter= defined($4) ? $4 : "";
+  } else {
+    return;
+  }
+  return unless($key);
+  #main::Debug "-> key=\'$key\' parts=\'$parts\' parameter=\'$parameter\'";
   if($key eq "EXDATE") {
     push @{$self->{properties}{exdates}}, $parameter;
   }
@@ -105,10 +116,19 @@ sub parseSub {
   while($ln<$#ical) {
     my $line= $ical[$ln];
     chomp $line;
-    $line =~ s/[\x0D]//; # chomp will not remove the CR
-    #main::Debug "$ln: $line";
+    $line =~ s/[\x0D]$//; # chomp will not remove the CR
     $ln++;
-    next if($line eq ""); # remove empty line
+    # check for and handle continuation lines (4.1 on page 12)
+    while($ln<$#ical) {
+      my $line1= $ical[$ln];
+      last unless($line1 =~ /^\s(.*)/);
+      $line.= $1;
+      chomp $line;
+      $line =~ s/[\x0D]$//; # chomp will not remove the CR
+      $ln++;
+    };
+    #main::Debug "$ln: $line";
+    next if($line eq ""); # ignore empty line
     last if($line =~ m/^END:.*$/);
     if($line =~ m/^BEGIN:(.*)$/) {
       my $entry= ICal::Entry->new($1);
@@ -601,25 +621,33 @@ sub isAlarmed {
   my ($self,$t) = @_;
   return 0 if($self->isDeleted());
   return $self->{alarm} ?
-    (($self->{alarm}<= $t && $t<= $self->{start}) ? 1 : 0) : 0;
+    (($self->{alarm}<= $t && $t< $self->{start}) ? 1 : 0) : 0;
 }
 
 # return 1 if time is between start time and end time, else 0
 sub isStarted {
   my ($self,$t) = @_;
   return 0 if($self->isDeleted());
-  return $self->{start}<= $t && $t< $self->{end} ? 1 : 0;
+  return 0 unless(defined($self->{start}));
+  return 0 if($t < $self->{start});
+  if(defined($self->{end})) {
+    return 0 if($t>= $self->{end});
+  }
+  return 1;
 }
 
 sub isEnded {
   my ($self,$t) = @_;
   return 0 if($self->isDeleted());
+  return 0 unless(defined($self->{end}));
   return $self->{end}<= $t ? 1 : 0;
 }
 
 sub nextTime {
   my ($self,$t) = @_;
-  my @times= ( $self->{start}, $self->{end} );
+  my @times= ( );
+  push @times, $self->{start} if(defined($self->{start}));
+  push @times, $self->{end} if(defined($self->{end}));
   unshift @times, $self->{alarm} if($self->{alarm});
   @times= sort grep { $_ > $t } @times;
 
@@ -716,7 +744,11 @@ sub updateFromCalendar {
       $event->setMode($self->event($uid)->mode()); # copy the mode from the existing event
       #main::Debug "Our lastModified: " . ts($self->event($uid)->lastModified());
       #main::Debug "New lastModified: " . ts($event->lastModified());
-      if($self->event($uid)->lastModified() != $event->lastModified()) {
+      if(
+	defined($self->event($uid)->lastModified()) &&
+	defined($event->lastModified()) &&
+        ($self->event($uid)->lastModified() != $event->lastModified())
+        ) {
          $event->setState("updated");
          #main::Debug "We set it to updated.";
       } else {
@@ -860,10 +892,12 @@ sub Calendar_GetUpdate($$) {
   my $type = $hash->{fhem}{type};
   my $url= $hash->{fhem}{url};
   
+  my $errmsg= "";
   my $ics;
   
   if($type eq "url"){ 
-    $ics= GetFileFromURLQuiet($url,10,undef,0,5) if($type eq "url");
+    #$ics= GetFileFromURLQuiet($url,10,undef,0,5) if($type eq "url");
+    ($errmsg, $ics)= HttpUtils_BlockingGet( { url => $url, hideurl => 1, timeout => 10, } );
   } elsif($type eq "file") {
     if(open(ICSFILE, $url)) {
       while(<ICSFILE>) { 
@@ -880,8 +914,8 @@ sub Calendar_GetUpdate($$) {
   }
     
   
-  if(!defined($ics) or ("$ics" eq "")) {
-    Log3 $hash, 1, "Calendar " . $hash->{NAME} . ": Could not retrieve file at URL";
+  if(!defined($ics) or ("$ics" eq "") or ($errmsg ne "")) {
+    Log3 $hash, 1, "Calendar " . $hash->{NAME} . ": Could not retrieve file at URL. $errmsg";
     return 0;
   }
   
@@ -945,6 +979,7 @@ sub Calendar_Set($@) {
   my ($hash, @a) = @_;
 
   my $cmd= $a[1];
+  $cmd= "?" unless($cmd);
 
   # usage check
   if((@a == 2) && ($a[1] eq "update")) {
@@ -965,12 +1000,14 @@ sub Calendar_Get($@) {
 
   my ($hash, @a) = @_;
 
-
   my $eventsObj= $hash->{fhem}{events};
   my @events;
 
   my $cmd= $a[1];
-  if(grep(/^$cmd$/, ("text","full","summary","location","alarm","start","end"))) {
+  $cmd= "?" unless($cmd);
+  
+  my @cmds2= qw/text full summary location alarm start end/;
+  if($cmd ~~ @cmds2) {
 
     return "argument is missing" if($#a < 2);
     my $reading= $a[2];
@@ -1016,7 +1053,7 @@ sub Calendar_Get($@) {
     return join(";", @uids);
   
   } else {
-    return "Unknown argument $cmd, choose one of text summary full find";
+    return "Unknown argument $cmd, choose one of find text full summary location alarm start end";
   }
 
 }

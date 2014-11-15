@@ -37,6 +37,7 @@ eventTypes_Define($$)
 
   my ($err, @content) = FileRead($f);
   foreach my $l (@content) {
+    next if(!defined($l));
     next if($l =~ m/ CULHM (SND|RCV) /);
     next if($l =~ m/ UNKNOWNCODE /);
     next if($l =~ m/^\d+ global /);
@@ -73,12 +74,13 @@ eventTypes_Notify($$)
   my $ret = "";
   foreach my $oe (@{$events}) {
     $oe = "" if(!defined($oe));
-    next if($oe =~ m/ CULHM (SND|RCV) /);
+    $oe =~ s/\n.*//s;
+    next if($oe =~ m/ CULHM (SND|RCV) /); # ignore CUL_HM debugging
     next if($oe =~ m/ UNKNOWNCODE /);
 
     my $ne = $oe;
     $ne =~ s/\b-?\d*\.?\d+\b/.*/g;
-    $ne =~ s/set_\d+/set_.*/;   # HM special :/
+    $ne =~ s/set_\d+/set_.*/;              # another HM special :/
     next if(!defined($ne) || $ne eq "");
     Log3 $ln, 4, "$ln: $t $n $oe -> $ne";
     $modules{eventTypes}{ldata}{$n}{$ne}++;

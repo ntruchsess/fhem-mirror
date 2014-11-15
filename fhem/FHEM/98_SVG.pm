@@ -25,6 +25,7 @@ use vars qw(%FW_hiddenroom); # hash of hidden rooms, used by weblink
 use vars qw(%FW_pos);     # scroll position
 use vars qw(%FW_webArgs); # all arguments specified in the GET
 use vars qw($FW_formmethod);
+use vars qw($FW_userAgent);
 
 my $SVG_RET;        # Returned data (SVG)
 sub SVG_calcOffsets($$);
@@ -32,14 +33,13 @@ sub SVG_doround($$$);
 sub SVG_fmtTime($$);
 sub SVG_pO($);
 sub SVG_readgplotfile($$);
-sub SVG_render($$$$$$$$$);
+sub SVG_render($$$$$$$$$;$$);
 sub SVG_showLog($);
 sub SVG_substcfg($$$$$$);
 sub SVG_time_align($$);
 sub SVG_time_to_sec($);
 sub SVG_openFile($$$);
 
-my ($SVG_lt, $SVG_ltstr);
 my %SVG_devs;       # hash of from/to entries per device
 
 #####################################
@@ -56,6 +56,7 @@ SVG_Initialize($)
   $hash->{FW_atPageEnd} = 1;
   $data{FWEXT}{"/SVG_WriteGplot"}{CONTENTFUNC} = "SVG_WriteGplot";
   $data{FWEXT}{"/SVG_showLog"}{FUNC} = "SVG_showLog";
+  $data{FWEXT}{"/SVG_showLog"}{FORKABLE} = 1;
 }
 
 #####################################
@@ -115,7 +116,7 @@ SVG_FwDetail($@)
 
   my $ret = ($nobr ? "" : "<br>");
   $ret .= "$text " if($text);
-  $ret .= FW_pHPlain("detail=$d", $alias) if(!$FW_subdir);
+  $ret .= FW_pH("detail=$d", $alias,0, "SVGlabel SVG_$d", 1,0) if(!$FW_subdir);
   $ret .= "<br>";
   return $ret;
 }
@@ -137,7 +138,6 @@ SVG_FwFn($$$$)
 {
   my ($FW_wname, $d, $room, $pageHash) = @_; # pageHash is set for summaryFn.
   my $hash = $defs{$d};
-  my $ld = $defs{$hash->{LOGDEVICE}};
   my $ret = "";
 
   if(AttrVal($FW_wname, "plotmode", "SVG") eq "jsSVG") {
@@ -182,9 +182,21 @@ SVG_FwFn($$$$)
 
   if(AttrVal($d,"plotmode",$FW_plotmode) eq "SVG") {
     my ($w, $h) = split(",", AttrVal($d,"plotsize",$FW_plotsize));
-    $ret .= "<div class=\"SVGplot\">";
-    $ret .= "<embed src=\"$arg\" type=\"image/svg+xml\" " .
-          "width=\"$w\" height=\"$h\" name=\"$d\"/>\n";
+    $ret .= "<div class=\"SVGplot SVG_$d\">";
+
+    if(AttrVal($FW_wname, "plotEmbed",
+                        $FW_userAgent !~ m/(iPhone|iPad|iPod).*OS (8|9)/)) {
+      $ret .= "<embed src=\"$arg\" type=\"image/svg+xml\" " .
+            "width=\"$w\" height=\"$h\" name=\"$d\"/>\n";
+
+    } else {
+      my $oret=$FW_RET; $FW_RET="";
+      my ($type, $data) = SVG_doShowLog($d, $hash->{LOGDEVICE},
+                $hash->{GPLOTFILE}, $hash->{LOGFILE}, $w, $h);
+      $FW_RET=$oret;
+      $ret .= $data;
+
+    }
     $ret .= "</div>";
 
   } else {
@@ -762,18 +774,23 @@ SVG_calcOffsets($$)
 sub
 SVG_showLog($)
 {
-  my ($cmd) = @_;
-  my $wl   = $FW_webArgs{dev};
-  my $d    = $FW_webArgs{logdev};
-  my $type = $FW_webArgs{gplotfile};
-  my $file = $FW_webArgs{logfile};
+  return SVG_doShowLog($FW_webArgs{dev},
+                       $FW_webArgs{logdev},
+                       $FW_webArgs{gplotfile},
+                       $FW_webArgs{logfile});
+}
+
+sub
+SVG_doShowLog($$$$$$)
+{
+  my ($wl, $d, $type, $file, $styleW, $styleH) = @_;
   my $pm = AttrVal($wl,"plotmode",$FW_plotmode);
 
   my $gplot_pgm = "$FW_gplotdir/$type.gplot";
 
   my ($err, $cfg, $plot, $flog) = SVG_readgplotfile($wl, $gplot_pgm);
-  if($err) {
-    my $msg = "Cannot read $gplot_pgm";
+  if($err || !$defs{$d}) {
+    my $msg = ($defs{$d} ? "Cannot read $gplot_pgm" : "No Logdevice $d");
     Log3 $FW_wname, 1, $msg;
 
     if($pm =~ m/SVG/) { # FW_fatal for SVG:
@@ -882,7 +899,9 @@ SVG_showLog($)
       FW_fC("get $d $file INT $f $t " . join(" ", @{$flog}), 1);
       ($cfg, $plot) = SVG_substcfg(1, $wl, $cfg, $plot, $file, "<OuT>");
       my $ret = SVG_render($wl, $f, $t, $cfg,
-                        $internal_data, $plot, $FW_wname, $FW_cssdir, $flog);
+                        $internal_data, $plot, $FW_wname, $FW_cssdir, $flog,
+                        $styleW, $styleH);
+      $internal_data = "";
       FW_pO $ret;
       if($SVGcache) {
         mkdir($cDir) if(! -d $cDir);
@@ -961,7 +980,7 @@ SVG_openFile($$$)
 
 #####################################
 sub
-SVG_render($$$$$$$$$)
+SVG_render($$$$$$$$$;$$)
 {
   my $name = shift;  # e.g. wl_8
   my $from = shift;  # e.g. 2008-01-01
@@ -972,10 +991,12 @@ SVG_render($$$$$$$$$)
   my $parent_name = shift;  # e.g. FHEMWEB instance name
   my $parent_dir  = shift;  # FW_dir
   my $flog        = shift;  # #FileLog lines, as array pointer
+  my $styleW      = shift;
+  my $styleH      = shift;
 
   $SVG_RET="";
   my $SVG_ss = AttrVal($parent_name, "smallscreen", 0);
-  return $SVG_RET if(!defined($dp));
+  return $SVG_RET if(!defined($dp) || $dp eq "");
 
   my $nr_axis = AttrVal($parent_name,"nrAxis","1,1");
   my ($nr_left_axis,$nr_right_axis,$use_left_axis,$use_right_axis) =
@@ -1005,10 +1026,17 @@ SVG_render($$$$$$$$$)
 
   ######################
   # Html Header
-  SVG_pO '<?xml version="1.0" encoding="UTF-8"?>';
-  SVG_pO '<!DOCTYPE svg>';
-  SVG_pO '<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '.
+  if(!$styleW) {
+    SVG_pO '<?xml version="1.0" encoding="UTF-8"?>';
+    SVG_pO '<!DOCTYPE svg>';
+    SVG_pO '<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '.
          'xmlns:xlink="http://www.w3.org/1999/xlink" '.$flog.'>';
+  } else {
+    SVG_pO '<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '.
+             'xmlns:xlink="http://www.w3.org/1999/xlink" '.
+             "style='width:${styleW}px; height:${styleH}px;' ".
+             '>';
+  }
 
   my $prf = AttrVal($parent_name, "stylesheetPrefix", "");
   SVG_pO "<style type=\"text/css\"><![CDATA[";
@@ -1508,27 +1536,6 @@ SVG_render($$$$$$$$$)
 }
 
 sub
-SVG_time_to_sec($)
-{
-  my ($str) = @_;
-  if(!$str) {
-    return 0;
-  }
-  my ($y,$m,$d,$h,$mi,$s) = split("[-_:]", $str);
-  $s = 0 if(!$s);
-  $mi= 0 if(!$mi);
-  $h = 0 if(!$h);
-  $d = 1 if(!$d);
-  $m = 1 if(!$m);
-
-  if(!$SVG_ltstr || $SVG_ltstr ne "$y-$m-$d-$h") { # 2.5x faster
-    $SVG_lt = mktime(0,0,$h,$d,$m-1,$y-1900,0,0,-1);
-    $SVG_ltstr = "$y-$m-$d-$h";
-  }
-  return $s+$mi*60+$SVG_lt;
-}
-
-sub
 SVG_fmtTime($$)
 {
   my ($sepfmt, $sec) = @_;
@@ -1738,9 +1745,9 @@ plotAsPng(@)
       expression, so you have access e.g. to the Value functions.<br><br>
 
       If the plotmode is gnuplot-scroll or SVG, you can also use the min, max,
-      avg, cnt, sum, currval (last value) and currdate (last date) values of
-      the individual curves, by accessing the corresponding values from the
-      data hash, see the example below:<br>
+      mindate, maxdate, avg, cnt, sum, currval (last value) and currdate (last
+      date) values of the individual curves, by accessing the corresponding
+      values from the data hash, see the example below:<br>
 
       <ul>
         <li>Fixed text for the right and left axis:<br>
@@ -1925,9 +1932,9 @@ plotAsPng(@)
 
       Egal, ob es sich bei der Plotart um gnuplot-scroll oder SVG handelt, es
       k&ouml;nnen ebenfalls die Werte der individuellen Kurve f&uuml;r min,
-      max, avg, cnt, sum, currval (letzter Wert) und currdate (letztes Datum)
-      durch Zugriff der entsprechenden Werte &uuml;ber das DataHash verwendet
-      werden. Siehe untenstehendes Beispiel:<br>
+      max, mindate, maxdate, avg, cnt, sum, currval (letzter Wert) und currdate
+      (letztes Datum) durch Zugriff der entsprechenden Werte &uuml;ber das
+      DataHash verwendet werden. Siehe untenstehendes Beispiel:<br>
       <ul>
         <li>Beschriftunng der rechten und linken y-Achse:<br>
           <ul>

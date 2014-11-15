@@ -30,9 +30,10 @@ package main;
 use strict;
 use warnings;
 
-my $VERSION = "1.6.1";
+my $VERSION = "1.9.4.4";
 
 use constant {
+	PERL_VERSION    => "perl_version",
   DATE            => "date",
   UPTIME          => "uptime",
   UPTIME_TEXT     => "uptime_text",
@@ -70,6 +71,11 @@ use constant {
   FB_NUM_NEW_MESSAGES => "num_new_messages",
   FB_FW_VERSION       => "fw_version_info",
   FB_DECT_TEMP        => "dect_temp",
+    
+	FB_DSL_RATE         => "dsl_rate",
+	FB_DSL_SYNCTIME     => "dsl_synctime",
+	FB_DSL_FEC_15       => "dsl_fec_15",
+	FB_DSL_CRC_15       => "dsl_crc_15",
 };
 
 use constant FS_PREFIX => "~ ";
@@ -160,6 +166,7 @@ SYSMON_updateCurrentReadingsMap($) {
   # Map aktueller Namen erstellen
 	
 	# Feste Werte
+	$rMap->{+PERL_VERSION}       = "Perl Version";
 	$rMap->{+DATE}               = "Date";
 	$rMap->{+CPU_BOGOMIPS}       = "BogoMIPS";
 	if(SYSMON_isCPUFreqRPiBBB($hash)) {
@@ -418,6 +425,12 @@ SYSMON_updateCurrentReadingsMap($) {
 	  $rMap->{+FB_NUM_NEW_MESSAGES} = "new messages";
 	  $rMap->{+FB_FW_VERSION}       = "firmware info";
 	  $rMap->{+FB_DECT_TEMP}        = "DECT temperatur";
+	  
+	  $rMap->{+FB_DSL_RATE}       = "DSL rate",
+	  $rMap->{+FB_DSL_SYNCTIME}   = "DSL synctime";
+	  $rMap->{+FB_DSL_FEC_15}     = "DSL recoverable errors per 15 minutes"; # forward error correction
+	  $rMap->{+FB_DSL_CRC_15}     = "DSL unrecoverable errors per 15 minutes"; # cyclic redundancy check
+	  
   }
   
 	# User defined
@@ -609,7 +622,7 @@ SYSMON_Attr($$$)
       		InternalTimer(gettimeofday()+$hash->{INTERVAL_BASE}, "SYSMON_Update", $hash, 0);
       	}
        	#$hash->{LOCAL} = 1;
-  	    SYSMON_Update($hash);
+  	    #SYSMON_Update($hash);
   	    #delete $hash->{LOCAL};
       }
 
@@ -709,7 +722,12 @@ SYSMON_obtainParameters($$)
 	 
 	# Einmaliges
 	if(!$u_first_mark) {
-	  $map = SYSMON_getCPUBogoMIPS($hash, $map);
+	  # Perl version
+	  $map->{+PERL_VERSION} = "$]";
+	  
+		if(SYSMON_isProcFS($hash)) {
+  	  $map = SYSMON_getCPUBogoMIPS($hash, $map);
+	  }
 	
 	  if(SYSMON_isFB($hash)) {
 	    $map = SYSMON_FBVersionInfo($hash, $map);
@@ -717,7 +735,11 @@ SYSMON_obtainParameters($$)
   }
 
 	# immer aktualisieren: uptime, uptime_text, fhemuptime, fhemuptime_text, idletime, idletime_text
-  $map = SYSMON_getUptime($hash, $map);
+	if(SYSMON_isProcFS($hash)) {
+    $map = SYSMON_getUptime($hash, $map);
+  } else {
+  	$map = SYSMON_getUptime2($hash, $map);
+  }
   $map = SYSMON_getFHEMUptime($hash, $map);
 
   if($m1 gt 0) { # Nur wenn > 0
@@ -736,8 +758,12 @@ SYSMON_obtainParameters($$)
       if(SYSMON_isCPU1Freq($hash)) {
         $map = SYSMON_getCPU1Freq($hash, $map);
       }
-      $map = SYSMON_getLoadAvg($hash, $map);
-      $map = SYSMON_getCPUProcStat($hash, $map);
+      if(SYSMON_isProcFS($hash)) {
+        $map = SYSMON_getLoadAvg($hash, $map);
+        $map = SYSMON_getCPUProcStat($hash, $map);
+      } else {
+      	#TODO: Ohne ProcFS
+      }
       #$map = SYSMON_getDiskStat($hash, $map);
       
       # Power info (cubietruck)
@@ -756,7 +782,11 @@ SYSMON_obtainParameters($$)
   if($m2 gt 0) { # Nur wenn > 0
     # M2: ram, swap
     if($refresh_all || ($ref % $m2) eq 0) {
-      $map = SYSMON_getRamAndSwap($hash, $map);
+    	if(SYSMON_isOSX()){
+    	  $map = SYSMON_getRamAndSwapOSX($hash, $map);
+    	} else {
+        $map = SYSMON_getRamAndSwap($hash, $map);
+      }
     }
   }
 
@@ -801,6 +831,13 @@ SYSMON_obtainParameters($$)
       	$map = SYSMON_getFBNightTimeControl($hash, $map);
       	$map = SYSMON_getFBNumNewMessages($hash, $map);
       	$map = SYSMON_getFBDECTTemp($hash, $map);
+      	
+      	#DSL-Downstream und DSL-Upstream abfragen
+	      $map = SYSMON_getFBStreemRate($hash, $map);
+	      #Sync-Zeit mit Vermittlungsstelle abfragen
+	      $map = SYSMON_getFBSyncTime($hash, $map);
+	      #Uebertragungsfehler abfragen (nicht behebbar und behebbar)
+	      $map = SYSMON_getFBCRCFEC($hash, $map);
       }
     }
   }
@@ -900,6 +937,32 @@ SYSMON_getUserDefined($$$$)
 	return $map;
 }
 
+my $sys_cpu_core_num = undef;
+sub
+SYSMON_getCPUCoreNum($)
+{
+	my ($hash) = @_;
+	
+	return $sys_cpu_core_num if $sys_cpu_core_num;
+	
+	# nur wenn verfuegbar
+	if(SYSMON_isSysCpuNum($hash)) {
+	  my $str = SYSMON_execute($hash, "cat /sys/devices/system/cpu/kernel_max");
+	  if(defined($str)) {
+		  if($str ne "") {
+        if(int($str)!=0) {
+        	$sys_cpu_core_num = int($str)+1;
+	 	      return $sys_cpu_core_num;
+  	    }
+      }
+    }
+  }
+  
+  # Default / unbekannt
+  $sys_cpu_core_num = 1;
+  return $sys_cpu_core_num;
+}
+
 #------------------------------------------------------------------------------
 # leifert Zeit seit dem Systemstart
 #------------------------------------------------------------------------------
@@ -911,17 +974,64 @@ SYSMON_getUptime($$)
 	#my $uptime_str = qx(cat /proc/uptime );
 	my $uptime_str = SYSMON_execute($hash, "cat /proc/uptime");
   my ($uptime, $idle) = split(/\s+/, trim($uptime_str));
-  my $idle_percent = $idle/$uptime*100;
+  if(int($uptime)!=0) {
+  	# Anzahl Cores beruecksichtigen
+  	my $core_num = SYSMON_getCPUCoreNum($hash);
+    my $idle_percent = $idle/($uptime*$core_num)*100;
 
-	$map->{+UPTIME}=sprintf("%d",$uptime);
-	#$map->{+UPTIME_TEXT} = sprintf("%d days, %02d hours, %02d minutes, %02d seconds",SYSMON_decode_time_diff($uptime));
-	$map->{+UPTIME_TEXT} = sprintf("%d days, %02d hours, %02d minutes",SYSMON_decode_time_diff($uptime));
+	  $map->{+UPTIME}=sprintf("%d",$uptime);
+	  #$map->{+UPTIME_TEXT} = sprintf("%d days, %02d hours, %02d minutes, %02d seconds",SYSMON_decode_time_diff($uptime));
+	  $map->{+UPTIME_TEXT} = sprintf("%d days, %02d hours, %02d minutes",SYSMON_decode_time_diff($uptime));
 
-  $map->{+IDLETIME}=sprintf("%d %.2f %%",$idle, $idle_percent);
-	$map->{+IDLETIME_TEXT} = sprintf("%d days, %02d hours, %02d minutes",SYSMON_decode_time_diff($idle)).sprintf(" (%.2f %%)",$idle_percent);
-	#$map->{+IDLETIME_PERCENT} = sprintf ("%.2f %",$idle_percent);
-
+    $map->{+IDLETIME}=sprintf("%d %.2f %%",$idle, $idle_percent);
+	  $map->{+IDLETIME_TEXT} = sprintf("%d days, %02d hours, %02d minutes",SYSMON_decode_time_diff($idle)).sprintf(" (%.2f %%)",$idle_percent);
+	  #$map->{+IDLETIME_PERCENT} = sprintf ("%.2f %",$idle_percent);
+  }
+  
 	return $map;
+}
+
+#------------------------------------------------------------------------------
+# leifert Zeit seit dem Systemstart. 
+# Alternative Version fuer Systemen ohne procfs (z.B. MACOS)
+#------------------------------------------------------------------------------
+sub
+SYSMON_getUptime2($$)
+{
+	my ($hash, $map) = @_;
+
+#TODO
+  my $uptime = SYSMON_execute($hash,"uptime");
+
+  #$uptime = $1 if( $uptime && $uptime =~ m/[[:alpha:]]{2}\s+(((\d+)\D+,?\s+)?(\d+):(\d+))/ );
+  $uptime = $1 if( $uptime && $uptime =~ m/[[:alpha:]]{2}\s+(((\d+)\D+,?\s+)?(\d+):(\d+)).*load.*: (.*)/ );
+  $uptime = "0 days, $uptime" if( $uptime && !$2);
+
+  
+    my $days = $3?$3:0;
+    my $hours = $4;
+    my $minutes = $5;
+
+    $uptime = $days * 24;
+    $uptime += $hours;
+    $uptime *= 60;
+    $uptime += $minutes;
+    $uptime *= 60;
+  
+ 
+  $map->{+UPTIME}=sprintf("%d",$uptime);
+  $map->{+UPTIME_TEXT} = sprintf("%d days, %02d hours, %02d minutes",SYSMON_decode_time_diff($uptime));
+
+  my $loadavg=$6;
+  my ($la1, $la5, $la15, $prc, $lastpid) = split(/\s+/, trim($loadavg));
+  $la1 =~ s/,$//; 
+  $la5 =~ s/,$//; 
+  $la1 =~ s/,/./; 
+  $la5 =~ s/,/./; 
+  $la15 =~ s/,/./; 
+	$map->{+LOADAVG}="$la1 $la5 $la15";
+
+  return $map;
 }
 
 #------------------------------------------------------------------------------
@@ -1014,7 +1124,7 @@ SYSMON_getCPUFreq($$)
 }
 
 #------------------------------------------------------------------------------
-# leifert CPU Frequenz für 2te CPU (Cubietruck, etc.)
+# leifert CPU Frequenz fuer 2te CPU (Cubietruck, etc.)
 #------------------------------------------------------------------------------
 sub
 SYSMON_getCPU1Freq($$)
@@ -1040,8 +1150,10 @@ SYSMON_getCPUBogoMIPS($$)
     my $val = SYSMON_execute($hash, "cat /proc/cpuinfo | grep -m 1 'BogoMIPS'");
     #Log 3,"SYSMON -----------> DEBUG: read BogoMIPS = $val"; 
     my ($dummy, $val_txt) = split(/:\s+/, $val);
-    $val_txt = trim($val_txt);
-    $map->{+CPU_BOGOMIPS}="$val_txt";
+    if($val_txt) {
+      $val_txt = trim($val_txt);
+      $map->{+CPU_BOGOMIPS}="$val_txt";
+    }
   } else {
   	$map->{+CPU_BOGOMIPS}=$old_val;
   }
@@ -1308,6 +1420,10 @@ sub SYSMON_getRamAndSwap($$)
   #my @speicher = qx(free -m);
   my @speicher = SYSMON_execute($hash, "free");
 
+  if(!@speicher) {
+  	return $map;
+  }
+    
   shift @speicher;
   my ($fs_desc, $total, $used, $free, $shared, $buffers, $cached) = split(/\s+/, trim($speicher[0]));
   shift @speicher;
@@ -1324,21 +1440,27 @@ sub SYSMON_getRamAndSwap($$)
   #my $percentage_ram;
   #my $percentage_swap;
   
-  $total   = $total / 1024;
-  $used    = $used / 1024;
-  $free    = $free / 1024;
-  $buffers = $buffers / 1024;
-  if(defined($cached)) {
-    $cached  = $cached / 1024;
-  } else {
-  	# Bei FritzBox wird dieser Wert nicht ausgageben
-  	$cached  = 0;
+  if($total > 0) {
+  
+    $total   = $total / 1024;
+    $used    = $used / 1024;
+    $free    = $free / 1024;
+    $buffers = $buffers / 1024;
+    if(defined($cached)) {
+      $cached  = $cached / 1024;
+    } else {
+  	  # Bei FritzBox wird dieser Wert nicht ausgageben
+    	$cached  = 0;
+    }
+
+    $ram = sprintf("Total: %.2f MB, Used: %.2f MB, %.2f %%, Free: %.2f MB", $total, ($used - $buffers - $cached), (($used - $buffers - $cached) / $total * 100), ($free + $buffers + $cached));
   }
-
-  $ram = sprintf("Total: %.2f MB, Used: %.2f MB, %.2f %%, Free: %.2f MB", $total, ($used - $buffers - $cached), (($used - $buffers - $cached) / $total * 100), ($free + $buffers + $cached));
-
+  else
+  {
+    $ram = "n/a";
+  }
   $map->{+RAM} = $ram;
-
+  
   # wenn kein swap definiert ist, ist die Groesse (total2) gleich Null. Dies wuerde eine Exception (division by zero) ausloesen
   if($total2 > 0)
   {
@@ -1354,9 +1476,230 @@ sub SYSMON_getRamAndSwap($$)
   }
 
   $map->{+SWAP} = $swap;
-
+  
   return $map;
 }
+
+#------------------------------------------------------------------------------
+# Prueft, ob das Host-System OSX ist (darvin).
+#------------------------------------------------------------------------------
+sub SYSMON_isOSX()
+{
+	return $^O eq 'darwin';
+}
+
+#------------------------------------------------------------------------------
+# Prueft, ob das Host-System Linux ist (linux).
+#------------------------------------------------------------------------------
+sub SYSMON_isLinux()
+{
+	return $^O eq 'linux';
+}
+
+#------------------------------------------------------------------------------
+# Liefert Werte fuer RAM und SWAP (Gesamt, Verwendet, Frei).
+#------------------------------------------------------------------------------
+sub SYSMON_getRamAndSwapOSX($$)
+{
+  my ($hash, $map) = @_;
+  
+  my $debug = 0; # Nur zum Testen!
+
+  #my @speicher = qx(free -m);
+  my @amemsize = SYSMON_execute($hash, "sysctl hw.memsize");
+  
+  if($debug) {
+  	@amemsize = ("hw.memsize: 8589934592");
+  }
+  
+  if($amemsize[0]=~m/hw.memsize:\s+(.+)/) {
+    my $total = $1;
+    
+    my @avmstat = SYSMON_execute($hash, "vm_stat");
+    if($debug) {
+  	  @avmstat = ('Mach Virtual Memory Statistics: (page size of 4096 bytes)',
+                  'Pages free:                                5268.',
+                  'Pages active:                            440314.',
+                  'Pages inactive:                          430905.',
+                  'Pages speculative:                          878.',
+                  'Pages throttled:                              0.',
+                  'Pages wired down:                        398445.',
+                  'Pages purgeable:                             69.',
+                  '"Translation faults":                 508984629.',
+                  'Pages copy-on-write:                    5668036.',
+                  'Pages zero filled:                    347281743.',
+                  'Pages reactivated:                    114745855.',
+                  'Pages purged:                          13495647.',
+                  'File-backed pages:                        88747.',
+                  'Anonymous pages:                         783350.',
+                  'Pages stored in compressor:             1760568.',
+                  'Pages occupied by compressor:            820444.',
+                  'Decompressions:                        48558417.',
+                  'Compressions:                          63022425.',
+                  'Pageins:                                3754238.',
+                  'Pageouts:                                589840.',
+                  'Swapins:                                 714378.',
+                  'Swapouts:                               1017813.');
+    }
+    
+    #wired down, active, inactive
+    my $wired_down=0;
+    my $active=0;
+    my $inactive=0;
+    my $blockSize = 4096;
+    foreach my $k (@avmstat) {
+    	if($k=~m/page\s+size\s+of\s+(\d+)\s+bytes/) {
+        $blockSize = $1;
+      }
+    	if($k=~m/Pages\s+wired\s+down:\s+(.+)\./) {
+        $wired_down = $1;
+      }
+      if($k=~m/Pages\s+active:\s+(.+)\./) {
+        $active = $1;
+      }
+      if($k=~m/Pages\s+inactive:\s+(.+)\./) {
+        $inactive = $1;
+      }
+    }
+    
+    $wired_down = $wired_down * $blockSize / 1048576; # In Megabyte umrechnen
+    $active = $active * $blockSize / 1048576;
+    $inactive = $inactive * $blockSize / 1048576;
+    
+    my $used = $wired_down+$active+$inactive;
+    
+    $total = $total/1048576;
+    my $free = $total-$used;
+    my $ram = sprintf("Total: %.2f MB, Used: %.2f MB, %.2f %%, Free: %.2f MB", $total, $used , ($used / $total * 100), $free);
+    #Log 3, "SYSMON >>>>>>>>>>>>>>>>>>>>>>>>> OSX: RAM:  ".$ram;
+    $map->{+RAM} = $ram;
+  
+    my @avm = SYSMON_execute($hash, "sysctl vm.swapusage");
+    if($debug) {
+    	@avm=(
+    	#'vm.loadavg: { 2.45 2.19 3.34 }',
+      'vm.swapusage: total = 1024.00M  used = 529.25M  free = 494.75M  (encrypted)',
+      #'vm.cs_force_kill: 0',
+      #'vm.cs_force_hard: 0',
+      #'vm.cs_debug: 0',
+      #'vm.cs_all_vnodes: 0',
+      #'vm.cs_enforcement: 0',
+      #'vm.cs_enforcement_panic: 0',
+      #'vm.sigpup_disable: 0',
+      #'vm.global_no_user_wire_amount: 67108864',
+      #'vm.global_user_wire_limit: 8522825728',
+      #'vm.user_wire_limit: 8522825728',
+      #'vm.vm_copy_src_not_internal: 129',
+      #'vm.vm_copy_src_not_symmetric: 14994',
+      #'vm.vm_copy_src_large: 0',
+      #'vm.vm_page_external_count: 355255',
+      #'vm.vm_page_filecache_min: 104857',
+      #'vm.compressor_mode: 4',
+      #'vm.compressor_bytes_used: 2984467096',
+      #'vm.compressor_swapout_target_age: 0',
+      #'vm.compressor_eval_period_in_msecs: 250',
+      #'vm.compressor_sample_min_in_msecs: 500',
+      #'vm.compressor_sample_max_in_msecs: 10000',
+      #'vm.compressor_thrashing_threshold_per_10msecs: 50',
+      #'vm.compressor_thrashing_min_per_10msecs: 20',
+      #'vm.compressor_minorcompact_threshold_divisor: 20',
+      #'vm.compressor_majorcompact_threshold_divisor: 25',
+      #'vm.compressor_unthrottle_threshold_divisor: 35',
+      #'vm.compressor_catchup_threshold_divisor: 50',
+      #'vm.cs_validation: 1',
+      #'vm.cs_blob_count: 616',
+      #'vm.cs_blob_size: 8053170',
+      #'vm.cs_blob_count_peak: 693',
+      #'vm.cs_blob_size_peak: 8389641',
+      #'vm.cs_blob_size_max: 1675264',
+      #'vm.vm_debug_events: 0',
+      #'vm.allow_stack_exec: 0',
+      #'vm.allow_data_exec: 1',
+      #'vm.shared_region_unnest_logging: 1',
+      #'vm.shared_region_trace_level: 1',
+      #'vm.shared_region_version: 3',
+      #'vm.shared_region_persistence: 0',
+      #'vm.vm_page_free_target: 2000',
+      #'vm.memory_pressure: 0',
+      #'vm.page_free_wanted: 86',
+      #'vm.page_purgeable_count: 1055',
+      #'vm.page_purgeable_wired_count: 0',
+      #'vm.madvise_free_debug: 0',
+      #'vm.page_reusable_count: 39048',
+      #'vm.reusable_success: 11350536',
+      #'vm.reusable_failure: 1060241',
+      #'vm.reusable_shared: 248771',
+      #'vm.all_reusable_calls: 290574',
+      #'vm.partial_reusable_calls: 11142306',
+      #'vm.reuse_success: 9593371',
+      #'vm.reuse_failure: 5124',
+      #'vm.all_reuse_calls: 257820',
+      #'vm.partial_reuse_calls: 9684238',
+      #'vm.can_reuse_success: 6171792',
+      #'vm.can_reuse_failure: 79183',
+      #'vm.reusable_reclaimed: 0',
+      #'vm.page_free_count: 1914',
+      #'vm.page_speculative_count: 810',
+      #'vm.page_cleaned_count: 0',
+      #'vm.pageout_inactive_dirty_internal: 63170734',
+      #'vm.pageout_inactive_dirty_external: 465495',
+      #'vm.pageout_inactive_clean: 18967682',
+      #'vm.pageout_speculative_clean: 32929182',
+      #'vm.pageout_inactive_used: 115155398',
+      #'vm.pageout_freed_from_inactive_clean: 18423099',
+      #'vm.pageout_freed_from_speculative: 32929182',
+      #'vm.pageout_freed_from_cleaned: 568334',
+      #'vm.pageout_enqueued_cleaned: 1010912',
+      #'vm.pageout_enqueued_cleaned_from_inactive_clean: 0',
+      #'vm.pageout_enqueued_cleaned_from_inactive_dirty: 1011010',
+      #'vm.pageout_cleaned: 568334',
+      #'vm.pageout_cleaned_reactivated: 407922',
+      #'vm.pageout_cleaned_reference_reactivated: 4',
+      #'vm.pageout_cleaned_volatile_reactivated: 0',
+      #'vm.pageout_cleaned_fault_reactivated: 557',
+      #'vm.pageout_cleaned_commit_reactivated: 407361',
+      #'vm.pageout_cleaned_busy: 33',
+      #'vm.pageout_cleaned_nolock: 12931'
+      );
+    }
+    
+    #vm.swapusage: total = 1024.00M  used = 529.25M  free = 494.75M  (encrypted)
+    if($avm[0]=~m/vm.swapusage:\s+total\s+=\s+(\S*)\s+used\s+=\s+(\S*)\s+free\s+=\s+(\S*)\s+(.*)/) {
+      my $total2 = SYSMON_fmtStorageAmount_($1);
+      my $used2  = SYSMON_fmtStorageAmount_($2);
+      my $free2  = SYSMON_fmtStorageAmount_($3);
+      my $swap = sprintf("Total: %.2f MB, Used: %.2f MB,  %.2f %%, Free: %.2f MB", $total2, $used2, ($used2 / $total2 * 100), $free2);
+      $map->{+SWAP} = $swap; 
+      #Log 3, "SYSMON >>>>>>>>>>>>>>>>>>>>>>>>> OSX: SWAP: ".$swap;
+    }
+  }
+  
+  return $map;
+}
+
+sub SYSMON_fmtStorageAmount_($) {
+	my ($t) = @_;
+	if($t=~m/([\d|\.]+)(.*)/) {
+		my $r=$1;
+		my $m=$2;
+		if($m) {
+			# Modifier testen
+			if($m eq 'M') {
+				# Megabyte ist OK,so lassen
+				return $r;
+			}
+			if($m eq 'G') {
+				# Gigabyte: in MB umwandeln
+				$r=$r*1024;
+			}
+			# K, oder P nehmen ich nicht mehr bzw. noch nicht an ;)
+			return $r;
+		}
+	}
+	return $t;
+}
+
+
 
 #------------------------------------------------------------------------------
 # Liefert Fuellstand fuer das angegebene Dateisystem (z.B. '/dev/root', '/dev/sda1' (USB stick)).
@@ -1414,20 +1757,24 @@ sub SYSMON_getFileSystemInfo ($$$)
     $map->{+FS_PREFIX.$fs} = "Total: 0 MB, Used: 0 MB, 0 %, Available: 0 MB at ".$fs." (not available)";
   }
   
-  if(!defined $filesystems[0]) { return $map; } # Ausgabe leer
+  #return $map unless defined(@filesystems);
+  return $map unless int(@filesystems)>0;
+  #if(!defined $filesystems[0]) { return $map; } # Ausgabe leer
   
   logF($hash, "SYSMON_getFileSystemInfo", "analyse line $filesystems[0] for $fs");
   
   #if (!($filesystems[0]=~ /$fs\s*$/)){ shift @filesystems; }
   if (!($filesystems[0]=~ /$fs$/)){ 
     shift @filesystems; 
-    logF($hash, "SYSMON_getFileSystemInfo", "analyse line $filesystems[0] for $fs");
+    if(int(@filesystems)>0) {
+      logF($hash, "SYSMON_getFileSystemInfo", "analyse line $filesystems[0] for $fs");
+    }
   } else {
   	logF($hash, "SYSMON_getFileSystemInfo", "pattern ($fs) found");
   }
   #if (index($filesystems[0], $fs) < 0) { shift @filesystems; } # Wenn die Bezeichnung so lang ist, dass die Zeile umgebrochen wird...
   #if (index($filesystems[0], $fs) >= 0) # check if filesystem available -> gives failure on console
-  if ($filesystems[0]=~ /$fs$/)
+  if (int(@filesystems)>0 && $filesystems[0]=~ /$fs$/)
   {
   	logF($hash, "SYSMON_getFileSystemInfo", "use line $filesystems[0]");
   	
@@ -1441,6 +1788,7 @@ sub SYSMON_getFileSystemInfo ($$$)
       $map->{+FS_PREFIX.$mnt_point} = $out_txt;
     }
   }
+
   # else {
   #	if(defined $fDef) {
   #		$map->{$fName} = "not available";
@@ -1474,7 +1822,7 @@ sub SYSMON_getNetworkInfo ($$$)
   #Log 3, "SYSMON>>>>>>>>>>>>>>>>> ".$dataThroughput[0];
   
   #--- DEBUG ---
-  if($device eq "_test_") {
+  if($device eq "_test1") {
   	@dataThroughput = (
   	"enp4s0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1492",
   	"        inet 192.168.2.7  netmask 255.255.255.0  broadcast 192.168.2.255",
@@ -1483,6 +1831,19 @@ sub SYSMON_getNetworkInfo ($$$)
   	"        RX errors 0  dropped 0  overruns 0  frame 0",
   	"        TX packets 1915387  bytes 587386206 (560.1 MiB)",
   	"        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0");
+  }
+  
+  if($device eq "_test2") {
+  	@dataThroughput = (
+    "eth0      Link encap:Ethernet  Hardware Adresse b8:27:eb:47:a9:8d",
+    "          inet Adresse:192.168.2.118  Bcast:192.168.2.255  Maske:255.255.255.0",
+    "          inet6-Adresse: 2003:46:b6b:3100:ba27:ebff:fe47:a98d/64 Gültigkeitsbereich:Global",
+    "          inet6-Adresse: fe80::ba27:ebff:fe47:a98d/64 Gültigkeitsbereich:Verbindung",
+    "          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metrik:1",
+    "          RX packets:1224709 errors:0 dropped:0 overruns:0 frame:0",
+    "          TX packets:1156620 errors:0 dropped:0 overruns:0 carrier:0",
+    "          Kollisionen:0 Sendewarteschlangenlänge:1000",
+    "          RX bytes:180806073 (172.4 MiB)  TX bytes:108919337 (103.8 MiB)");
   }
   #--- DEBUG ---
 
@@ -1500,15 +1861,27 @@ sub SYSMON_getNetworkInfo ($$$)
     #           TX packets:533293 errors:0 dropped:0 overruns:0 carrier:0
     #           Kollisionen:0 Sendewarteschlangenlaenge:1000
     #           RX bytes:25517384 (24.3 MiB)  TX bytes:683970999 (652.2 MiB)
+    
 
     my $ip = undef; my $ip6 = undef;
     foreach (@dataThroughput) {
-    	if($_=~ m/inet\s+(addr:)*(\S*)/) {
+    	if($_=~ m/inet\s+(Adresse:)*(\S*)/) {
     	  $ip=$2;
     	}
-    	if($_=~ m/inet6\s+(addr:)*\s*(\S*)/) {
+    	if(!$ip && $_=~ m/inet\s+(addr:)*(\S*)/) {
+    	  $ip=$2;
+    	}
+    	
+    	if($_=~ m/inet6-(Adresse:)*\s*(\S*)\s+G.ltigkeitsbereich:Verbindung/) {
+    	  $ip6=$2;
+    	}
+    	if(!$ip && $_=~ m/inet6\s+(addr:)*\s*(\S*)\s+Scope:Link/) {
+    	  $ip6=$2;
+    	}
+    	if(!$ip && $_=~ m/inet6\s+(addr:)*\s*(\S*)/) {
     		$ip6=$2;
     	}
+
       if(index($_, 'RX bytes') >= 0) {
         $dataThroughput = $_;
         last;
@@ -1572,7 +1945,7 @@ sub SYSMON_getNetworkInfo ($$$)
       my $out_txt = "RX: ".$rx." MB, TX: ".$tx." MB, Total: ".$totalRxTx." MB";
       $map->{$nName} = $out_txt;
 
-      my $lastVal = ReadingsVal($hash->{NAME},$device,"RX: 0 MB, TX: 0 MB, Total: 0 MB");
+      my $lastVal = ReadingsVal($hash->{NAME},$nName,"RX: 0 MB, TX: 0 MB, Total: 0 MB");
       my ($d0, $o_rx, $d1, $d2, $o_tx, $d3, $d4, $o_tt, $d5) = split(/\s+/, trim($lastVal));
 
       my $d_rx = $rx-$o_rx;
@@ -1752,52 +2125,145 @@ sub SYSMON_FBVersionInfo($$)
   return $map;
 }
 
+
+#DSL-Downstream und DSL-Upstream abfragen
+sub SYSMON_getFBStreemRate($$) {
+	my ($hash, $map) = @_;
+	
+	my $ds_rate = SYSMON_execute($hash, "ctlmgr_ctl r sar status/dsl_ds_rate");
+	my $us_rate = SYSMON_execute($hash, "ctlmgr_ctl r sar status/dsl_us_rate");
+	
+	if($ds_rate ne "" && $us_rate ne "") {
+    $map->{+FB_DSL_RATE}="down: ".int($ds_rate)." KBit/s, up: ".int($us_rate)." KBit/s";
+  }
+  
+  return $map;
+}
+
+# Ausrechnet aus der Zahl der Sekunden Anzeige in Tagen:Stunden:Minuten:Sekunden.
+sub SYSMON_sec2Dauer($){
+  my ($t) = @_;
+  my $d = int($t/86400);
+  my $r = $t-($d*86400);
+  my $h = int($r/3600);
+     $r = $r - ($h*3600);
+  my $m = int($r/60);
+  my $s = $r - $m*60;
+  return sprintf("%02d Tage %02d Std. %02d Min. %02d Sec.",$d,$h,$m,$s);
+}
+
+#Sync-Zeit mit Vermittlungsstelle abfragen
+sub SYSMON_getFBSyncTime($$) {
+	my ($hash, $map) = @_;
+	
+	my $data = SYSMON_execute($hash, "ctlmgr_ctl r sar status/modem_ShowtimeSecs");
+	
+	if($data ne "") {
+		my $idata = int($data);
+    $map->{+FB_DSL_SYNCTIME}=SYSMON_sec2Dauer($idata);
+  }
+  
+  return $map;
+}
+
+#Uebertragungsfehler abfragen (nicht behebbar und behebbar)
+sub SYSMON_getFBCRCFEC($$) {
+	my ($hash, $map) = @_;
+	
+	my $ds_crc = SYSMON_execute($hash, "ctlmgr_ctl r sar status/ds_crc_per15min");
+	my $us_crc = SYSMON_execute($hash, "ctlmgr_ctl r sar status/us_crc_per15min");
+	
+	my $ds_fec = SYSMON_execute($hash, "ctlmgr_ctl r sar status/ds_fec_per15min");
+	my $us_fec = SYSMON_execute($hash, "ctlmgr_ctl r sar status/us_fec_per15min");	
+	
+	if($ds_crc ne "") {
+	  # FB_DSL_CRC_15
+    $map->{+FB_DSL_CRC_15}="down: ".int($ds_crc)." up: ".int($us_crc);
+  }
+  if($ds_fec ne "") {
+	  # FB_DSL_FEC_15
+    $map->{+FB_DSL_FEC_15}="down: ".int($ds_fec)." up: ".int($us_fec);
+  }
+  
+  return $map;
+}
+
 #------------------------------------------------------------------------------
 # Systemparameter als HTML-Tabelle ausgeben
-# Parameter: Name des SYSMON-Geraetes (muss existieren), dessen Daten zur Anzeige gebracht werden sollen.
+# Parameter: Name des SYSMON-Geraetes (muss existieren, kann auch anderer Modul genutzt werden), dessen Daten zur Anzeige gebracht werden sollen.
 # (optional) Liste der anzuzeigenden Werte (ReadingName[:Comment:[Postfix]],...)
 # Beispiel: define sysv weblink htmlCode {SYSMON_ShowValuesHTML('sysmon', ('date:Datum', 'cpu_temp:CPU Temperatur: °C', 'cpu_freq:CPU Frequenz: MHz'))}
 #------------------------------------------------------------------------------
 sub SYSMON_ShowValuesHTML ($;@)
 {
 	my ($name, @data) = @_;
-	return SYSMON_ShowValuesFmt($name, 1, @data);
+	return SYSMON_ShowValuesFmt($name, undef, 1, @data);
+}
+
+#------------------------------------------------------------------------------
+# Systemparameter als HTML-Tabelle ausgeben. Zusaetzlich wird eine Ueberschrift ausgegeben.
+# Parameter: Name des SYSMON-Geraetes (muss existieren, kann auch anderer Modul genutzt werden), dessen Daten zur Anzeige gebracht werden sollen.
+# Title: Ueberschrift (Text)
+# (optional) Liste der anzuzeigenden Werte (ReadingName[:Comment:[Postfix]],...)
+# Beispiel: define sysv weblink htmlCode {SYSMON_ShowValuesHTML('sysmon', ('date:Datum', 'cpu_temp:CPU Temperatur: °C', 'cpu_freq:CPU Frequenz: MHz'))}
+#------------------------------------------------------------------------------
+sub SYSMON_ShowValuesHTMLTitled ($;$@)
+{
+	my ($name, $title, @data) = @_;
+	$title = $attr{$name}{'alias'} unless $title;
+	$title = $name unless $title;
+	return SYSMON_ShowValuesFmt($name, $title, 1, @data);
 }
 
 #------------------------------------------------------------------------------
 # Systemparameter im Textformat ausgeben
-# Parameter: Name des SYSMON-Geraetes (muss existieren), dessen Daten zur Anzeige gebracht werden sollen.
+# Parameter: Name des SYSMON-Geraetes (muss existieren, kann auch anderer Modul genutzt werden), dessen Daten zur Anzeige gebracht werden sollen.
 # (optional) Liste der anzuzeigenden Werte (ReadingName[:Comment:[Postfix]],...)
 # Beispiel: define sysv weblink htmlCode {SYSMON_ShowValuesText('sysmon', ('date:Datum', 'cpu_temp:CPU Temperatur: °C', 'cpu_freq:CPU Frequenz: MHz'))}
 #------------------------------------------------------------------------------
 sub SYSMON_ShowValuesText ($;@)
 {
 	my ($name, @data) = @_;
-	return SYSMON_ShowValuesFmt($name, 0, @data);
+	return SYSMON_ShowValuesFmt($name, undef, 0, @data);
+}
+
+#------------------------------------------------------------------------------
+# Systemparameter im Textformat ausgeben
+# Parameter: Name des SYSMON-Geraetes (muss existieren, kann auch anderer Modul genutzt werden), dessen Daten zur Anzeige gebracht werden sollen.
+# Title: Ueberschrift (Text)
+# (optional) Liste der anzuzeigenden Werte (ReadingName[:Comment:[Postfix]],...)
+# Beispiel: define sysv weblink htmlCode {SYSMON_ShowValuesText('sysmon', ('date:Datum', 'cpu_temp:CPU Temperatur: °C', 'cpu_freq:CPU Frequenz: MHz'))}
+#------------------------------------------------------------------------------
+sub SYSMON_ShowValuesTextTitled ($;$@)
+{
+	my ($name, $title, @data) = @_;
+	$title = $attr{$name}{'alias'} unless $title;
+	$title = $name unless $title;
+	return SYSMON_ShowValuesFmt($name, $title, 0, @data);
 }
 
 #------------------------------------------------------------------------------
 # Systemparameter formatiert ausgeben
 # Parameter: 
-#   Format: 0 = Text, 1 = HTML
 #   Name des SYSMON-Geraetes (muss existieren), dessen Daten zur Anzeige gebracht werden sollen.
+#   Title: Ueberschrift
+#   Format: 0 = Text, 1 = HTML
 #   (optional) Liste der anzuzeigenden Werte (ReadingName[:Comment:[Postfix]],...)
 #------------------------------------------------------------------------------
-sub SYSMON_ShowValuesFmt ($$;@)
+sub SYSMON_ShowValuesFmt ($$$;@)
 {
-    my ($name, $format, @data) = @_;
+  my ($name, $title, $format, @data) = @_;
     
-    if($format != 0 && $format != 1) {
-    	return "unknown output format\r\n";
-    }
+  if($format != 0 && $format != 1) {
+  	return "unknown output format\r\n";
+  }
     
-    my $hash = $main::defs{$name};
-    
-    #if(!defined($cur_readings_map)) {
-	  #  SYSMON_updateCurrentReadingsMap($hash);
-    #}
-  
+  my $hash = $main::defs{$name};
+      
+  # nur, wenn es sich um eine SYSMON Instanz handelt
+  if($hash->{TYPE} eq 'SYSMON') {  
     SYSMON_updateCurrentReadingsMap($hash);
+  }
   #Log 3, "SYSMON $>name, @data<";
   my @dataDescription = @data;
   if(scalar(@data)<=0) {
@@ -1806,9 +2272,12 @@ sub SYSMON_ShowValuesFmt ($$;@)
 	  if($format == 1) {
 	  	$deg = "&deg;";
 	  }
+	  # bei der Benutzung mit CloneDummies ist $cur_readings_map nicht unbedingt definiert
 	  @dataDescription = (DATE,
-	                      CPU_TEMP.":".$cur_readings_map->{+CPU_TEMP}.": ".$deg."C", 
-	                      CPU_FREQ.":".$cur_readings_map->{+CPU_FREQ}.": "."MHz", 
+	                      #CPU_TEMP.":".$cur_readings_map->{+CPU_TEMP}.": ".$deg."C", 
+	                      CPU_TEMP.":"."CPU temperature".": ".$deg."C", 
+	                      #CPU_FREQ.":".$cur_readings_map->{+CPU_FREQ}.": "."MHz", 
+	                      CPU_FREQ.":"."CPU frequency".": "."MHz", 
 	                      CPU_BOGOMIPS,
 	                      UPTIME_TEXT, FHEMUPTIME_TEXT, LOADAVG, RAM, SWAP, 
 	                      "power_ac_text", "power_usb_text", "power_battery_text");
@@ -1845,7 +2314,17 @@ sub SYSMON_ShowValuesFmt ($$;@)
     }
   }
   
-  my $map = SYSMON_obtainParameters($hash, 1);
+  my $map;
+  if($hash->{TYPE} eq 'SYSMON') {  
+    $map = SYSMON_obtainParameters($hash, 1);
+  } else {
+  	# Wenn nicht SYSMON, dann versuchen, die Daten aus den Readings auszulesen
+  	#$map = SYSMON_obtainReadings($hash);
+  	foreach my $rname (keys %{$hash->{READINGS}}) {
+  	  my $rval=$hash->{READINGS}->{$rname}->{VAL};
+  	  $map->{$rname}=$rval;
+  	}
+  }
 
   my $div_class="sysmon";
 
@@ -1858,6 +2337,16 @@ sub SYSMON_ShowValuesFmt ($$;@)
   	}
   }
   
+  if(defined $title) {
+    if($format == 1) {
+  	  $htmlcode .= "<tr><td valign='top' colspan='2'>".$title."</td></tr>";
+    } else {
+      if($format == 0) {
+        $htmlcode .= sprintf("%s\r\n", $title);
+      }
+    }
+  }
+  
   # oben definierte Werte anzeigen
   foreach (@dataDescription) {
   	my($rName, $rComment, $rPostfix) = split(/:/, $_);
@@ -1866,6 +2355,10 @@ sub SYSMON_ShowValuesFmt ($$;@)
         $rComment = $cur_readings_map->{$rName};
       }
       my $rVal = $map->{$rName};
+      if(!defined $rVal) {
+      	# ggf. userReadings verarbeiten
+      	$rVal = ReadingsVal($name,$rName,undef);
+      }
       if($rName eq DATE) {
       	# Datum anzeigen
   	    $rVal = strftime("%d.%m.%Y %H:%M:%S", localtime());
@@ -1909,6 +2402,17 @@ sub SYSMON_ShowValuesFmt ($$;@)
   }
 
   return $htmlcode;
+}
+
+my $proc_fs = undef;
+sub
+SYSMON_isProcFS($) {
+	my ($hash) = @_;
+	if(!defined $proc_fs) {
+	  $proc_fs = int(SYSMON_execute($hash, "[ -d /proc/ ] && echo 1 || echo 0"));
+  }
+
+	return $proc_fs;
 }
 
 my $sys_cpu_temp_rpi = undef;
@@ -1999,6 +2503,17 @@ SYSMON_isSysPowerBat($) {
 	return $sys_power_bat;
 }
 
+my $sys_cpu_num = undef;
+sub
+SYSMON_isSysCpuNum($) {
+	my ($hash) = @_;
+	if(!defined $sys_cpu_num) {
+	  $sys_cpu_num = int(SYSMON_execute($hash, "[ -f /sys/devices/system/cpu/kernel_max ] && echo 1 || echo 0"));
+  }
+
+	return $sys_cpu_num;
+}
+
 sub SYSMON_PowerAcInfo($$)
 {
 	#online, present, current_now (/1000 =>mA), voltage_now (/1000000 => V)
@@ -2018,8 +2533,7 @@ sub SYSMON_PowerAcInfo($$)
   #$map->{"power_".$type."_current"}=$d_current;
   #$map->{"power_".$type."_voltage"}=$d_voltage;
   $map->{"power_".$type."_stat"}="$d_online $d_present $d_voltage $d_current";
-  $map->{"power_".$type."_text"}=$type.": ".(($d_present eq "1") ? "present" : "absent")." / ".($d_online eq "1" ? "online" : "offline").", voltage: ".$d_voltage." V, current: ".$d_current." mA";
-  
+  $map->{"power_".$type."_text"}=$type.": ".(($d_present eq "1") ? "present" : "absent")." / ".($d_online eq "1" ? "online" : "offline").", voltage: ".$d_voltage." V, current: ".$d_current." mA, ".(int(($d_voltage*$d_current/100+0.5))/10)." W";
   return $map;
 }
 
@@ -2042,7 +2556,7 @@ sub SYSMON_PowerUsbInfo($$)
   #$map->{"power_".$type."_current"}=$d_current;
   #$map->{"power_".$type."_voltage"}=$d_voltage;
   $map->{"power_".$type."_stat"}="$d_online $d_present $d_voltage $d_current";
-  $map->{"power_".$type."_text"}=$type.": ".(($d_present eq "1") ? "present" : "absent")." / ".($d_online eq "1" ? "online" : "offline").", voltage: ".$d_voltage." V, current: ".$d_current." mA";
+  $map->{"power_".$type."_text"}=$type.": ".(($d_present eq "1") ? "present" : "absent")." / ".($d_online eq "1" ? "online" : "offline").", voltage: ".$d_voltage." V, current: ".$d_current." mA, ".(int(($d_voltage*$d_current/100+0.5))/10)." W";
   
   return $map;
 }
@@ -2070,7 +2584,7 @@ sub SYSMON_PowerBatInfo($$)
   #$map->{"power_".$type."_current"}=$d_current;
   #$map->{"power_".$type."_voltage"}=$d_voltage;
   $map->{"power_".$type."_stat"}="$d_online $d_present $d_voltage $d_current $d_capacity";
-  $map->{"power_".$type."_text"}=$type.": ".(($d_present eq "1") ? "present" : "absent")." / ".($d_online eq "1" ? "online" : "offline").", voltage: ".$d_voltage." V, current: ".$d_current." mA, capacity: ".$d_capacity." %";
+  $map->{"power_".$type."_text"}=$type.": ".(($d_present eq "1") ? "present" : "absent")." / ".($d_online eq "1" ? "online" : "offline").", voltage: ".$d_voltage." V, current: ".$d_current." mA, ".(int(($d_voltage*$d_current/100+0.5))/10)." W, "."capacity: ".$d_capacity." %";
   
   if($d_present eq "1") {
     # Zusaetzlich: technology, capacity, status, health, temp (/10 => °C)
@@ -2291,6 +2805,23 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
         Information on the installed firmware version: <VersionNum> <creation date> <time>
     </li>
     <br>
+    <b>DSL Informations (FritzBox)</b>
+    <li>dsl_rate<br>
+        Information about the down und up stream rate
+    </li>
+    <br>
+	  <li>dsl_synctime<br>
+        sync time with DSLAM
+    </li>
+    <br>
+    <li>dsl_crc_15<br>
+        number of uncorrectable errors (CRC) for the last 15 minutes
+    </li>
+    <br>
+		<li>dsl_fec_15<br>
+        number of correctable errors (FEC) for the last 15 minutes
+    </li>
+    <br>
     <b>Power Supply Readings</b>
     <li>power_ac_stat<br>
         status information to the AC socket: present (0|1), online (0|1), voltage, current<br>
@@ -2326,6 +2857,7 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
         human readable additional information to the battery (if installed): technology, capacity, status, health, total capacity<br>
         Example:<br>
     		<code>power_battery_info: battery info: Li-Ion , capacity: 100 %, status: Full , health: Good , total capacity: 2100 mAh</code><br>
+    		The capacity must be defined in script.bin (e.g. ct-hdmi.bin). Parameter name pmu_battery_cap. Convert with bin2fex (bin2fex -> script.fex -> edit -> fex2bin -> script.bin).<br>
     </li>
     <br>    
   <br>
@@ -2538,6 +3070,7 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     <ul>
     The module provides a function that returns selected Readings as HTML.<br>
     As a parameter the name of the defined SYSMON device is expected.<br>
+    It can also Reading Group, Clone dummy or other modules be used. Their readings are simple used for display. <br>
     The second parameter is optional and specifies a list of readings to be displayed in the format <code>&lt;ReadingName&gt;[:&lt;Comment&gt;[:&lt;Postfix&gt;]]</code>.<br>
     <code>ReadingName</code> is the Name of desired Reading, <code>Comment</code> is used as the display name and postfix is displayed after eihentlichen value (such as units or as MHz can be displayed).<br>
     If no <code>Comment</code> is specified, an internally predefined description is used.<br>
@@ -2545,10 +3078,18 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     <code>define sysv1 weblink htmlCode {SYSMON_ShowValuesHTML('sysmon')}</code><br>
     <code>define sysv2 weblink htmlCode {SYSMON_ShowValuesHTML('sysmon', ('date:Datum', 'cpu_temp:CPU Temperatur: &deg;C', 'cpu_freq:CPU Frequenz: MHz'))}</code>
     </ul><br>
+  <b>Text output method (see Weblink): SYSMON_ShowValuesHTMLTitled(&lt;SYSMON-Instance&gt;[,&lt;Title&gt;,&lt;Liste&gt;])</b><br><br>
+    <ul>
+    According to SYSMON_ShowValuesHTML, but with a Title text above. If no title provided, device alias will be used (if any)<br>
+    </ul><br>
     
   <b>Text output method (see Weblink): SYSMON_ShowValuesText(&lt;SYSMON-Instance&gt;[,&lt;Liste&gt;])</b><br><br>
     <ul>
     According to SYSMON_ShowValuesHTML, but formatted as plain text.<br>
+    </ul><br>
+  <b>Text output method (see Weblink): SYSMON_ShowValuesTextTitled(&lt;SYSMON-Instance&gt;[,&lt;Title&gt;,&lt;Liste&gt;])</b><br><br>
+    <ul>
+    According to SYSMON_ShowValuesHTMLTitled, but formatted as plain text.<br>
     </ul><br>
     
   <b>Reading values with perl: SYSMON_getValues([&lt;array of desired keys&gt;])</b><br><br>
@@ -2817,6 +3358,23 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
         Angaben zu der installierten Firmware-Version: <VersionNr> <Erstelldatum> <Zeit>
     </li>
     <br>
+    <b>DSL Informationen (FritzBox)</b>
+    <li>dsl_rate<br>
+        Down/Up Verbindungsgeschwindigkeit
+    </li>
+    <br>
+	  <li>dsl_synctime<br>
+        Sync-Zeit mit Vermittlungsstelle
+    </li>
+    <br>
+    <li>dsl_crc_15<br>
+        Nicht behebbare &Uuml;bertragungsfehler in den letzten 15 Minuten
+    </li>
+    <br>
+		<li>dsl_fec_15<br>
+        Behebbare &Uuml;bertragungsfehler in den letzten 15 Minuten
+    </li>
+    <br>
     <b>Readings zur Stromversorgung</b>
     <li>power_ac_stat<br>
         Statusinformation f&uuml;r die AC-Buchse: present (0|1), online (0|1), voltage, current<br>
@@ -2852,6 +3410,7 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
         Menschenlesbare Zusatzinformationen  f&uuml;r die Batterie (wenn vorhanden): Technologie, Kapazit&auml;t, Status, Zustand, Gesamtkapazit&auml;t<br>
         Beispiel:<br>
     		<code>power_battery_info: battery info: Li-Ion , capacity: 100 %, status: Full , health: Good , total capacity: 2100 mAh</code><br>
+    		Die Kapazit&auml;t soll in script.bin (z.B. ct-hdmi.bin) eingestellt werden (Parameter pmu_battery_cap). Mit bin2fex konvertieren (bin2fex -> script.fex -> edit -> fex2bin -> script.bin)<br>
     </li>
     <br>    
   <br>
@@ -3073,6 +3632,7 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     <ul>
     Das Modul definiert eine Funktion, die ausgew&auml;hlte Readings in HTML-Format ausgibt. <br>
     Als Parameter wird der Name des definierten SYSMON-Ger&auml;ts erwartet.<br>
+    Es kann auch ReadingsGroup, CloneDummy oder andere Module genutzt werden, dann werden einfach deren Readings verwendet.<br>
     Der zweite Parameter ist optional und gibt eine Liste der anzuzeigende Readings 
     im Format <code>&lt;ReadingName&gt;[:&lt;Comment&gt;[:&lt;Postfix&gt;]]</code> an.<br>
     Dabei gibt <code>ReadingName</code> den anzuzeigenden Reading an, der Wert aus <code>Comment</code> wird als der Anzeigename verwendet
@@ -3084,9 +3644,20 @@ If one (or more) of the multiplier is set to zero, the corresponding readings is
     <code>define sysv2 weblink htmlCode {SYSMON_ShowValuesHTML('sysmon', ('date:Datum', 'cpu_temp:CPU Temperatur: &deg;C', 'cpu_freq:CPU Frequenz: MHz'))}</code>
     </ul><br>
     
+    <b>HTML-Ausgabe-Methode (f&uuml;r ein Weblink): SYSMON_ShowValuesHTMLTitled(&lt;SYSMON-Instance&gt;[,&lt;Title&gt;,&lt;Liste&gt;])</b><br><br>
+    <ul>
+    Wie SYSMON_ShowValuesHTML, aber mit einer &Uuml;berschrift dar&uuml;ber. Wird keine &Uuml;berschrift angegeben, wird alias des Moduls genutzt (falls definiert).<br>
+    </ul><br>
+    
+    
     <b>Text-Ausgabe-Methode (see Weblink): SYSMON_ShowValuesText(&lt;SYSMON-Instance&gt;[,&lt;Liste&gt;])</b><br><br>
     <ul>
     Analog SYSMON_ShowValuesHTML, jedoch formatiert als reines Text.<br>
+    </ul><br>
+    
+    <b>HTML-Ausgabe-Methode (f&uuml;r ein Weblink): SYSMON_ShowValuesTextTitled(&lt;SYSMON-Instance&gt;[,&lt;Title&gt;,&lt;Liste&gt;])</b><br><br>
+    <ul>
+    Wie SYSMON_ShowValuesText, aber mit einer &Uuml;berschrift dar&uuml;ber.<br>
     </ul><br>
     
     <b>Readings-Werte mit Perl lesen: SYSMON_getValues([&lt;Liste der gew&uuml;nschten Schl&uuml;ssel&gt;])</b><br><br>

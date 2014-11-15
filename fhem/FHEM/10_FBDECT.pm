@@ -13,6 +13,8 @@ sub FBDECT_Set($@);
 sub FBDECT_Get($@);
 sub FBDECT_Cmd($$@);
 
+sub FBDECT_decodePayload($$$);
+
 my @fbdect_models = qw(Powerline546E Dect200);
 
 my %fbdect_payload = (
@@ -26,9 +28,7 @@ my %fbdect_payload = (
   20 => { n=>"power",       fmt=>'sprintf("%0.2f W", hex($pyld)/100)' },
   21 => { n=>"energy",      fmt=>'sprintf("%0.0f Wh",hex($pyld))' },
   22 => { n=>"powerFactor", fmt=>'sprintf("%0.3f", hex($pyld))' },
-  23 => { n=>"temperature", fmt=>'sprintf("%0.1f C (%s)",'.
-        'hex(substr($pyld,0,8))/10,'.
-        '(hex(substr($pyld,8,8))+0)?"corrected":"measured")' },
+  23 => { n=>"temperature", fmt=>'FBDECT_decodeTemp($pyld, $hash, $addReading)' },
   35 => { n=>"options",     fmt=>'FBDECT_decodeOptions($pyld)' },
   37 => { n=>"control",     fmt=>'FBDECT_decodeControl($pyld)' },
 );
@@ -65,17 +65,21 @@ FBDECT_Define($$)
   my $name   = shift @a;
   my $type = shift(@a); # always FBDECT
 
-  my $u = "wrong syntax for $name: define <name> FBDECT id props";
+  my $u = "wrong syntax for $name: define <name> FBDECT [FBAHAname:]id props";
   return $u if(int(@a) != 2);
 
-  my $id = shift @a;
+  my $ioNameAndId = shift @a;
+  my ($ioName, $id) = (undef, $ioNameAndId);
+  if($ioNameAndId =~ m/^([^:]*):(.*)$/) {
+    $ioName = $1; $id = $2;
+  }
   return "define $name: wrong id ($id): need a number"
                    if( $id !~ m/^\d+$/i );
   $hash->{id} = $id;
   $hash->{props} = shift @a;
 
-  $modules{FBDECT}{defptr}{$id} = $hash;
-  AssignIoPort($hash);
+  $modules{FBDECT}{defptr}{$ioNameAndId} = $hash;
+  AssignIoPort($hash, $ioName);
   return undef;
 }
  
@@ -132,7 +136,7 @@ FBDECT_Get($@)
     my $d = pop @answ;
     my $state = "inactive" if($answ[0] =~ m/ inactive,/);
     while($d) {
-      my ($ptyp, $plen, $pyld) = FBDECT_decodePayload($d);
+      my ($ptyp, $plen, $pyld) = FBDECT_decodePayload($d, $hash, 0);
       Log3 $hash, 4, "Payload: $d -> $ptyp: $pyld";
       last if($ptyp eq "");
       if($ptyp eq "state" && 
@@ -161,9 +165,10 @@ FBDECT_Parse($$@)
   }
 
   my $id = hex(substr($msg, 16, 4));
-  my $hash = $modules{FBDECT}{defptr}{$id};
+  my $hash = $modules{FBDECT}{defptr}{"$ioName:$id"};
+  $hash = $modules{FBDECT}{defptr}{$id} if(!$hash);
   if(!$hash) {
-    my $ret = "UNDEFINED FBDECT_$id FBDECT $id switch";
+    my $ret = "UNDEFINED FBDECT_$id FBDECT $ioName:$id switch";
     Log3 $ioName, 3, "$ret, please define it";
     DoTrigger("global", $ret);
     return "";
@@ -174,7 +179,7 @@ FBDECT_Parse($$@)
   if($mt eq "07") {
     my $d = substr($msg, 32);
     while($d) {
-      my ($ptyp, $plen, $pyld) = FBDECT_decodePayload($d);
+      my ($ptyp, $plen, $pyld) = FBDECT_decodePayload($d, $hash, 1);
       Log3 $hash, 4, "Payload: $d -> $ptyp: $pyld";
       last if($ptyp eq "");
       readingsBulkUpdate($hash, $ptyp, $pyld);
@@ -194,12 +199,12 @@ FBDECT_Parse($$@)
           push @answ, "FBDECT_DECODE_ERROR:short payload $d";
           last;
         }
-        my ($ptyp, $plen, $pyld) = FBDECT_decodePayload($d);
+        my ($ptyp, $plen, $pyld) = FBDECT_decodePayload($d, $hash, 1);
         last if($ptyp eq "");
         push @answ, "  $ptyp: $pyld";
         $d = substr($d, 16+$plen*2);
       }
-      Log 4, "FBDECT PARSED: ".join(" / ", @answ);
+      Log3 $iodev, 4, "FBDECT PARSED: ".join(" / ", @answ);
       # Ignore the rest, is too confusing.
       @answ = grep /state:/, @answ;
       (undef, $state) = split(": ", $answ[0], 2) if(@answ > 0);
@@ -208,7 +213,7 @@ FBDECT_Parse($$@)
   }
 
   readingsEndUpdate($hash, 1);
-  Log 5, "FBDECT_Parse for device $hash->{NAME} done";
+  Log3 $iodev, 5, "FBDECT_Parse for device $hash->{NAME} done";
   return $hash->{NAME};
 }
 
@@ -219,6 +224,22 @@ FBDECT_decodeRelayTimes($)
   return "unknown"  if(length($p) < 16);
   return "disabled" if(substr($p, 12, 4) eq "0000");
   return $p;
+}
+
+sub
+FBDECT_decodeTemp($$$)
+{
+  my ($p, $hash, $addReading) = @_;
+
+  my $v = hex(substr($p,0,8));
+  $v = -(4294967296-$v) if($v > 2147483648);
+  $v /= 10;
+  if(hex(substr($p,8,8))+0) {
+    readingsBulkUpdate($hash, "tempadjust", sprintf("%0.1f C", $v))
+        if($addReading);
+    return "";
+  }
+  return sprintf("%0.1f C (measured)", $v);
 }
 
 sub
@@ -286,25 +307,28 @@ FBDECT_decodeControl($)
 }
 
 sub
-FBDECT_decodePayload($)
+FBDECT_decodePayload($$$)
 {
-  my ($d) = @_;
+  my ($d, $hash, $addReading) = @_;
   if(length($d) < 12) {
-    Log 4, "FBDECT ignoring payload: data too short";
+    Log3 $hash, 4, "FBDECT ignoring payload: data too short";
     return ("", "", "");
   }
 
   my $ptyp = hex(substr($d, 0, 8));
   my $plen = hex(substr($d, 8, 4));
   if(length($d) < 16+$plen*2) {
-    Log 4, "FBDECT ignoring payload: data shorter than given length($plen)";
+    Log3 $hash, 4, "FBDECT ignoring payload: data shorter than given length($plen)";
     return ("", "", "");
   }
   my $pyld = substr($d, 16, $plen*2);
 
   if($fbdect_payload{$ptyp}) {
-    $pyld = eval $fbdect_payload{$ptyp}{fmt} if($fbdect_payload{$ptyp}{fmt});
-    $ptyp = $fbdect_payload{$ptyp}{n};
+    $cmdFromAnalyze = $fbdect_payload{$ptyp}{fmt};
+    $pyld = eval $cmdFromAnalyze if($cmdFromAnalyze);
+    $cmdFromAnalyze = undef;
+
+    $ptyp = ($pyld ? $fbdect_payload{$ptyp}{n} : "");
   }
   return ($ptyp, $plen, $pyld);
 }
@@ -334,7 +358,7 @@ FBDECT_Undef($$)
   <a name="FBDECTdefine"></a>
   <b>Define</b>
   <ul>
-    <code>define &lt;name&gt; FBDECT &lt;homeId&gt; &lt;id&gt; [classes]</code>
+    <code>define &lt;name&gt; FBDECT [&lt;FBAHAname&gt;:]&lt;homeId&gt; &lt;id&gt; [classes]</code>
   <br>
   <br>
   &lt;id&gt; is the id of the device, the classes argument ist ignored for now.
@@ -344,7 +368,9 @@ FBDECT_Undef($$)
     <code>define lamp FBDECT 16 switch,powerMeter</code><br>
   </ul>
   <b>Note:</b>Usually the device is created via
-  <a href="#autocreate">autocreate</a>
+  <a href="#autocreate">autocreate</a>. If you rename the corresponding FBAHA
+  device, take care to modify the FBDECT definitions, as it is not done
+  automatically.
   </ul>
   <br>
   <br>
@@ -395,7 +421,8 @@ FBDECT_Undef($$)
     <li>power: $v W</li>
     <li>energy: $v Wh</li>
     <li>powerFactor: $v"</li>
-    <li>temperature: $v C ([measured|corrected])</li>
+    <li>temperature: $v C (measured)</li>
+    <li>tempadjust: $v C</li>
     <li>options: uninitialized</li>
     <li>options: powerOnState:[on|off|last],lock:[none,webUi,remoteFb,button]</li>
     <li>control: disabled</li>
@@ -419,7 +446,7 @@ FBDECT_Undef($$)
   <a name="FBDECTdefine"></a>
   <b>Define</b>
   <ul>
-    <code>define &lt;name&gt; FBDECT &lt;homeId&gt; &lt;id&gt; [classes]</code>
+    <code>define &lt;name&gt; FBDECT [&lt;FBAHAname&gt;:]&lt;homeId&gt; &lt;id&gt; [classes]</code>
   <br>
   <br>
   &lt;id&gt; ist das Ger&auml;te-ID, das Argument wird z.Zt ignoriert.
@@ -429,7 +456,8 @@ FBDECT_Undef($$)
     <code>define lampe FBDECT 16 switch,powerMeter</code><br>
   </ul>
   <b>Achtung:</b>FBDECT Eintr&auml;ge werden noralerweise per 
-  <a href="#autocreate">autocreate</a> angelegt.
+  <a href="#autocreate">autocreate</a> angelegt. Falls sie die zugeordnete FBAHA
+  Instanz umbenennen, dann muss die FBDECT Definition manuell angepasst werden.
   </ul>
   <br>
   <br

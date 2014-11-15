@@ -1,5 +1,5 @@
 ##############################################
-#     98_THRESHOLD by Damian Sordyl
+#     $Id$
 #
 #     This file is part of fhem.
 #
@@ -16,7 +16,6 @@
 #     You should have received a copy of the GNU General Public License
 #     along with fhem.  If not, see <http://www.gnu.org/licenses/>.
 #
-#     $Id$
 ##############################################################################
 
 
@@ -273,6 +272,7 @@ THRESHOLD_Set($@)
  
   if ($arg eq "desired" ) {
     return "$pn: set desired value:$value, desired value needs a numeric parameter" if(@a != 3 || $value !~ m/^[-\d\.]*$/);
+    
     if ($desired_value ne "") {
       return $ret if ($desired_value == $value);
     }
@@ -292,6 +292,7 @@ THRESHOLD_Set($@)
     readingsBulkUpdate   ($hash, "cmd","wait for next cmd");
     readingsBulkUpdate   ($hash, "desired_value", $value);
     readingsEndUpdate    ($hash, 1);
+    $ret=CommandDeleteAttr(undef, "$pn disable");
     return THRESHOLD_Check($hash);
   } elsif ($arg eq "deactivated" ) {
       $cmd = $value if ($value ne "");
@@ -834,10 +835,10 @@ THRESHOLD_setValue($$)
     <code>set TH_room desired 21</code><br>
     <br>
     <br>
-    An example of time-dependent heating in combination with Heating_Control module:<br>
+    An example of time-dependent heating in combination with DOIF module:<br>
     <br>
-    <code>define TH_living_room THRESHOLD T_living_room heating</code><br>
-    <code>define HC_living_room Heating_Control TH_living_room 06:00|22 22:00|18 set @ desired %</code><br>
+    <code>define TH_room THRESHOLD T_living_room heating</code><br>
+    <code>define di_room DOIF ([05:30-23:00|8] or [07:00-23:00|7]) (set TH_room desired 20) DOELSE (set TH_room desired 18)</code><br>
     <br>
     <br>
     Examples of customized state output:<br>
@@ -955,9 +956,10 @@ THRESHOLD_setValue($$)
   Die Vorgabe der Solltemperatur kann auch von beliebigen Wandthermostaten (z. B. HM, MAX, FHT) genutzt werden.<br>
   <br>
   Das Schaltverhalten des THRESHOLD-Moduls kann zusätzlich durch einen weiteren Sensor oder eine Sensorgruppe,
-  definiert über structure (z. B. Fensterkontakte), über eine AND- bzw. OR-Verknüpfung beeinflusst werden.<br>
+  definiert über structure (z. B. Fensterkontakte), über eine AND- bzw. OR-Verknüpfung beeinflusst werden.
+  Bei komplexeren Bedingungen mit mehreren and- bzw. or-Verknüpfung sollte man das neuere <a href="http://fhem.de/commandref_DE.html#DOIF">DOIF</a>-Modul verwenden.<br>
   <br>
-  Ebenfalls ist die Kombination mehrerer THRESHOLD-Module miteinander möglich.<br>
+  Es ist ebenfalls die Kombination mehrerer THRESHOLD-Module miteinander möglich.<br>
   <br>
   <br>
   <b><u>Beispiele für Heizungssteuerung:</u></b><br>
@@ -969,10 +971,10 @@ THRESHOLD_setValue($$)
   <code>define TH_room THRESHOLD temp_room heating</code><br>
   <code>set TH_room desired 20</code><br>
   <br>
-  <b>Zeitgesteuertes Heizen mit Hilfe des Heating_Control-Moduls:</b><br>
+  <b>Zeitgesteuertes Heizen mit Hilfe des DOIF-Moduls:</b><br>
   <br>
   <code>define TH_room THRESHOLD temp_room heating</code><br>
-  <code>define HC_room Heating_Control TH_room 06:00|22 22:00|18 set @ desired %</code><br>
+  <code>define di_room DOIF ([05:30-23:00|8] or [07:00-23:00|7]) (set TH_room desired 20) DOELSE (set TH_room desired 18)</code><br>
   <br>
   <b>Steuerung einer Heizung durch ein Wandthermostat mit Übernahme der Soll- und Ist-Temperatur vom Wandthermostat:</b><br>
   <br>
@@ -1010,7 +1012,7 @@ THRESHOLD_setValue($$)
   Nachtabsenkung lässt sich zeitgesteuert durch das Setzen von "offset" realisieren.<br>
   Von 22:00 bis 5:00 Uhr soll die Vorlauftemperatur um 10 Grad herabgesetzt werden:<br>
   <br>
-  <code>define W_heating weekdaytimer TH_heating 05:00|0 22:00|-10 set @ offset %</code><br>
+  <code>define di_heating DOIF ([22:00-05:00]) (set TH_heating offset -10) DOELSE (set TH_heating offset 0)</code><br>
   <br>
   <br>
   <b><u>Beispiele für Belüftungssteuerung:</u></b><br>
@@ -1030,16 +1032,7 @@ THRESHOLD_setValue($$)
   <code>define dewpoint dewpoint outdoor</code><br>
   <code>define TH_room THRESHOLD indoor:dewpoint:0:outdoor:dewpoint AND TH_hum:state:on ventilator|set @ on|set @ off|2</code><br>
   <br>
-  <b>Belüftung in Kombination mit einem Lichtschalter mit Nachlaufsteuerung:</b><br>
-  <br>
-  Der Lüfter soll angehen, wenn das Licht mindestens 2 Minuten lang brennt oder die Luftfeuchtigkeit 65 % überschreitet,<br>
-  der Lüfter soll ausgehen, wenn die Luftfeuchtigkeit unter 60 % fällt und das Licht mindestens 3 Minuten lang aus ist.<br>
-  <br>
-  <code>define ventilator_state dummy</code><br>
-  <code>define w_ventilator_state_off watchdog light_switch:off 00:03 light_switch:on set ventilator_state off;; trigger w_ventilator_state_off .</code><br>
-  <code>define w_ventilator_state_on watchdog light_switch:on 00:02 light_switch:off set ventilator_state on;; trigger w_ventilator_state_on .</code><br>
-  <code>define TH_ventilator THRESHOLD humsensor:humidity:5:65 OR ventilator_state:state:on ventilator|set @ on|set @ off|1</code><br>
-  <br>
+  Belüftung in Kombination mit einem Lichtschalter mit Nachlaufsteuerung: siehe <a href="http://fhem.de/commandref_DE.html#DOIF">DOIF</a>-Modul.<br>
   <br>
   <b><u>Beispiele für die Steuerung der Warmwasserzirkulation:</u></b><br>
   <br>
@@ -1048,7 +1041,7 @@ THRESHOLD_setValue($$)
   In der Hauptzeit soll die Wassertemperatur im Rücklauf mindestens 38 Grad betragen.<br>
   <br>
   <code>define TH_circ TRHESHOLD return_w:temperature:0 circ_pump</code><br>
-  <code>define HC_circ Heating_Control TH_circ 12345|05:30|38 67|07:00|38 23:00|15 set @ desired %</code><br>
+  <code>define di_circ DOIF ([05:30-23:00|8] or [07:00-23:00|7]) (set TH_circ desired 38) DOELSE (set TH_circ desired 15)</code><br>
   <br>
   <b>Alternative Steuerung mit Sollwert-Vorgabe durch einen weiteren Sensor des Warmwasserspeichers:</b><br>
   <br>
@@ -1066,30 +1059,9 @@ THRESHOLD_setValue($$)
   will man von der Sonnenenergie profitieren und den Rollladen oben lassen.<br>
   <br>
   <code>define TH_shutter_room THRESHOLD T_room AND sun:state:on shutter_room|set @ 30||2</code><br>
-  <code>define HC_R_Keller Heating_Control TH_shutter_room 12:00|23 20:00|30  set @ desired %</code><br>
+  <code>define di_shutter DOIF ([12:00-20:00]) (set TH_shutter desired 23) DOELSE (set TH_shutter desired 30)</code><br>
   <br>
-  <b>Beispiel für Beschattung im Sommer mit Verzögerung und automatischem Hochfahren des Rollladens:</b><br>
-  <br>
-  Zusätzlich zum obigen Beispiel wird der Rollladen erst heruntergefahren, wenn die Sonne mindestens 15 Minuten scheint<br>
-  und wieder hochgefahren, wenn die Sonne mindestens 30 Minuten nicht mehr scheint.<br>
-  <br>
-  <code>define sun_state dummy</code><br>
-  <code>define w_sun_state_off watchdog sun:off 00:30 sun:on set sun_state off;; trigger w_sun_state_off .</code><br>
-  <code>define w_sun state_on watchdog sun:on 00:15 sun:off set sun_state on;; trigger w_sun_state_on .</code><br>
-  <code>define TH_shutter_room THRESHOLD T_room AND sun_state:state:on shutter_room|set @ 30|set @ 100|2</code><br>
-  <code>define HC_R_Keller Heating_Control TH_shutter_room 12:00|23 20:00|30  set @ desired %</code><br>
-  <br>
-  <b>Beispiel für Beschattung mit Verzögerung mit Hilfe eines Helligkeitssensors:</b><br>
-  <br>
-  Der Rollladen soll herunterfahren, wenn der Helligkeitssensor mindesten 15 Minuten einen Schwellenwert von 10000 überschreitet<br>
-  und wieder hochfahren, wenn der Schwellenwert 10000 mindestens 30 Minuten lang unterschritten wird.<br>
-  <br>
-  <code>define sun dummy</code><br>
-  <code>define sun_state dummy</code><br>
-  <code>define TH_lightness THRESHOLD lightness_sensor:0:10000 sun||||on:off|_sc</code><br>
-  <code>define w_sun_state_off watchdog sun:off 00:30 sun:on set sun_state off;; trigger w_sun_state_off .</code><br>
-  <code>define w_sun state_on watchdog sun:on 00:15 sun:off set sun_state on;; trigger w_sun_state_on .</code><br>
-  <code>define TH_shutter_room THRESHOLD T_room AND sun_state:state:on shutter_room|set @ 30|set @ 100|2</code><br>
+  Weitere Beispiele für Beschattung mit Verzögerung und automatischem Hochfahren des Rollladens: siehe <a href="http://fhem.de/commandref_DE.html#DOIF">DOIF</a>-Modul.<br>
   <br>
   <br>
   <b><u>Beispiele für die Ausführung beliebiger FHEM/Perl-Befehlsketten:</u></b><br>

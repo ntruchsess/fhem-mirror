@@ -34,9 +34,6 @@ sub LightScene_Initialize($)
   $hash->{FW_detailFn}  = "LightScene_detailFn";
   $data{FWEXT}{"/LightScene"}{FUNC} = "LightScene_CGI"; #mod
 
-  addToAttrList("lightSceneParamsToSave");
-  addToAttrList("lightSceneRestoreOnlyIfChanged:1,0");
-
   eval "use JSON";
   $LightScene_hasJSON = 0 if($@);
 
@@ -64,6 +61,9 @@ sub LightScene_Define($$)
   foreach my $a (@args) {
     foreach my $d (devspec2array($a)) {
       $list{$d} = 1;
+
+      addToDevAttrList( $d, "lightSceneParamsToSave" );
+      addToDevAttrList( $d, "lightSceneRestoreOnlyIfChanged:1,0" );
     }
   }
   $hash->{CONTENT} = \%list;
@@ -292,13 +292,14 @@ LightScene_Notify($$)
           $matched = 1;
           foreach my $d (sort keys %{ $hash->{SCENES}{$scene} }) {
             next if( !defined($hash->{SCENES}{$scene}{$d}));
+            next if(!$defs{$d});
 
             my $state = $hash->{SCENES}{$scene}{$d};
             $state = $state->{state} if( ref($state) eq 'HASH' );
 
             if( ref($state) eq 'ARRAY' ) {
               $matched = 0;
-            } elsif( $state ne $s{$d} ) {
+            } elsif( !defined($s{$d}) || $state ne $s{$d} ) {
               $matched = 0;
             }
 
@@ -338,7 +339,8 @@ LightScene_Save()
 
   my $hash;
   for my $d (keys %defs) {
-    next if($defs{$d}{TYPE} ne "LightScene");
+    next if( !$defs{$d}{TYPE} );
+    next if( $defs{$d}{TYPE} ne "LightScene" );
     next if( !defined($defs{$d}{SCENES}) );
 
     $hash->{$d} = $defs{$d}{SCENES} if( keys(%{$defs{$d}{SCENES}}) );

@@ -30,6 +30,7 @@ my %gets = (    # Name, Data to send to the CUL, Regexp for the answer
 );
 
 my %sets = (
+  "reopen"    => "",
   "hmPairForSec" => "HomeMatic",
   "hmPairSerial" => "HomeMatic",
   "raw"       => "",
@@ -41,13 +42,13 @@ my %sets = (
   "patable"   => "",
 );
 
-my @ampllist = (24, 27, 30, 33, 36, 38, 40, 42); # rAmpl(dB) 
+my @ampllist = (24, 27, 30, 33, 36, 38, 40, 42); # rAmpl(dB)
 
 my $clientsSlowRF    = ":FS20:FHT.*:KS300:USF1000:BS:HMS: ".
                        ":CUL_EM:CUL_WS:CUL_FHTTK:CUL_HOERMANN: ".
-                       ":ESA2000:CUL_IR:CUL_TX:Revolt:IT:UNIRoll: ".
+                       ":ESA2000:CUL_IR:CUL_TX:Revolt:IT:UNIRoll:SOMFY ".
                        ":STACKABLE_CC:CUL_RFR:";
-my $clientsHomeMatic = ":CUL_HM:HMS:CUL_IR:STACKABLE_CC:"; 
+my $clientsHomeMatic = ":CUL_HM:HMS:CUL_IR:STACKABLE_CC:";
 my $clientsMAX       = ":CUL_MAX:HMS:CUL_IR:STACKABLE_CC:";
 my $clientsWMBus     = ":WMBUS:HMS:CUL_IR:STACKABLE_CC:";
 
@@ -70,6 +71,7 @@ my %matchListSlowRF = (
     "G:IT"        => "^i......\$",
     "H:STACKABLE_CC"=>"^\\*",
     "I:UNIRoll"   => "^[0-9A-F]{5}(B|D|E)",
+    "J:SOMFY"     => "^Y[r|t|s]:?[A-F0-9]+",
 );
 my %matchListHomeMatic = (
     "1:CUL_HM" => "^A....................",
@@ -114,7 +116,8 @@ CUL_Initialize($)
                      "showtime:1,0 model:CUL,CUN sendpool addvaltrigger ".
                      "rfmode:SlowRF,HomeMatic,MAX,WMBus_T,WMBus_S ".
                      "hmId ".
-                     "hmProtocolEvents:0_off,1_dump,2_dumpFull,3_dumpTrigger ";
+                     "hmProtocolEvents:0_off,1_dump,2_dumpFull,3_dumpTrigger " .
+                     $readingFnAttributes;
 
   $hash->{ShutdownFn} = "CUL_Shutdown";
 
@@ -124,10 +127,10 @@ sub
 CUL_FingerprintFn($$)
 {
   my ($name, $msg) = @_;
- 
+
   # Store only the "relevant" part, as the CUL won't compute the checksum
   $msg = substr($msg, 8) if($msg =~ m/^81/ && length($msg) > 8);
- 
+
   return ($name, $msg);
 }
 
@@ -177,7 +180,7 @@ CUL_Define($$)
     $attr{$name}{dummy} = 1;
     return undef;
   }
-  
+
   $hash->{DeviceName} = $dev;
   my $ret = DevIo_OpenDev($hash, 0, "CUL_DoInit");
   return $ret;
@@ -202,7 +205,7 @@ CUL_Undef($$)
   }
 
   CUL_SimpleWrite($hash, "X00"); # Switch reception off, it may hang up the CUL
-  DevIo_CloseDev($hash); 
+  DevIo_CloseDev($hash);
   return undef;
 }
 
@@ -224,6 +227,15 @@ CUL_RemoveHMPair($)
 
 #####################################
 sub
+CUL_Reopen($)
+{
+  my ($hash) = @_;
+  DevIo_CloseDev($hash);
+  DevIo_OpenDev($hash, 1, "CUL_DoInit");
+}
+
+#####################################
+sub
 CUL_Set($@)
 {
   my ($hash, @a) = @_;
@@ -239,7 +251,10 @@ CUL_Set($@)
   return "This command is not valid in the current rfmode"
       if($sets{$type} && $sets{$type} ne AttrVal($name, "rfmode", "SlowRF"));
 
-  if($type eq "hmPairForSec") { ####################################
+  if($type eq "reopen") { ####################################
+    CUL_Reopen($hash);
+    
+  } elsif($type eq "hmPairForSec") { ####################################
     return "Usage: set $name hmPairForSec <seconds_active>"
         if(!$arg || $arg !~ m/^\d+$/);
     $hash->{hmPair} = 1;
@@ -270,7 +285,6 @@ CUL_Set($@)
     CUL_WriteInit($hash);   # Will reprogram the CC1101
 
   } elsif($type eq "bWidth") { ###################################### KHz
-
     my ($err, $ob);
     if(!IsDummy($hash->{NAME})) {
       CUL_SimpleWrite($hash, "C10");
@@ -366,7 +380,7 @@ CUL_Get($@)
         $ampllist[$r{"1B"}&7],
         4+4*($r{"1D"}&3)                                                #Sens
         );
-    
+
   } else {
 
     CUL_SimpleWrite($hash, $gets{$a[1]}[0] . $arg);
@@ -391,8 +405,7 @@ CUL_Get($@)
 
   }
 
-  $hash->{READINGS}{$a[1]}{VAL} = $msg;
-  $hash->{READINGS}{$a[1]}{TIME} = TimeNow();
+  readingsSingleUpdate($hash, $a[1], $msg, 0);
 
   return "$a[0] $a[1] => $msg";
 }
@@ -462,9 +475,7 @@ CUL_DoInit($)
     }
   }
 
-  $hash->{STATE} =
-  $hash->{READINGS}{state}{VAL} = "Initialized";
-  $hash->{READINGS}{state}{TIME} = TimeNow();
+  readingsSingleUpdate($hash, "state", "Initialized", 1);
 
   # Reset the counter
   delete($hash->{XMIT_TIME});
@@ -496,7 +507,7 @@ CUL_ReadAnswer($$$$)
     if($^O =~ m/Win/ && $hash->{USBDev}) {
       $hash->{USBDev}->read_const_time($to*1000); # set timeout (ms)
       # Read anstatt input sonst funzt read_const_time nicht.
-      $buf = $hash->{USBDev}->read(999);          
+      $buf = $hash->{USBDev}->read(999);
       return ("Timeout reading answer for get $arg", undef)
         if(length($buf) == 0);
 
@@ -571,17 +582,17 @@ sub
 CUL_XmitDlyHM($$$)
 {
   my ($hash,$fn,$now) = @_;
-  
+
   my (undef,$mTy,undef,$id) = unpack 'A8A2A6A6',$fn if(length($fn)>19);
 
   if($id &&
-     $modules{CUL_HM}{defptr}{$id} && 
-     $modules{CUL_HM}{defptr}{$id}{helper}{io} && 
+     $modules{CUL_HM}{defptr}{$id} &&
+     $modules{CUL_HM}{defptr}{$id}{helper}{io} &&
      $modules{CUL_HM}{defptr}{$id}{helper}{io}{nextSend}) {
     my $dDly = $modules{CUL_HM}{defptr}{$id}{helper}{io}{nextSend} - $now;
-    #$dDly -= 0.04 if ($mTy eq "02");# while HM devices need a rest there are 
-                                     # still some devices that need faster 
-                                     # reactionfor ack. 
+    #$dDly -= 0.04 if ($mTy eq "02");# while HM devices need a rest there are
+                                     # still some devices that need faster
+                                     # reactionfor ack.
                                      # Mode needs to be determined
     if ($dDly > 0.01){# wait less then 10 ms will not work
       $dDly = 0.1 if($dDly > 0.1);
@@ -590,7 +601,7 @@ CUL_XmitDlyHM($$$)
     }
   }
   shift(@{$hash->{helper}{$id}{QUEUE}});
-  InternalTimer($now+0.1, "CUL_XmitDlyHMTo", "$hash->{NAME}:$id", 1) 
+  InternalTimer($now+0.1, "CUL_XmitDlyHMTo", "$hash->{NAME}:$id", 1)
         if (scalar(@{$hash->{helper}{$id}{QUEUE}}));
   return 0;
 }
@@ -626,7 +637,7 @@ CUL_WriteTranslate($$$)
     $msg = substr($msg,6,4) . substr($msg,10);
 
   } elsif($fn eq "cmd") {                                  # internal command
-    if($msg eq "speed100") { 
+    if($msg eq "speed100") {
       $fn = "AR";
     } elsif($msg eq "speed10") {
       $fn = "Ar";
@@ -674,7 +685,6 @@ CUL_SendFromQueue($$)
   my ($hash, $bstring) = @_;
   my $name = $hash->{NAME};
   my $hm = ($bstring =~ m/^A/);
-  my $mz = ($bstring =~ m/^Z/);
   my $to = ($hm ? 0.15 : 0.3);
   my $now = gettimeofday();
   if($bstring ne "") {
@@ -759,7 +769,7 @@ CUL_Read($)
   my $name = $hash->{NAME};
 
   my $culdata = $hash->{PARTIAL};
-  Log3 $name, 5, "CUL/RAW: $culdata/$buf"; 
+  Log3 $name, 5, "CUL/RAW: $culdata/$buf";
   $culdata .= $buf;
 
   while($culdata =~ m/\n/) {
@@ -786,7 +796,7 @@ CUL_Parse($$$$@)
   my $dmsgLog = (AttrVal($name,"rfmode","") eq "HomeMatic")
                    ? join(" ",(unpack'A1A2A2A4A6A6A*',$rmsg))
                    :$dmsg;
-  if($dmsg =~ m/^[AFTKEHRStZri]([A-F0-9][A-F0-9])+$/) { # RSSI
+  if($dmsg =~ m/^[AFTKEHRStZrib]([A-F0-9][A-F0-9])+$/) { # RSSI
     my $l = length($dmsg);
     $rssi = hex(substr($dmsg, $l-2, 2));
     $dmsg = substr($dmsg, 0, $l-2);
@@ -804,7 +814,7 @@ CUL_Parse($$$$@)
     Log3 $name, 5, "CUL_Parse: switched to $dmsg";
     return;
   }
-	
+
   if($dmsg =~ m/^[0-9A-F]{4}U./) {                 # RF_ROUTER
     Dispatch($hash, $dmsg, undef);
     return;
@@ -859,6 +869,8 @@ CUL_Parse($$$$@)
     $dmsg = lc($dmsg);
   } elsif($fn eq "i" && $len >= 7) {              # IT
     $dmsg = lc($dmsg);
+  } elsif($fn eq "Y" && $len >= 3) {               # SOMFY RTS
+    ;
   } elsif($fn eq "S" && $len >= 33) {              # CUL_ESA / ESA2000 / Native
     ;
   } elsif($fn eq "E" && $len >= 11) {              # CUL_EM / Native
@@ -870,7 +882,7 @@ CUL_Parse($$$$@)
   } elsif($fn eq "A" && $len >= 20) {              # AskSin/BidCos/HomeMatic
     my $src = substr($dmsg,9,6);
     if($modules{CUL_HM}{defptr}{$src}){
-      $modules{CUL_HM}{defptr}{$src}{helper}{io}{nextSend} = 
+      $modules{CUL_HM}{defptr}{$src}{helper}{io}{nextSend} =
           gettimeofday() + 0.100;
     }
     $dmsg .= "::$rssi:$name" if(defined($rssi));
@@ -878,7 +890,7 @@ CUL_Parse($$$$@)
   } elsif($fn eq "Z" && $len >= 21) {              # Moritz/Max
     ;
   } elsif($fn eq "b" && $len >= 24) {              # Wireless M-Bus
-    ;
+    $dmsg .= "::$rssi" if (defined($rssi));
   } elsif($fn eq "t" && $len >= 5)  {              # TX3
     $dmsg = "TX".substr($dmsg,1);                  # t.* is occupied by FHTTK
   } else {
@@ -889,7 +901,8 @@ CUL_Parse($$$$@)
 
   $hash->{"${name}_MSGCNT"}++;
   $hash->{"${name}_TIME"} =
-  $hash->{READINGS}{state}{TIME} = TimeNow();      # showtime attribute
+  # showtime attribute
+  readingsSingleUpdate($hash, "state", $hash->{READINGS}{state}{VAL}, 0);
   $hash->{RAWMSG} = $rmsg;
   my %addvals = (RAWMSG => $dmsg);
   if(defined($rssi)) {
@@ -934,7 +947,7 @@ CUL_SimpleWrite(@)
 {
   my ($hash, $msg, $nonl) = @_;
   return if(!$hash);
-  ($hash, $msg) = CUL_prefix(1, $hash, $msg); 
+  ($hash, $msg) = CUL_prefix(1, $hash, $msg);
 
   my $name = $hash->{NAME};
   if (AttrVal($name,"rfmode","") eq "HomeMatic"){
@@ -1002,7 +1015,7 @@ CUL_Attr(@)
       if($hash->{CMDS} =~ m/b/ || IsDummy($hash->{NAME}) || !$hash->{FD}) {
         $hash->{Clients} = $clientsWMBus;
         $hash->{MatchList} = \%matchListWMBus;
-        $hash->{initString} = "brs"; # Use S-Mode
+        $hash->{initString} = "X21\nbrs"; # Use S-Mode, X21 is needed for RSSI reporting
         CUL_WriteInit($hash);
 
       } else {
@@ -1014,15 +1027,15 @@ CUL_Attr(@)
       if($hash->{CMDS} =~ m/b/ || IsDummy($hash->{NAME}) || !$hash->{FD}) {
         $hash->{Clients} = $clientsWMBus;
         $hash->{MatchList} = \%matchListWMBus;
-        $hash->{initString} = "brt"; # Use T-Mode
+        $hash->{initString} = "X21\nbrt"; # Use T-Mode, X21 is needed for RSSI reporting
         CUL_WriteInit($hash);
 
       } else {
         Log3 $name, 2, $msg;
         return $msg;
       }
-      
-      
+
+
     } else {
       return if($hash->{initString} eq "X21");
       $hash->{Clients} = $clientsSlowRF;
@@ -1030,6 +1043,7 @@ CUL_Attr(@)
       $hash->{initString} = "X21";
       CUL_SimpleWrite($hash, "Ax") if ($hash->{CMDS} =~ m/A/); # reset AskSin
       CUL_SimpleWrite($hash, "Zx") if ($hash->{CMDS} =~ m/Z/); # reset Moritz
+      CUL_SimpleWrite($hash, "brx") if ($hash->{CMDS} =~ m/b/); # reset WMBus
       CUL_WriteInit($hash);
 
     }
@@ -1038,11 +1052,11 @@ CUL_Attr(@)
     delete $hash->{".clientArray"};
   } elsif($aName eq "hmId"){
     if ($cmd eq "set"){
-	  return "wrong syntax: hmId must be 6-digit-hex-code (3 byte)" 
+	  return "wrong syntax: hmId must be 6-digit-hex-code (3 byte)"
 	       if ($aVal !~ m/^[A-F0-9]{6}$/i);
-	}    
+	}
   }
- 
+
   return undef;
 }
 
@@ -1074,7 +1088,7 @@ CUL_prefix($$$)
   The CUL/CUN(O) is a family of RF devices sold by <a
   href="http://www.busware.de">busware.de</a>.
 
-  With the opensource firmware 
+  With the opensource firmware
   <a href="http://culfw.de/culfw.html">culfw</a> they are capable
   to receive and send different 433/868 MHz protocols (FS20/FHT/S300/EM/HMS/MAX!).
   It is even possible to use these devices as range extenders/routers, see the
@@ -1092,8 +1106,8 @@ CUL_prefix($$$)
   It is possible to attach more than one device in order to get better
   reception, FHEM will filter out duplicate messages.<br><br>
 
-  Note: This module may require the <code>Device::SerialPort</code> or 
-  <code>Win32::SerialPort</code> module if you attach the device via USB 
+  Note: This module may require the <code>Device::SerialPort</code> or
+  <code>Win32::SerialPort</code> module if you attach the device via USB
   and the OS sets strange default parameters for serial devices.<br><br>
 
   </td><td>
@@ -1122,9 +1136,9 @@ CUL_prefix($$$)
       character, e.g.: /dev/ttyACM0@38400<br><br>
 
       If the baudrate is "directio" (e.g.: /dev/ttyACM0@directio), then the
-      perl module <code>Device::SerialPort</code> is not needed, and FHEM 
-      opens the device with simple file io. This might work if the operating 
-      system uses sane defaults for the serial parameters, e.g. some Linux 
+      perl module <code>Device::SerialPort</code> is not needed, and FHEM
+      opens the device with simple file io. This might work if the operating
+      system uses sane defaults for the serial parameters, e.g. some Linux
       distributions and OSX.<br><br>
 
     </ul>
@@ -1145,6 +1159,8 @@ CUL_prefix($$$)
   <a name="CULset"></a>
   <b>Set </b>
   <ul>
+    <li>reopen<br>
+	Reopens the connection to the device and reinitializes it.</li><br>
     <li>raw<br>
         Issue a CUL firmware command.  See the <a
         href="http://culfw.de/commandref.html">this</a> document
@@ -1303,6 +1319,8 @@ CUL_prefix($$$)
         </code>
         </ul>
         </li><br>
+        
+    <li><a href="#readingFnAttributes">readingFnAttributes</a></li>
   </ul>
   <br>
   </ul>
@@ -1320,10 +1338,10 @@ CUL_prefix($$$)
   Der CUL/CUN(O) ist eine Familie von Funkempf&auml;ngern, die von der Firma
   <a href="http://www.busware.de">Busware</a> verkauft wird.
 
-  Mit der OpenSource Firmware 
+  Mit der OpenSource Firmware
   <a href="http://culfw.de/culfw.html">culfw</a> k&ouml;nnen sie verschiedene
   868 MHz Funkprotokolle empfangen bzw. senden (FS20/FHT/S300/EM/HMS/MAX!).
-  Man kann diese Ger&auml;te auch zur Reichweitenverl&auml;ngerung, siehe 
+  Man kann diese Ger&auml;te auch zur Reichweitenverl&auml;ngerung, siehe
   <a href="#CUL_RFR">CUL_RFR</a> einsetzen.
   <br> <br>
 
@@ -1364,7 +1382,7 @@ CUL_prefix($$$)
       Kernel Modul cdc_acm und &uuml;blicherweise wird die Schnittstelle
       /dev/ttyACM0 genannt. Wenn die Linux Distribution &uuml;ber kein Kernel
       Modul cdc_acm verf&uuml;gt, dann kann die Schnittstelle &uuml;ber
-      usbserial mit dem folgenden Befehl erzeugt werden: 
+      usbserial mit dem folgenden Befehl erzeugt werden:
         <ul><code>
           modprobe usbserial vendor=0x03eb product=0x204b
         </code></ul>
@@ -1403,8 +1421,10 @@ CUL_prefix($$$)
   <a name="CULset"></a>
   <b>Set </b>
   <ul>
+    <li>reopen<br>
+	&Ouml;ffnet die Verbindung zum Ger&auml;t neu und initialisiert es.</li><br>
     <li>raw<br>
-        Sendet einen CUL Firmware Befehl. Siehe auch 
+        Sendet einen CUL Firmware Befehl. Siehe auch
         <a href="http://culfw.de/commandref.html">hier</a> f&uuml;r
         n&auml;here Erl&auml;uterungen der CUL Befehle.
         </li><br>
@@ -1581,6 +1601,7 @@ CUL_prefix($$$)
         </code>
         </ul>
         </li><br>
+    <li><a href="#readingFnAttributes">readingFnAttributes</a></li>
   </ul>
   <br>
   </ul>

@@ -19,7 +19,7 @@ sub JeeLink_Write($$);
 sub JeeLink_SimpleWrite(@);
 sub JeeLink_ResetDevice($);
 
-my $clientsJeeLink = ":PCA301:EC3000:RoomNode:LaCrosse:ETH200comfort:CUL_IR:HX2272:FS20:AliRF";
+my $clientsJeeLink = ":PCA301:EC3000:RoomNode:LaCrosse:ETH200comfort:CUL_IR:HX2272:FS20:AliRF:Level:EMT7110";
 
 my %matchListPCA301 = (
     "1:PCA301"          => "^\\S+\\s+24",
@@ -27,6 +27,7 @@ my %matchListPCA301 = (
     "3:RoomNode"        => "^\\S+\\s+11",
     "4:LaCrosse"        => "^\\S+\\s+9 ",
     "5:AliRF"           => "^\\S+\\s+5 ",
+    "6:EMT7110"         => "^OK\\sEMT7110\\s",
 );
 
 my %matchListJeeLink433 = (
@@ -76,7 +77,6 @@ JeeLink_Initialize($)
   $hash->{SetFn}        = "JeeLink_Set";
   $hash->{AttrFn}       = "JeeLink_Attr";
   $hash->{AttrList} = "Clients MatchList"
-                      ." hexFile"
                       ." initCommands"
                       ." flashCommand"
                       ." DebounceTime BeepLong BeepShort BeepDelay"
@@ -209,23 +209,27 @@ JeeLink_Set($@)
     my $hexFile = "";
     my @deviceName = split('@', $hash->{DeviceName});
     my $port = $deviceName[0];
-    my $defaultHexFile = "./hexfiles/$hash->{TYPE}-LaCrosseITPlusReader10.hex";
+    my $firmwareFolder = "./FHEM/firmware/";
     my $logFile = AttrVal("global", "logdir", "./log") . "/JeeLinkFlash.log";
 
-
-    if(!$arg || $args[0] !~ m/^(\w|\/|.)+$/) {
-      $hexFile = AttrVal($name, "hexFile", "");
-      if ($hexFile eq "") {
-        $hexFile = $defaultHexFile;
+    my $detectedFirmware = $arg ? $args[0] : "";
+    if(!$detectedFirmware) {
+      if($hash->{model} =~ /LaCrosse/ ) {
+        $detectedFirmware = "LaCrosse";
+      }
+      elsif($hash->{model} =~ /pcaSerial/ ) {
+        $detectedFirmware = "PCA301";
       }
     }
-    else {
-      $hexFile = $args[0];
-    }
+    $hexFile = $firmwareFolder . "JeeLink_$detectedFirmware.hex";
+    
+    
+    return "No firmware detected. Please use the firmwareName parameter" if(!$detectedFirmware);
+    return "The file '$hexFile' does not exist" if(!-e $hexFile);
 
-    return "Usage: set $name flash [filename]\n\nor use the hexFile attribute" if($hexFile !~ m/^(\w|\/|.)+$/);
 
     $log .= "flashing JeeLink $name\n";
+    $log .= "detected Firmware: $detectedFirmware\n";
     $log .= "hex file: $hexFile\n";
     $log .= "port: $port\n";
     $log .= "log file: $logFile\n";
@@ -755,8 +759,8 @@ JeeLink_Parse($$$$)
 
                 my( $addr, $type, $channel, $temperature, $humidity, $batInserted ) = 0.0;
 
-                $addr = sprintf( "%02X", ((hex(substr($dmsg,3,2)) & 0x0F) << 2) | ((hex(substr($dmsg,5,2)) & 0xC0) >> 6) );
-                $type = ((hex(substr($dmsg,5,2)) & 0xF0) >> 4); # not needed by LaCrosse Module
+                $addr = ((hex(substr($dmsg,3,2)) & 0x0F) << 2) | ((hex(substr($dmsg,5,2)) & 0xC0) >> 6);
+                $type = (hex(substr($dmsg,5,2)) & 0xF0) >> 4; # not needed by LaCrosse Module
                 #$channel = 1; ## $channel = (hex(substr($dmsg,5,2)) & 0x0F);
 
                 $temperature = ( ( ((hex(substr($dmsg,5,2)) & 0x0F) * 100) + (((hex(substr($dmsg,7,2)) & 0xF0) >> 4) * 10) + (hex(substr($dmsg,7,2)) & 0x0F) ) / 10) - 40;
@@ -987,14 +991,18 @@ sub JeeLink_getIndexOfArray($@) {
        sending the 'new battery' flag will be created.
     </li><br>
 
-    <li>flash [hexFile]<br>
+    <li>flash [firmwareName]<br>
     The JeeLink needs the right firmware to be able to receive and deliver the sensor data to fhem. In addition to the way using the
-    arduino IDE to flash the firmware into the JeeLink this provides a way to flash it directly from FHEM.
+    arduino IDE to flash the firmware into the JeeLink this provides a way to flash it directly from FHEM.<br><br>
 
+    The firmwareName argument is optional. If not given, set flash checks the firmware type that is currently installed on the JeeLink and 
+    updates it with the same type.<br><br>
+    
+    
     There are some requirements:
     <ul>
       <li>avrdude must be installed on the host<br>
-      On a Raspberry PI this can be done with: sudo apt-get install avrdude</li>
+      On a linux systems like Cubietruck or Raspberry Pi this can be done with: sudo apt-get install avrdude</li>
       <li>the flashCommand attribute must be set.<br>
         This attribute defines the command, that gets sent to avrdude to flash the JeeLink.<br>
         The default is: avrdude -p atmega328P -c arduino -P [PORT] -D -U flash:w:[HEXFILE] 2>[LOGFILE]<br>

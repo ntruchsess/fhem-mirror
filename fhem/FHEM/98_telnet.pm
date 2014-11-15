@@ -251,9 +251,6 @@ telnet_Read($)
       }
     }
     $gotCmd = 1;
-    if( $cmd =~ s/\xff(\xfb|\xfd)(.)// ) {
-      #syswrite($hash->{CD}, sprintf("%c%c%c", 255, (ord($1)==253?251:253), ord($2)));
-    }
     if($cmd) {
       if($cmd =~ m/\\ *$/) {                     # Multi-line
         $hash->{prevlines} .= $cmd . "\n";
@@ -327,11 +324,12 @@ telnet_Undef($$)
 }
 
 sub
-telnet_ActivateInform($)
+telnet_ActivateInform($;$)
 {
-  my ($cl) = @_;
+  my ($cl, $arg) = @_;
   my $name = $cl->{NAME};
-  CommandInform($cl, "timer") if(!$inform{$name});
+  $arg = "" if(!defined($arg));
+  CommandInform($cl, "timer $arg") if(!$inform{$name});
 }
 
 

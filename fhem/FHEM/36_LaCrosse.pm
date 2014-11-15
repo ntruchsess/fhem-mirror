@@ -187,6 +187,8 @@ LaCrosse_Parse($$)
   my $rhash = $modules{LaCrosse}{defptr}{$raddr};
   my $rname = $rhash?$rhash->{NAME}:$raddr;
 
+  return "" if( IsIgnored($rname) );
+
   if( !$modules{LaCrosse}{defptr}{$raddr} ) {
     foreach my $d (sort keys %defs) {
       next if( !defined($defs{$d}) );
@@ -197,7 +199,7 @@ LaCrosse_Parse($$)
         $rhash = $defs{$d};
         $raddr = $rhash->{addr};
 
-        Log3 $name, 3, "LaCrosse Changing device $rname from $raddr to $addr";
+        Log3 $name, 3, "LaCrosse: Changing device $rname from $raddr to $addr";
 
         delete $modules{LaCrosse}{defptr}{$raddr};
         $rhash->{DEF} = $addr;
@@ -211,8 +213,10 @@ LaCrosse_Parse($$)
         return "";
       }
     }
-    Log3 $name, 3, "LaCrosse Unknown device $rname, please define it";
+    Log3 $name, 3, "LaCrosse: Unknown device $rname, please define it";
 
+    Log3 $name, 3, "LaCrosse: check commandref on usage of LaCrossePairForSec" if( !$hash->{LaCrossePair} && !defined($modules{LaCrosse}{defptr}) );
+   
     return "" if( !$hash->{LaCrossePair} );
 
     return "UNDEFINED LaCrosse_$rname LaCrosse $raddr" if( $battery_new || $hash->{LaCrossePair} == 2 );

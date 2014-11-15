@@ -45,8 +45,6 @@ structure_Initialize($)
                        "clientstate_behavior:relative,relativeKnown,absolute,last ".
                        $readingFnAttributes;
 
-  addToAttrList("structexclude");
-
   my %ahash = ( Fn=>"CommandAddStruct",
                 Hlp=>"<structure> <devspec>,add <devspec> to <structure>" );
   $cmds{addstruct} = \%ahash;
@@ -71,14 +69,15 @@ structure_Define($$)
   my $modname = shift(@a);
   my $stype   = shift(@a);
 
-  addToAttrList($stype);
-  addToAttrList($stype . "_map");
   $hash->{ATTR} = $stype;
 
   my %list;
   foreach my $a (@a) {
     foreach my $d (devspec2array($a)) {
       $list{$d} = 1;
+      addToDevAttrList($d, $stype);
+      addToDevAttrList($d, $stype . "_map");
+      addToDevAttrList($d, "structexclude");
     }
   }
   $hash->{CONTENT} = \%list;
@@ -149,7 +148,7 @@ sub structure_Notify($$)
     }
   }
 
-  return "" if(AttrVal($me,"disable", undef));
+  return "" if(IsDisabled($me));
 
   #pruefen ob Devices welches das notify ausgeloest hat Mitglied dieser
   # Struktur ist
@@ -356,8 +355,12 @@ structure_Set($@)
     $list[0] = $d;
     my $sret;
     if($filter) {
-      my $ret = AnalyzeCommand(undef,
-        "set $list[0]:$filter ". join(" ", @list[1..@list-1]) );
+      my $ret;
+      if(defined($defs{$list[0]}) && $defs{$list[0]}{TYPE} eq "structure") {
+        AnalyzeCommand(undef, "set $list[0] [$filter] ". join(" ", @list[1..@list-1]) );
+      } else {
+        AnalyzeCommand(undef, "set $list[0]:$filter ". join(" ", @list[1..@list-1]) );
+      }
       $sret .= $ret if( $ret );
     } else {
       $sret .= CommandSet(undef, join(" ", @list));
@@ -393,7 +396,7 @@ structure_Attr($@)
 
   if($hash->{INATTR}) {
     Log3 $me, 1, "ERROR: endless loop detected in structure_Attr for $me";
-    next;
+    return;
   }
   $hash->{INATTR} = 1;
 
@@ -634,6 +637,9 @@ structure_Attr($@)
   <a name="structureattr"></a>
   <b>Attribute</b>
   <ul>
+    <li><a href="#disable">disable</a></li>
+    <li><a href="#disabledForIntervals">disabledForIntervals</a></li><br>
+
     <a name="clientstate_behavior"></a>
     <li>clientstate_behavior<br>
       Der Status einer Struktur h&auml;ngt von den Stati der zugef&uuml;gten

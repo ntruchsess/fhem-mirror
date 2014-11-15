@@ -93,6 +93,18 @@ netatmo_Define($$)
       return "module $module already defined as $d->{NAME}" if( defined($d) && $d->{NAME} ne $name );
 
       $modules{$hash->{TYPE}}{defptr}{"M$module"} = $hash;
+
+      my $state_format;
+      if( $readings =~ m/temperature/ ) {
+        $state_format .= " " if( $state_format );
+        $state_format .= "T: temperature";
+      }
+      if( $readings =~ m/humidity/ ) {
+        $state_format .= " " if( $state_format );
+        $state_format .= "H: humidity";
+      }
+      $attr{$name}{stateFormat} = $state_format if( !defined($attr{$name}{stateFormat}) && defined($state_format) );
+
     } else {
       my $lon = $a[4];
       my $lat = $a[5];
@@ -916,7 +928,7 @@ netatmo_Get($$@)
       my $station;
       $station = shift @args if( $args[0] && $args[0] =~ m/[\da-f]{2}(:[\da-f]{2}){5}/ );
 
-      if( $args[0] && ( $args[0] =~ m/\d{5}/
+      if( $args[0] && ( $args[0] =~ m/^\d{5}$/
                         || $args[0] =~ m/^a:/ ) ) {
         my $addr = shift @args;
         $addr = substr($addr,2) if( $addr =~ m/^a:/ );
@@ -938,17 +950,21 @@ netatmo_Get($$@)
           $ret .= sprintf( "%s\t%.8f\t%.8f\t%i", $device->{_id},
                                                  $device->{place}->{location}->[0], $device->{place}->{location}->[1],
                                                  $device->{place}->{altitude} );
+          $ret .= "\t";
+
           my $addr .= netatmo_getAddress( $hash, 1, $device->{place}->{location}->[0], $device->{place}->{location}->[1] );
           next if( ref($device->{measures}) ne "HASH" );
+
           my $ext;
-          foreach my $module ( keys %{$device->{measures}}) {
+          foreach my $module ( sort keys %{$device->{measures}}) {
             next if( ref($device->{measures}->{$module}->{res}) ne "HASH" );
+
             $ext .= "$module ";
             $ext .= join(',', @{$device->{measures}->{$module}->{type}});
             $ext .= " ";
+
             foreach my $timestamp ( keys %{$device->{measures}->{$module}->{res}} ) {
               my $i = 0;
-              $ret .= "\t";
               foreach my $value ( @{$device->{measures}->{$module}->{res}->{$timestamp}} ) {
                 my $type = $device->{measures}->{$module}->{type}[$i];
 
@@ -967,8 +983,21 @@ netatmo_Get($$@)
               last;
             }
           }
+          my $got_rain = 0;
+          foreach my $module ( keys %{$device->{measures}}) {
+            my $value = $device->{measures}->{$module}->{rain_60min};
+            if( defined($value) ) {
+              $got_rain = 1;
 
-          #$ret .= "\n\t\t";
+              $ext .= "$module ";
+              $ext .= join(',', "rain");
+              $ext .= " ";
+
+              $ret .= sprintf( "\t%i mm", $value ) if( defined($value) );
+            }
+          }
+          $ret .= "\t" if( !$got_rain );
+
           $ret .= "\t$addr";
 
           $ret .= "\n\tdefine netatmo_P$device->{_id} netatmo PUBLIC $device->{_id} $ext" if( $station );
@@ -1081,7 +1110,7 @@ netatmo_Attr($$$)
       &lt;rad&gt; -> get all public stations in a radius of &lt;rad&gt;&deg; around global fhem longitude/latitude<br>
       &lt;lon&gt; &lt;lat&gt; [&lt;rad&gt;] -> get all public stations in a radius of 0.025&deg; or &lt;rad&gt;&deg; around &lt;lon&gt;/&lt;lat&gt;<br>
       &lt;lon_ne&gt; &lt;lat_ne&gt; &lt;lon_sw&gt; &lt;lat_sw&gt; -> get all public stations in the area of &lt;lon_ne&gt; &lt;lat_ne&gt; &lt;lon_sw&gt; &lt;lat_sw&gt;<br>
-      if &lt;address&gt; is given then list stations in the area of this address. can be given as 5 digit german postal code or a: followed by a textual address. all spaces have to be replaced by a +.<br></li>
+      if &lt;address&gt; is given then list stations in the area of this address. can be given as 5 digit german postal code or a: followed by a textual address. all spaces have to be replaced by a +.<br>
       if &lt;station&gt; is given then print fhem define for this station<br></li>
   </ul><br>
 

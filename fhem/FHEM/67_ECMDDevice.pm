@@ -92,6 +92,19 @@ ECMDDevice_DeviceParams2Specials($)
 }
 
 sub
+ECMDDevice_GetCachedSpecials($) 
+{
+	my($hash)= @_;
+	
+	if(!defined($hash->{fhem}{cache}{specials})) {
+	    my %specials= ECMDDevice_DeviceParams2Specials($hash);
+	    $hash->{fhem}{cache}{specials}= \%specials;
+	} 
+	
+	return %{$hash->{fhem}{cache}{specials}}
+}
+
+sub
 ECMDDevice_ReplaceSpecials($%)
 {
         my ($s, %specials)= @_;
@@ -108,18 +121,30 @@ sub
 ECMDDevice_Changed($$$)
 {
         my ($hash, $cmd, $value)= @_;
-
+	#Debug "Device changed: $cmd $value";
+        
         readingsBeginUpdate($hash);
-        my $state= $cmd;
 
-        if(defined($value) && $value ne "") {
-          readingsBulkUpdate($hash, $cmd, $value);
-          $state.= " $value";
-        }
-        readingsBulkUpdate($hash, "state", $state);
+        readingsBulkUpdate($hash, $cmd, $value) if(defined($value) && $value ne "");
+        
+        my $state;
+        my $classname= $hash->{fhem}{classname};
+        my $IOhash= $hash->{IODev};
+        if(defined($IOhash->{fhem}{classDefs}{$classname}{state})) {
+          if($cmd eq $IOhash->{fhem}{classDefs}{$classname}{state}) {
+	    $state= defined($value) ? $value : "?";
+	    #Debug "cmd= $cmd, setting state to $state (OVERRIDE)";
+	  }
+        } else {
+	  $state= $cmd;
+	  $state.= " $value" if(defined($value) && $value ne "");
+          #Debug "cmd= $cmd, setting state to $state (DEFAULT)";
+	}  
+        readingsBulkUpdate($hash, "state", $state) if(defined($state));
+
         readingsEndUpdate($hash, 1);
         my $name= $hash->{NAME};
-        Log3 $hash, 4 , "ECMDDevice $name $state";
+        #Log3 $hash, 4 , "ECMDDevice $name $state" if(defined($state));
         return $state;
 }
 
@@ -130,7 +155,7 @@ ECMDDevice_PostProc($$$)
   my ($hash, $postproc, $value)= @_;
 
   if($postproc) {
-        my %specials= ECMDDevice_DeviceParams2Specials($hash);
+        my %specials= ECMDDevice_GetCachedSpecials($hash);
         my $command= ECMDDevice_ReplaceSpecials($postproc, %specials);
 	$_= $value;
 	Log3 $hash, 5, "Postprocessing \"" . escapeLogLine($value) . "\" with perl command $command.";
@@ -140,6 +165,37 @@ ECMDDevice_PostProc($$$)
   return $value;
 }
 
+sub
+ECMDDevice_EvalCommand($$$)
+{
+  my ($hash, $command, $value)= @_;
+
+  if($command) {
+	$_= $value;
+	Log3 $hash, 5, "Postprocessing \"" . escapeLogLine($value) . "\" with perl command $command.";
+	$value= AnalyzePerlCommand(undef, $command);
+	Log3 $hash, 5, "Postprocessed value is \"" . escapeLogLine($value) . "\".";
+  }
+  return $value;
+}
+
+sub
+ECMDDevice_GetCachedReadingsCommand($$$)
+{
+  my ($hash, $classDef, $reading)= @_;
+  my $command= $hash->{fhem}{cache}{readings}{command}{$reading};
+  if(!defined($command)) {
+        my %specials= ECMDDevice_GetCachedSpecials($hash);
+	my $postproc= $classDef->{readings}{$reading}{postproc};
+	if($postproc) {
+	  $command= ECMDDevice_ReplaceSpecials($postproc, %specials);
+	} else {
+	  $command= undef;
+	}
+	$hash->{fhem}{cache}{readings}{command}{$reading}= $command;
+  }
+  return $command;
+}
 
 ###################################
 
@@ -166,7 +222,7 @@ ECMDDevice_Get($@)
         my $params= $IOhash->{fhem}{classDefs}{$classname}{gets}{$cmdname}{params};
         my $postproc= $IOhash->{fhem}{classDefs}{$classname}{gets}{$cmdname}{postproc};
 
-        my %specials= ECMDDevice_DeviceParams2Specials($hash);
+        my %specials= ECMDDevice_GetCachedSpecials($hash);
         # add specials for command
         if($params) {
                 shift @a; shift @a;
@@ -214,7 +270,7 @@ ECMDDevice_Set($@)
         my $params= $IOhash->{fhem}{classDefs}{$classname}{sets}{$cmdname}{params};
         my $postproc= $IOhash->{fhem}{classDefs}{$classname}{sets}{$cmdname}{postproc};
 
-        my %specials= ECMDDevice_DeviceParams2Specials($hash);
+        my %specials= ECMDDevice_GetCachedSpecials($hash);
         # add specials for command
         if($params) {
                 shift @a; shift @a;
@@ -239,6 +295,22 @@ ECMDDevice_Set($@)
 
 }
 
+
+#############################
+sub 
+ECMDDevice_GetCachedReadingsMatch($$$) 
+{
+  my ($hash, $classDef, $r)= @_;
+  
+  my $regex= $hash->{fhem}{cache}{readings}{match}{$r};
+  if(!defined($regex)) {
+    my %specials= ECMDDevice_GetCachedSpecials($hash);
+    $regex= ECMDDevice_ReplaceSpecials($classDef->{readings}{$r}{match}, %specials);
+    $hash->{fhem}{cache}{readings}{match}{$r}= $regex;
+  }
+  return $regex;
+}
+
 #############################
 sub
 ECMDDevice_Parse($$)
@@ -247,41 +319,109 @@ ECMDDevice_Parse($$)
   
   # NOTE: we will update all matching readings for all devices, not just the first!
   
-  my ($IOhash, $msg) = @_;        # IOhash points to the ECMD, not to the ECMDDevice
+  my ($IOhash, $message) = @_;        # IOhash points to the ECMD, not to the ECMDDevice
 
   my @matches;
   my $name= $IOhash->{NAME};
   
-  #Debug "Trying to find a match for \"" . escapeLogLine($msg) ."\"";
-  # walk over all clients
-  foreach my $d (keys %defs) {
-    my $hash= $defs{$d};
-    if($hash->{TYPE} eq "ECMDDevice" && $hash->{IODev} eq $IOhash) {
-      my $classname= $hash->{fhem}{classname};
-      my $classDef= $IOhash->{fhem}{classDefs}{$classname};
-      #Debug "  Checking device $d with class $classname...";
-      next unless(defined($classDef->{readings}));
-      #Debug "   Trying to find a match in class $classname...";
-      my %specials= ECMDDevice_DeviceParams2Specials($hash);
-      # we run over all readings in that classdef
-      foreach my $r (keys %{$classDef->{readings}}) {
-        my $regex= ECMDDevice_ReplaceSpecials($classDef->{readings}{$r}{match}, %specials);
-        #Debug "      Trying to match reading $r with regular expressing \"$regex\".";
-        if($msg =~ m/$regex/) {
-          # we found a match
-          Log3 $IOhash, 5, "$name: match regex $regex for reading $r of device $d with class $classname";
-          push @matches, $d;
-          my $postproc= $classDef->{readings}{$r}{postproc};
-          my $value= ECMDDevice_PostProc($hash, $postproc, $msg);
-          Log3 $hash, 5, "postprocessed value is $value";
-          ECMDDevice_Changed($hash, $r, $value);
-        }
-      }
-    }  
+  my $ts= gettimeofday();
+  
+  if(defined(AttrVal($name, "partial", undef))) {
+  
+	if(!defined($IOhash->{fhem}{partial})) {
+	  $IOhash->{fhem}{partial}{ts}= $ts;
+	  $IOhash->{fhem}{partial}{msg}= "";
+	}
+
+	#Debug "$name: partial message \"" . escapeLogLine($IOhash->{fhem}{partial}{msg}) . "\" recorded at $ts";
+	if($IOhash->{fhem}{partial}{msg} ne "") {	
+	  # clear partial message if expired
+	  my $timeout= AttrVal($name, "partial", 1);
+	  my $t0= $IOhash->{fhem}{partial}{ts};
+	  if($ts-$t0> $timeout) {
+	    $IOhash->{fhem}{partial}{msg}= "";
+	    #Debug "$name: partial message expired.";
+	  }
+	}
+
+	# prepend to recently received message
+	$IOhash->{fhem}{partial}{ts}= $ts;
+	$message= $IOhash->{fhem}{partial}{msg} . $message;
+	$IOhash->{fhem}{partial}{msg}= "";
+	
+  } else {
+  
+	# clean the partial stuff for clarity
+	if(defined($IOhash->{fhem}{partial})) {
+	  delete($IOhash->{fhem}{partial})
+	}
   }
   
+  #Debug "$name: analyzing \"" . escapeLogLine($message) . "\".";
+  
+  my @msgs;
+  if(defined(AttrVal($name, "split", undef))) {
+    @msgs= split(AttrVal($name, "split", undef), $message);
+  } else {
+    push @msgs, $message;
+  }
+  
+  #my @unmatchedMsgs; # future use
+  my $lastMsg= "";
+  my $msgMatched;
+  
+  foreach my $msg (@msgs) {
+    #Debug "$name: trying to find a match for \"" . escapeLogLine($msg) ."\"";
+    $msgMatched= 0; 
+    # walk over all clients
+    foreach my $d (keys %defs) {
+      my $hash= $defs{$d};
+      if($hash->{TYPE} eq "ECMDDevice" && $hash->{IODev} eq $IOhash) {
+	my $classname= $hash->{fhem}{classname};
+	next unless($classname);
+	my $classDef= $IOhash->{fhem}{classDefs}{$classname};
+	#Debug "  Checking device $d with class $classname...";
+	next unless(defined($classDef->{readings}));
+	#Debug "   Trying to find a match in class $classname...";
+	# we run over all readings in that classdef
+	foreach my $r (keys %{$classDef->{readings}}) {
+	  my $regex= ECMDDevice_GetCachedReadingsMatch($hash, $classDef, $r);
+	  #Debug "      Trying to match reading $r with regular expressing \"$regex\".";
+	  if($msg =~ m/^$regex$/) {
+	    # we found a match
+	    Log3 $IOhash, 5, "$name: match regex $regex for reading $r of device $d with class $classname";
+	    $msgMatched++;
+	    push @matches, $d;
+	    my $command= ECMDDevice_GetCachedReadingsCommand($hash, $classDef, $r);
+	    my $value= ECMDDevice_EvalCommand($hash, $command, $msg);
+	    Log3 $hash, 5, "postprocessed value is $value";
+	    ECMDDevice_Changed($hash, $r, $value);
+	  }
+	}
+      }  
+    }
+    #push @unmatchedMsgs, $msg unless($msgMatched); # future use
+  }
+  
+  $lastMsg= $msgs[$#msgs] unless($msgMatched); # contains the last message if the last message is unmatched
+  if(defined(AttrVal($name, "partial", undef)) && $lastMsg ne "") {
+    # we come here if the last message was unmatched and we want partial messages
+    if($#msgs>= 0) { 
+      # we had more messages; therefore the partial message belonged to the first message and needs
+      # to be cleared
+      $IOhash->{fhem}{partial}{msg}= "";  
+    }
+    $IOhash->{fhem}{partial}{msg}.= $lastMsg;  # append unmatched message
+    #Debug "$name: partial message \"" . escapeLogLine($IOhash->{fhem}{partial}{msg}) . "\" kept.";
+  }  
+  
   return @matches if(@matches);
-  return "UNDEFINED ECMDDevice message $msg";  
+  
+  # we come here if no match is found
+  
+  # NOTE: In a split message, undefined messages are not reported if there was at least one match.
+  # return "UNDEFINED ECMDDevice message $message";  
+  return "";
   
 }
 
@@ -365,9 +505,16 @@ ECMDDevice_Define($$)
         } else {
           return undef;
         }
+        
+        # create cache stubs
+        $hash->{fhem}{cache}{specials}= ();
+        $hash->{fhem}{cache}{readings}{match}= ();
+        $hash->{fhem}{cache}{readings}{command}= ();
 }
 
+#############################
 1;
+#############################
 
 =pod
 =begin html

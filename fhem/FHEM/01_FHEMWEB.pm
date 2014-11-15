@@ -78,6 +78,8 @@ use vars qw($FW_cmdret);  # Returned data by the fhem call
 use vars qw($FW_room);    # currently selected room
 use vars qw($FW_formmethod);
 use vars qw(%FW_visibleDeviceHash);
+use vars qw(@FW_httpheader); # HTTP header, line by line
+use vars qw($FW_userAgent); # user agent string
 
 $FW_formmethod = "post";
 
@@ -90,7 +92,6 @@ my $FW_lastHashUpdate = 0;
 #########################
 # As we are _not_ multithreaded, it is safe to use global variables.
 # Note: for delivering SVG plots we fork
-my @FW_httpheader; # HTTP header, line by line
 my @FW_enc;        # Accepted encodings (browser header)
 my $FW_data;       # Filecontent from browser when editing a file
 my %FW_icons;      # List of icons
@@ -127,6 +128,7 @@ FHEMWEB_Initialize($)
   my @attrList = qw(
     CORS:0,1
     HTTPS:1,0
+    CssFiles
     JavaScripts
     SVGcache:1,0
     addStateEvent
@@ -151,6 +153,7 @@ FHEMWEB_Initialize($)
     ploteditor:always,onClick,never
     plotfork:1,0
     plotmode:gnuplot,gnuplot-scroll,SVG
+    plotEmbed:0,1
     plotsize
     nrAxis
     redirectCmds:0,1
@@ -308,6 +311,7 @@ FW_Read($)
             length($hash->{BUF})<$hash->{CONTENT_LENGTH});
 
   @FW_httpheader = split("[\r\n]", $hash->{HDR});
+  $FW_userAgent = join("", grep /^User-Agent:/, @FW_httpheader);
   delete($hash->{HDR});
 
   my @origin = grep /Origin/, @FW_httpheader;
@@ -371,10 +375,19 @@ FW_Read($)
 
   $arg = "" if(!defined($arg));
   Log3 $FW_wname, 4, "HTTP $name GET $arg";
+  $FW_ME = "/" . AttrVal($FW_wname, "webname", "fhem");
   my $pid;
-  if(AttrVal($FW_wname, "plotfork", undef)) {
+  my $pf = AttrVal($FW_wname, "plotfork", undef);
+  if($pf) {   # 0 disables
     # Process SVG rendering as a parallel process
-    return if(($arg =~ m+/SVG_showLog+) && ($pid = fork));
+    my $p = $data{FWEXT};
+    if(grep { $p->{$_}{FORKABLE} && $arg =~ m+^$FW_ME$_+ } keys %{$p}) {
+      if($pid = fork) {
+	use constant PRIO_PROCESS => 0;
+	setpriority(PRIO_PROCESS, $pid, getpriority(PRIO_PROCESS,$pid) + $pf);
+	return;
+      }
+    }
   }
 
   my $cacheable = FW_answerCall($arg);
@@ -407,8 +420,8 @@ sub
 FW_closeConn($)
 {
   my ($hash) = @_;
-  # Needed for slow server+iPad/iPhone. Forum #20294
-  if(AttrVal($hash->{SNAME}, "closeConn", undef)) {
+  if(AttrVal($hash->{SNAME}, "closeConn",               # Forum #20294
+                              $FW_userAgent =~ m/(iPhone|iPad|iPod)/)) {
     TcpServer_Close($hash);
     delete($defs{$hash->{NAME}});
   }
@@ -436,7 +449,6 @@ FW_answerCall($)
 
   $FW_RET = "";
   $FW_RETTYPE = "text/html; charset=$FW_encoding";
-  $FW_ME = "/" . AttrVal($FW_wname, "webname", "fhem");
   $FW_CSRF = ($defs{$FW_wname}{CSRFTOKEN} ?
                 "&fwcsrf=".$defs{$FW_wname}{CSRFTOKEN} : "");
 
@@ -621,6 +633,7 @@ FW_answerCall($)
   FW_pO '<html xmlns="http://www.w3.org/1999/xhtml">';
   FW_pO "<head root=\"$FW_ME\">\n<title>$t</title>";
   FW_pO '<link rel="shortcut icon" href="'.FW_IconURL("favicon").'" />';
+  FW_pO "<meta charset=\"$FW_encoding\">"; # Forum 28666
 
   # Enable WebApps
   if($FW_tp || $FW_ss) {
@@ -642,7 +655,10 @@ FW_answerCall($)
     FW_pO "<meta http-equiv=\"refresh\" content=\"$rf\">" if($rf);
   }
 
-  FW_pO "<link href=\"$FW_ME/pgm2/style.css\" rel=\"stylesheet\"/>";
+  my $cssTemplate = "<link href=\"$FW_ME/%s\" rel=\"stylesheet\"/>";
+  FW_pO sprintf($cssTemplate, "pgm2/style.css");
+  my @cssFiles = split(" ", AttrVal($FW_wname, "CssFiles", ""));
+  map { FW_pO sprintf($cssTemplate, $_); } @cssFiles;
 
   ########################
   # FW Extensions
@@ -674,8 +690,8 @@ FW_answerCall($)
   FW_pO "</head>\n<body name=\"$t\" $csrf $onload>";
 
   if($FW_activateInform) {
+    $cmd = "style eventMonitor $FW_activateInform";
     $FW_cmdret = $FW_activateInform = "";
-    $cmd = "style eventMonitor";
   }
 
   FW_roomOverview($cmd);
@@ -1517,7 +1533,7 @@ FW_select($$$$$@)
   $id = ($id ? "id=\"$id\" informId=\"$id\"" : "");
   my $s = "<select $jSelFn $id name=\"$n\" class=\"$class\">";
   foreach my $v (@{$va}) {
-    if($def && $v eq $def) {
+    if(defined($def) && $v eq $def) {
       $s .= "<option selected=\"selected\" value='$v'>$v</option>\n";
     } else {
       $s .= "<option value='$v'>$v</option>\n";
@@ -1725,8 +1741,13 @@ FW_style($$)
     FW_pO "<script type=\"text/javascript\" src=\"$FW_ME/pgm2/console.js\">".
           "</script>";
     FW_pO "<div id=\"content\">";
-    FW_pO "<div id=\"console\">";
-    FW_pO "Events:<br>\n";
+    if($a[2] && $a[2] ne "1") {
+      FW_pO "<div id=\"console\" filter=\"$a[2]\">";
+      FW_pO "Events ($a[2] only):<br>\n";
+    } else {
+      FW_pO "<div id=\"console\">";
+      FW_pO "Events:<br>\n";
+    }
     FW_pO "</div>";
     FW_pO "</div>";
 
@@ -2169,7 +2190,11 @@ FW_Notify($$)
   return undef if(!$h);
 
   my $dn = $dev->{NAME};
-  return undef if(!$h->{devices}{$dn} && $h->{type} !~ m/raw/);
+  if($h->{type} eq "raw") {
+    return undef if($dn !~ m/$h->{filter}/);
+  } else { # Status
+    return undef if(!$h->{devices}{$dn});
+  }
 
   my @data;
   my %extPage;
@@ -2415,9 +2440,10 @@ FW_sliderFn($$$$$)
 {
   my ($FW_wname, $d, $FW_room, $cmd, $values) = @_;
 
-  return undef if($values !~ m/^slider,(.*),(.*),(.*)$/);
+  return undef if($values !~ m/^slider,([-\d.]*),([-\d.]*),([-\d.]*)(,1)?$/);
   return "" if($cmd =~ m/ /);   # webCmd pct 30 should generate a link
-  my ($min,$stp, $max) = ($1, $2, $3);
+  my ($min,$stp, $max, $flt) = ($1, $2, $3, $4);
+  $flt = ($flt ? 1 : 0);
   my $srf = $FW_room ? "&room=$FW_room" : "";
   my $cv = ReadingsVal($d, $cmd, Value($d));
   my $id = ($cmd eq "state") ? "" : "-$cmd";
@@ -2426,7 +2452,7 @@ FW_sliderFn($$$$$)
   $cv = 0 if($cv !~ m/\d/);
   return "<td colspan='2'>".
            "<div class='slider' id='slider.$d$id' min='$min' stp='$stp' ".
-                 "max='$max' cmd='$FW_ME?cmd=set $d $cmd %$srf'>".
+                 "max='$max' cmd='$FW_ME?cmd=set $d $cmd %$srf' flt='$flt'>".
              "<div class='handle'>$min</div>".
            "</div>".
            "<script type=\"text/javascript\">".
@@ -2543,9 +2569,10 @@ FW_visibleDevices(;$)
 }
 
 sub 
-FW_ActivateInform()
+FW_ActivateInform($;$)
 {
-  $FW_activateInform = 1;
+  my ($cl, $arg) = @_;
+  $FW_activateInform = ($arg ? $arg : 1);
 }
 
 sub
@@ -2709,10 +2736,29 @@ FW_widgetOverride($$)
         </li><br>
 
     <a name="plotfork"></a>
-    <li>plotfork<br>
-        If set, generate the logs in a parallel process. Note: do not use it
-        on Windows and on systems with small memory foorprint.
+    <li>plotfork [&lt;&Delta;p&gt;]<br>
+        If set to a nonzero value, run part of the processing (e.g. <a
+        href="#SVG">SVG</a> plot generation or <a href="#RSS">RSS</a> feeds) in
+        parallel processes.  Actually, child processes are forked whose
+        priorities are the FHEM process' priority plus &Delta;p. 
+        Higher values mean lower priority. e.g. use &Delta;p= 10 to renice the
+        child processes and provide more CPU power to the main FHEM process.
+        &Delta;p is optional and defaults to 0.<br>
+        Note: do not use it
+        on Windows and on systems with small memory footprint.
     </li><br>
+
+    <a name="plotEmbed"></a>
+    <li>plotEmbed 0<br>
+        SVG plots are rendered as part of &lt;embed&gt; tags, as in the past
+        this was the only way to display SVG, and it allows to render them in
+        parallel, see plotfork. As of iOS 8, if FHEMWEB is called from the Home
+        Screen, the SVG is fetched but not displayed, which is IMHO a bug.
+        Setting plotEmbed to 0 will render SVG in-place, but as a side-effect
+        makes the plotfork attribute meaningless.<br>
+        This attribute defaults to 0 on iOS8 devices, and 1 elsewhere.
+    </li><br>
+
 
     <a name="basicAuth"></a>
     <li>basicAuth, basicAuthMsg<br>
@@ -3041,10 +3087,17 @@ FW_widgetOverride($$)
             displayed.</li>
           <li>if the modifier is ":textField", an input field is displayed.</li>
           <li>if the modifier is of the form
-            ":slider,&lt;min&gt;,&lt;step&gt;,&lt;max&gt;", then a javascript
-            driven slider is displayed</li>
+            ":slider,&lt;min&gt;,&lt;step&gt;,&lt;max&gt;[,1]", then a
+            javascript driven slider is displayed. The optional ,1 at the end
+            avoids the rounding of floating-point numbers.</li>
+
           <li>if the modifier is of the form ":multiple,val1,val2,...", then
-            multiple values can be selected, the result is comma separated.</li>
+            multiple values can be selected and own values can be written, the
+            result is comma separated.</li>
+          <li>if the modifier is of the form ":multiple-strict,val1,val2,...", then
+            multiple values can be selected and no new values can be added, the
+            result is comma separated.</li>
+
           <li>else a dropdown with all the modifier values is displayed</li>
         </ul>
         If this attribute is specified for a FHEMWEB instance, then it is
@@ -3074,6 +3127,15 @@ FW_widgetOverride($$)
         If set, a TCP Connection will only serve one HTTP request. Seems to
         solve problems for certain hardware combinations like slow
         FHEM-Server, and iPad/iPhone as Web-client.
+        </li><br>
+
+     <a name="CssFiles"></a>
+     <li>CssFiles<br>
+        Space separated list of .css files to be included. The filenames
+        are relative to the www directory. Example:
+        <ul><code>
+          attr WEB CssFiles pgm2/mystyle.css
+        </code></ul>
         </li><br>
 
      <a name="JavaScripts"></a>
@@ -3247,10 +3309,28 @@ FW_widgetOverride($$)
     <li>plotfork<br>
         Normalerweise wird die Ploterstellung im Hauptprozess ausgef&uuml;hrt,
         FHEM wird w&auml;rend dieser Zeit nicht auf andere Ereignisse
-        reagieren. Auf Rechnern mit sehr wenig Speicher (z.Bsp. FRITZ!Box 7170)
-        kann das zum automatischen Abschuss des FHEM Prozesses durch das OS
-        f&uuml;hren.
+        reagieren.
+        Falls dieses Attribut auf einen nicht 0 Wert gesetzt ist, dann wird die
+        Berechnung in weitere Prozesse ausgelagert. Das kann die Berechnung auf
+        Rechnern mit mehreren Prozessoren beschleunigen, allerdings kann es auf
+        Rechnern mit wenig Speicher (z.Bsp. FRITZ!Box 7390) zum automatischen
+        Abschuss des FHEM Prozesses durch das OS f&uuml;hren.
         </li><br>
+
+    <a name="plotEmbed"></a>
+    <li>plotEmbed 0<br>
+        SVG Grafiken werden als Teil der &lt;embed&gt; Tags dargestellt, da
+        fr&uuml;her das der einzige Weg war SVG darzustellen, weiterhin
+        erlaubt es das parallele Berechnen via plotfork (s.o.)
+        Ab iOS 8 werden SVG Grafiken in einem embed Tag nicht dargestellt,
+        falls FHEMWEB vom HomeScreen gestartet wurde (mAn ist das ein Bug in
+        iOS8).
+        Falls plotEmbed auf 0 gesetzt wird, dann werden die SVG Grafiken als
+        Teil der HTML-Seite generiert, was leider das plotfork Attribut
+        wirkungslos macht. Die Voreinstellung ist 0 auf iOS 8 Ger&auml;ten, und
+        1 sonst.
+    </li><br>
+
 
     <a name="basicAuth"></a>
     <li>basicAuth, basicAuthMsg<br>
@@ -3575,12 +3655,17 @@ FW_widgetOverride($$)
               angezeigt.</li>
 
           <li>Ist der Modifier in der Form
-            ":slider,&lt;min&gt;,&lt;step&gt;,&lt;max&gt;", so wird ein in
-            JavaScript programmierter Slider angezeigt</li>
+            ":slider,&lt;min&gt;,&lt;step&gt;,&lt;max&gt;[,1]", so wird ein in
+            JavaScript programmierter Slider angezeigt. Das optionale 1
+            (isFloat) vermeidet eine Rundung der Fliesskommazahlen </li>
 
-          <li>Ist der Modifier ":multiple,val1,val2,...", dann ein
-            Mehrfachauswahl ist m&ouml;glich, das Ergebnis ist
-            Komma-separiert.</li>
+          <li>Ist der Modifier ":multiple,val1,val2,...", dann ist eine
+            Mehrfachauswahl m&ouml;glich und es k&ouml;nnen neue Werte gesetzt
+            werden. Das Ergebnis ist Komma-separiert.</li>
+
+          <li>Ist der Modifier ":multiple-strict,val1,val2,...", dann ist eine
+            Mehrfachauswahl m&ouml;glich, es k&ouml;nnen jedoch keine neuen
+            Werte definiert werden. Das Ergebnis ist Komma-separiert.</li>
 
           <li>In allen anderen F&auml;llen erscheint ein Dropdown mit allen
             Modifier Werten.</li>
@@ -3617,6 +3702,15 @@ FW_widgetOverride($$)
         durchgefuehrt. Fuer bestimmte Hardware-Kombinationen (langsamer FHEM
         Server, iPad/iPhone als Client) scheint dieses Attribu Ladeprobleme zu
         beheben.
+        </li><br>
+
+     <a name="CssFiles"></a>
+     <li>CssFiles<br>
+        Leerzeichen getrennte Liste von .css Dateien, die geladen werden.
+        Die Dateinamen sind relativ zum www Verzeichnis anzugeben. Beispiel:
+        <ul><code>
+          attr WEB CssFiles pgm2/mystyle.css
+        </code></ul>
         </li><br>
 
      <a name="JavaScripts"></a>

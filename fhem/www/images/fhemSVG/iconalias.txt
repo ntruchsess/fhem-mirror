@@ -1,5 +1,5 @@
-set-off        light_question.svg
-set-on         light_question.svg
+set-off        light_exclamation.svg
+set-on         light_exclamation.svg
 toggle         light_toggle.svg
 on-for-timer   light_on-for-timer.svg
 off-for-timer  light_off-for-timer.svg

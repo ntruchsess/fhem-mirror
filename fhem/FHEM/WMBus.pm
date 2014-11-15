@@ -1,4 +1,4 @@
-# $Id: $
+# $Id$
 
 package WMBus;
 
@@ -16,9 +16,16 @@ require Exporter;
 my @ISA = qw(Exporter);
 my @EXPORT = qw(new parse parseLinkLayer parseApplicationLayer manId2ascii type2string);
 
+sub manId2ascii($$);
+
 
 use constant {
-	# sent by meter
+	# Link Layer block size
+	LL_BLOCK_SIZE => 16,
+	# size of CRC in bytes
+	CRC_SIZE => 2,
+
+  # sent by meter
 	SND_NR => 0x44, # Send, no reply
 	SND_IR => 0x46, # Send installation request, must reply with CNF_IR
 	ACC_NR => 0x47,
@@ -36,6 +43,7 @@ use constant {
 	DIF_NONE => 0x00,
 	DIF_INT8 => 0x01,
 	DIF_INT16 => 0x02,
+	DIF_INT24 => 0x03,
 	DIF_INT32 => 0x04,
 	DIF_FLOAT32 => 0x05,
 	DIF_INT48 => 0x06,
@@ -69,6 +77,7 @@ use constant {
 	ERR_DECRYPTION_FAILED => 8,
 	ERR_NO_AESKEY => 9,
 	ERR_UNKNOWN_ENCRYPTION => 10,
+	ERR_TOO_MANY_VIFE => 11,
 	
 	
 	
@@ -101,7 +110,7 @@ sub valueCalcDate($$) {
 	if ($day > 31 || $month > 12 || $year > 2099) {
 		return "invalid";
 	} else {
-		return $year . "-" . $month . "-" . $day; 
+		return sprintf("%04d-%02d-%02d", $year, $month, $day);
 	}
 }
 
@@ -128,10 +137,21 @@ sub valueCalcDateTime($$) {
 	
 	
 	my $datePart = $value >> 16;
-	my $min = ($value & 0b111111);
-	my $hour = ($value & 0b11111) >> 6;
+	my $timeInvalid = $value & 0b10000000;
 	
-	return valueCalcDate($datePart, $dataBlock) . sprintf(' %02d:%02d', $hour, $min);
+	my $dateTime = valueCalcDate($datePart, $dataBlock);
+	if ($timeInvalid == 0) {
+		my $min = ($value & 0b111111);
+		my $hour = ($value >> 8) & 0b11111;
+		my $su = ($value & 0b1000000000000000);
+		if ($min > 59 || $hour > 23) {
+			$dateTime = 'invalid';
+		} else {
+			$dateTime .= sprintf(' %02d:%02d %s', $hour, $min, $su ? 'DST' : '');
+		}
+	}
+	
+	return $dateTime;  
 }
 
 sub valueCalcHex($$) {
@@ -139,6 +159,21 @@ sub valueCalcHex($$) {
 	my $dataBlock = shift;
 
 	return sprintf("%x", $value);
+}
+
+my %TimeSpec = (
+	0b00 => 's', # seconds
+	0b01 => 'm', # minutes
+	0b10 => 'h', # hours
+	0b11 => 'd', # days
+);
+
+sub valueCalcTimeperiod($$) {
+	my $value = shift;
+	my $dataBlock = shift;
+	
+	$dataBlock->{unit} = $TimeSpec{$dataBlock->{exponent}};
+	return $value;
 }
 
 # VIF types (Value Information Field), see page 32
@@ -331,12 +366,36 @@ my %VIFInfo = (
 	},
 );	
 
-# Codes used with extension indicator $FD
-my %VIFInfo_FD = (                              
+# Codes used with extension indicator $FD, see 8.4.4 on page 80
+my %VIFInfo_FD = (  
+	VIF_CREDIT  => {                        #  Credit of 10nn-3 of the nominal local legal currency units
+	  typeMask     => 0b01111100,
+	  expMask      => 0b00000011,
+	  type         => 0b00000000,
+		bias         => -3,
+		unit         => '€',
+		calcFunc     => \&valueCalcNumeric,
+	},
+	VIF_DEBIT  => {                         #  Debit of 10nn-3 of the nominal local legal currency units
+	  typeMask     => 0b01111100,
+	  expMask      => 0b00000011,
+	  type         => 0b00000100,
+		bias         => -3,
+		unit         => '€',
+		calcFunc     => \&valueCalcNumeric,
+	},
 	VIF_ACCESS_NO  => {                     #  Access number (transmission count)
 	  typeMask     => 0b01111111,
 	  expMask      => 0b00000000,
 	  type         => 0b00001000,
+		bias         => 0,
+		unit         => '',
+		calcFunc     => \&valueCalcNumeric,
+	},
+	VIF_MEDIUM  => {                        #  Medium (as in fixed header)
+	  typeMask     => 0b01111111,
+	  expMask      => 0b00000000,
+	  type         => 0b00001001,
 		bias         => 0,
 		unit         => '',
 		calcFunc     => \&valueCalcNumeric,
@@ -349,13 +408,45 @@ my %VIFInfo_FD = (
 		unit         => '',
 		calcFunc     => \&valueCalcNumeric,
 	},
-	VIF_ERROR_FLAGS => {                  #  Error flags (binary)
+	VIF_ERROR_FLAGS => {                    #  Error flags (binary)
 	  typeMask     => 0b01111111,
 	  expMask      => 0b00000000,
 	  type         => 0b00010111,
 		bias         => 0,
 		unit         => '',
 		calcFunc     => \&valueCalcHex,
+	},
+	VIF_DURATION_SINCE_LAST_READOUT => {    #   Duration since last readout [sec(s)..day(s)]
+	  typeMask     => 0b01111100,
+	  expMask      => 0b00000011,
+	  type         => 0b00101100,
+		bias         => 0,
+		unit         => 's',
+		calcFunc     => \&valueCalcTimeperiod,
+	},
+	VIF_VOLTAGE => {                        #  10nnnn-9 Volts
+	  typeMask     => 0b01110000,
+	  expMask      => 0b00001111,
+	  type         => 0b01000000,
+		bias         => -9,
+		unit         => 'V',
+		calcFunc     => \&valueCalcNumeric,
+	},	
+	VIF_ELECTRICAL_CURRENT => {             #  10nnnn-12 Ampere
+	  typeMask     => 0b01110000,
+	  expMask      => 0b00001111,
+	  type         => 0b01010000,
+		bias         => -12,
+		unit         => 'A',
+		calcFunc     => \&valueCalcNumeric,
+	},	
+	VIF_RECEPTION_LEVEL => {                  #   reception level of a received radio device.
+	  typeMask     => 0b01111111,
+	  expMask      => 0b00000000,
+	  type         => 0b01110001,
+		bias         => 0,
+		unit         => 'dBm',
+		calcFunc     => \&valueCalcNumeric,
 	},
 );
 
@@ -370,6 +461,7 @@ my %VIFInfo_FB = (
 		calcFunc     => \&valueCalcNumeric,
 	},
 );
+
 
 # see 4.2.3, page 24
 my %validDeviceTypes = (
@@ -401,7 +493,8 @@ my %validDeviceTypes = (
  0x19 => 'A/D Converter',
  0x1a => 'Smokedetector',
  0x1b => 'Room sensor (e.g. temperature or humidity)',
- 0x1c => 'Gasdetector'
+ 0x1c => 'Gasdetector',
+ 0x28 => 'Waste water',
  
 );
 
@@ -427,6 +520,14 @@ my %encryptionModes = (
 	0x02 => 'static telegram',
 	0x03 => 'reserved',
 );
+
+my %functionFieldTypes = (
+	0b00 => 'Instantaneous value',
+	0b01 => 'Maximum value',
+	0b10 => 'Minimum value',
+	0b11 => 'Value during error state',
+);
+
 
 sub type2string($$) {
 	my $class = shift;
@@ -469,43 +570,45 @@ sub removeCRC($$)
 	my $i;
 	my $res;
 	my $crc;
+	my $blocksize = LL_BLOCK_SIZE;
+	my $blocksize_with_crc = LL_BLOCK_SIZE + CRC_SIZE;
+	my $crcoffset;
 	
-	my $msgLen = length($msg);
-	my $noOfBlocks = int($msgLen / 18);
-	my $rest = $msgLen % 18;
+	my $msgLen = $self->{datalen}; # size without CRCs
+	my $noOfBlocks = $self->{datablocks}; # total number of data blocks, each with a CRC appended
+	my $rest = $msgLen % LL_BLOCK_SIZE; # size of the last data block, can be smaller than 16 bytes
+
+  # each block is 16 bytes + 2 bytes CRC
 	
-	
-	#print "Länge "  . $msgLen . "\n";
+	#print "Länge $msgLen Anz. Blöcke $noOfBlocks rest $rest\n";
 	
 	for ($i=0; $i < $noOfBlocks; $i++) {
-
-		$crc = unpack('n',substr($msg, 18*$i+16, 2));
-		#printf("%d: CRC %x, calc %x\n", $i, $crc, $self->checkCRC(substr($msg, 18*$i, 16))); 
-		if ($crc != $self->checkCRC(substr($msg, 18*$i, 16))) {
+		$crcoffset = $blocksize_with_crc * $i + LL_BLOCK_SIZE;
+		#print "crc offset $crcoffset\n";
+		if ($rest > 0 && $crcoffset + CRC_SIZE > ($noOfBlocks - 1) * $blocksize_with_crc + $rest) {
+			# last block is smaller
+			$crcoffset = ($noOfBlocks - 1) * $blocksize_with_crc + $rest;
+  		#print "last crc offset $crcoffset\n";
+			$blocksize = $msgLen - ($i * $blocksize); 
+		}
+		
+		$crc = unpack('n',substr($msg, $crcoffset, CRC_SIZE));
+		#printf("%d: CRC %x, calc %x blocksize $blocksize\n", $i, $crc, $self->checkCRC(substr($msg, $blocksize_with_crc*$i, $blocksize))); 
+		if ($crc != $self->checkCRC(substr($msg, $blocksize_with_crc*$i, $blocksize))) {
 			$self->{errormsg} = "crc check failed for block $i";
 			$self->{errorcode} = ERR_CRC_FAILED;
 			return 0;
 		}
-		$res .= substr($msg, 18*$i, 16);
+		$res .= substr($msg, $blocksize_with_crc*$i, $blocksize);
 	}
 
-	if ($rest != 0) {
-		$res .= substr($msg, $noOfBlocks*18, $rest - 2);
-		$crc = unpack('n',substr($msg, $msgLen-2, 2));
-		if ($crc != $self->checkCRC(substr($msg, $noOfBlocks*18, $rest - 2))) {
-			$self->{errormsg} = "crc check failed for block $i";
-			$self->{errorcode} = ERR_CRC_FAILED;
-		  #printf("rest %d: CRC %x, calc %x\n", $rest, $crc, $self->checkCRC(substr($msg, $noOfBlocks*18, $rest - 2))); 
-			return 0;
-		}
-	}
 	return $res;
 }
 
 
 sub manId2hex($$)
 {
-	my $self = shift;
+	my $class = shift;
 	my $idascii = shift;
 	
 	return (ord(substr($idascii,1,1))-64) << 10 | (ord(substr($idascii,2,1))-64) << 5 | (ord(substr($idascii,3,1))-64);
@@ -513,7 +616,7 @@ sub manId2hex($$)
 
 sub manId2ascii($$)
 {
-	my $self = shift;
+	my $class = shift;
 	my $idhex = shift;
 		
 	return chr(($idhex >> 10) + 64) . chr((($idhex >> 5) & 0b00011111) + 64) . chr(($idhex & 0b00011111) + 64);
@@ -555,6 +658,8 @@ sub decodeBCD($$$) {
 	my $val=0;
 	my $mult=1;
 	
+	#print "bcd:" . unpack("H*", $bcd) . "\n";
+	
 	for (my $i = 0; $i < $digits/2; $i++) {
 		$byte = unpack('C',substr($bcd, $i, 1));
 		$val += ($byte & 0x0f) * $mult;
@@ -574,59 +679,88 @@ sub decodeValueInformationBlock($$$) {
 	my $vif;
 	my $bias;
 	my $exponent;
-	my $vifInfoRef = \%VIFInfo;
+	my $vifInfoRef;
+	my $vifExtension = 0;
+	my $vifExtNo = 0;
+	my $isExtension;
 	
-	$vif = unpack('C', $vib);
-	$offset = 1;
-	
-	my $isExtension = $vif & VIF_EXTENSION_BIT;
 
-	if ($isExtension) {
-		# switch to extension codes
-		if ($vif == 0xFD) {
+  $dataBlockRef->{type}	= '';
+
+	EXTENSION: while (1) {
+		$vif = unpack('C', substr($vib,$offset++,1));
+		$isExtension = $vif & VIF_EXTENSION_BIT;
+  	#printf("vif: %x\n", $vif);
+  	
+  	last EXTENSION if (defined $vifInfoRef);
+  	last EXTENSION if (!$isExtension && $dataBlockRef->{type} eq "MANUFACTURER SPECIFIC");
+  	
+
+		$vifExtNo++;
+		if ($vifExtNo > 10) {
+			$dataBlockRef->{errormsg} = 'too many VIFE';
+			$dataBlockRef->{errorcode} = ERR_TOO_MANY_VIFE;
+			last EXTENSION;
+		}
+		
+	  # switch to extension codes
+		$vifExtension = $vif;
+  	$vif &= ~VIF_EXTENSION_BIT;
+  	#printf("vif ohne extension: %x\n", $vif);
+  	if ($vif <= 0b01111011) {
+			# The unit and multiplier is taken from the table for primary VIF
+			$vifInfoRef = \%VIFInfo;
+		} elsif ($vif == 0x7D) {
 			$vifInfoRef = \%VIFInfo_FD;
-		} elsif ($vif == 0xFB) {
+		} elsif ($vif == 0x7B) {
 			$vifInfoRef = \%VIFInfo_FB;
-		} elsif ($vif == 0xFF) {
+		} elsif ($vif == 0x7C) {
+			# Plaintext VIF
+			my $vifLength = unpack('C', substr($vib,$offset++,1));
+			$dataBlockRef->{type} = "see unit";
+			$dataBlockRef->{unit} = unpack(sprintf("C%d",$vifLength), substr($vib, $offset, $vifLength));
+			$offset += $vifLength;
+		} elsif ($vif == 0x7F) {
 			# manufacturer specific data, can't be interpreted
 			$dataBlockRef->{type} = "MANUFACTURER SPECIFIC";
 			$dataBlockRef->{unit} = "";
-			return $offset;
 	  } else {
-			$self->{errormsg} = "unknown VIFE " . sprintf("%x", $vif) . " at offset $offset-1";
-			$self->{errorcode} = ERR_UNKNOWN_VIFE;		
+			$dataBlockRef->{type} = 'unknown';
+			$dataBlockRef->{errormsg} = "unknown VIFE " . sprintf("%x", $vifExtension) . " at offset " . $offset-1;
+			$dataBlockRef->{errorcode} = ERR_UNKNOWN_VIFE;		
 		}
-		$vif = unpack('C', substr($vib,$offset++,1));
+		last EXTENSION if (!$isExtension);
+
 	}
 
 	
-	$vif &= ~VIF_EXTENSION_BIT;
 	
-	#printf("vif: %x\n", $vif);
-	$dataBlockRef->{type} = '';
-	VIFID: foreach my $vifType ( keys $vifInfoRef ) { 
-	
-		#printf "vifType $vifType\n"; 
-	
-		if (($vif & $vifInfoRef->{$vifType}{typeMask}) == $vifInfoRef->{$vifType}{type}) {
-			#printf "vifType $vifType matches\n"; 
-			
-			$bias = $vifInfoRef->{$vifType}{bias};
-			$exponent = $vif & $vifInfoRef->{$vifType}{expMask};
-			
-			$dataBlockRef->{type} = $vifType;
-			$dataBlockRef->{unit} = $vifInfoRef->{$vifType}{unit};
-			$dataBlockRef->{valueFactor} = 10 ** ($exponent + $bias);
-			$dataBlockRef->{calcFunc} = $vifInfoRef->{$vifType}{calcFunc};
-			
-			#printf("type %s bias %d exp %d valueFactor %d unit %s\n", $dataBlockRef->{type}, $bias, $exponent, $dataBlockRef->{valueFactor},$dataBlockRef->{unit});
-			last VIFID;
+	#printf("vif w/o ext: %x\n", $vif);
+	if (defined $vifInfoRef) {
+		VIFID: foreach my $vifType ( keys $vifInfoRef ) { 
+		
+			#printf "vifType $vifType\n"; 
+		
+			if (($vif & $vifInfoRef->{$vifType}{typeMask}) == $vifInfoRef->{$vifType}{type}) {
+				#printf "vifType $vifType matches\n"; 
+				
+				$bias = $vifInfoRef->{$vifType}{bias};
+				$dataBlockRef->{exponent} = $vif & $vifInfoRef->{$vifType}{expMask};
+				
+				$dataBlockRef->{type} = $vifType;
+				$dataBlockRef->{unit} = $vifInfoRef->{$vifType}{unit};
+				$dataBlockRef->{valueFactor} = 10 ** ($dataBlockRef->{exponent} + $bias);
+				$dataBlockRef->{calcFunc} = $vifInfoRef->{$vifType}{calcFunc};
+				
+				#printf("type %s bias %d exp %d valueFactor %d unit %s\n", $dataBlockRef->{type}, $bias, $dataBlockRef->{exponent}, $dataBlockRef->{valueFactor},$dataBlockRef->{unit});
+				last VIFID;
+			}
 		}
 	}
-	
 	if ($dataBlockRef->{type} eq '') {
-		$self->{errormsg} = "unknown VIF " . sprintf("%x",$vif);
-		$self->{errorcode} = ERR_UNKNOWN_VIF;
+		$dataBlockRef->{type} = 'unknown';
+		$dataBlockRef->{errormsg} = sprintf("in VIFExtension %x unknown VIF %x",$vifExtension, $vif);
+		$dataBlockRef->{errorcode} = ERR_UNKNOWN_VIF;
 	}
 	
 	return $offset;
@@ -662,23 +796,26 @@ sub decodeDataInformationBlock($$$) {
 		$isExtension = $dif & DIF_EXTENSION_BIT;
 		$difExtNo++;
 		if ($difExtNo > 10) {
-			$self->{errormsg} = 'too many DIFE';
-			$self->{errorcode} = ERR_TOO_MANY_DIFE;
+			$dataBlockRef->{errormsg} = 'too many DIFE';
+			$dataBlockRef->{errorcode} = ERR_TOO_MANY_DIFE;
 			last EXTENSION;
 		}
 		
 		$storageNo |= ($dif & 0b00001111) << ($difExtNo*4)+1;
 		$tariff    |= (($dif & 0b00110000 >> 4)) << (($difExtNo-1)*2);
 		$devUnit   |= (($dif & 0b01000000 >> 6)) << ($difExtNo-1);
+		#printf("dife %x storage %d\n", $dif, $storageNo);
 	}
 	
 	$dataBlockRef->{functionField} = $functionField;
+	$dataBlockRef->{functionFieldText} = $functionFieldTypes{$functionField};
 	$dataBlockRef->{dataField} = $df;
 	$dataBlockRef->{storageNo} = $storageNo;
 	$dataBlockRef->{tariff} = $tariff;
 	$dataBlockRef->{devUnit} = $devUnit;
 	
 	#printf("in DIF: datafield %x\n", $dataBlockRef->{dataField});
+	#print "offset in dif $offset\n";
 	return $offset;
 }
 
@@ -719,6 +856,7 @@ sub decodePayload($$) {
 		# create a new anonymous hash reference
 		$dataBlock = {};
 		$dataBlock->{number} = $dataBlockNo;
+		$dataBlock->{unit} = '';
 		
 		while (unpack('C',substr($payload,$offset,1)) == 0x2f) {
 			# skip filler bytes
@@ -730,10 +868,13 @@ sub decodePayload($$) {
 		}
 		
 		$offset += $self->decodeDataRecordHeader(substr($payload,$offset), $dataBlock);
-
 		#printf("No. %d, type %x at offset %d\n", $dataBlockNo, $dataBlock->{dataField}, $offset-1);
 		
-		if ($dataBlock->{dataField} == DIF_NONE || $dataBlock->{dataField} == DIF_READOUT) {
+		if ($dataBlock->{dataField} == DIF_NONE) {
+		} elsif ($dataBlock->{dataField} == DIF_READOUT) {
+			$self->{errormsg} = "in datablock $dataBlockNo: unexpected DIF_READOUT";
+			$self->{errorcode} = ERR_UNKNOWN_DATAFIELD;
+			return 0;
 		} elsif ($dataBlock->{dataField} == DIF_BCD2) {
 			$value = $self->decodeBCD(2, substr($payload,$offset,1));
 			$offset += 1;
@@ -746,20 +887,45 @@ sub decodePayload($$) {
 		} elsif ($dataBlock->{dataField} == DIF_BCD8) {
 			$value = $self->decodeBCD(8, substr($payload,$offset,4));
 			$offset += 4;
+		} elsif ($dataBlock->{dataField} == DIF_BCD12) {
+			$value = $self->decodeBCD(12, substr($payload,$offset,6));
+			$offset += 6;
 		} elsif ($dataBlock->{dataField} == DIF_INT8) {
 			$value = unpack('C', substr($payload, $offset, 1));
 			$offset += 1;
 		} elsif ($dataBlock->{dataField} == DIF_INT16) {
 			$value = unpack('v', substr($payload, $offset, 2));
 			$offset += 2;
+		} elsif ($dataBlock->{dataField} == DIF_INT24) {
+			my @bytes = unpack('CCC', substr($payload, $offset, 3));
+			$offset += 3;
+			$value = $bytes[0] + $bytes[1] << 8 + $bytes[2] << 16;
 		} elsif ($dataBlock->{dataField} == DIF_INT32) {
 			$value = unpack('V', substr($payload, $offset, 4));
 			$offset += 4;
+		} elsif ($dataBlock->{dataField} == DIF_INT48) {
+			my @words = unpack('vvv', substr($payload, $offset, 6));
+			$value = $words[0] + $words[1] << 16 + $words[2] << 32;
+			$offset += 6;
+		} elsif ($dataBlock->{dataField} == DIF_INT64) {
+			my @lwords = unpack('VV', substr($payload, $offset, 8));
+			$value = $lwords[0] + $lwords[1] << 32; 
+			$offset += 8;
+		} elsif ($dataBlock->{dataField} == DIF_FLOAT32) {
+			#not allowed according to wmbus standard, Qundis seems to use it nevertheless
+			$value = unpack('f', substr($payload, $offset, 4));
+			$offset += 4;
 		} elsif ($dataBlock->{dataField} == DIF_VARLEN) {
 			my $lvar = unpack('C',substr($payload, $offset++, 1));
+			#print "in datablock $dataBlockNo: LVAR field " . sprintf("%x", $lvar) . "\n";
 			if ($lvar <= 0xbf) {
-				#  ASCII string with LVAR characters
-        $value = unpack('a*',substr($payload, $offset, $lvar));
+				if ($dataBlock->{type} eq "MANUFACTURER SPECIFIC") {
+					# special handling, LSE seems to lie about this
+					$value = unpack('H*',substr($payload, $offset, $lvar));
+				} else {
+					#  ASCII string with LVAR characters
+					$value = unpack('a*',substr($payload, $offset, $lvar));
+				}
         $offset += $lvar;
       } elsif ($lvar >= 0xc0 && $lvar <= 0xcf) {
 				#  positive BCD number with (LVAR - C0h) • 2 digits
@@ -776,6 +942,8 @@ sub decodePayload($$) {
       }
     } elsif ($dataBlock->{dataField} == DIF_SPECIAL) {
 			# special functions
+			#print "DIF_SPECIAL at $offset\n";
+			$value = unpack("H*", substr($payload,$offset));
 			last PAYLOAD;
 		}	else {
 			$self->{errormsg} = "in datablock $dataBlockNo: unhandled datafield " . sprintf("%x",$dataBlock->{dataField});
@@ -786,7 +954,12 @@ sub decodePayload($$) {
 		if (defined $dataBlock->{calcFunc}) {
 			$dataBlock->{value} = $dataBlock->{calcFunc}->($value, $dataBlock); 
 			#print "Value raw " . $value . " value calc " . $dataBlock->{value} ."\n";
+		} elsif (defined $value) {
+			$dataBlock->{value} = $value;
+		} else {
+			$dataBlock->{value} = "";
 		}
+		undef $value;
 		
 		push @dataBlocks, $dataBlock;
 	}
@@ -820,6 +993,8 @@ sub decodeApplicationLayer($) {
 	my $self = shift;
 	my $applicationlayer = $self->removeCRC(substr($self->{msg},12));
 	
+	#print unpack("H*", $applicationlayer) . "\n";
+	
 	if ($self->{errorcode} != ERR_NO_ERROR) {
 		# CRC check failed
 		return 0;
@@ -838,8 +1013,9 @@ sub decodeApplicationLayer($) {
 		#print "Long header\n";
 		($self->{meter_id}, $self->{meter_man}, $self->{meter_vers}, $self->{meter_dev}, $self->{access_no}, $self->{status}, $self->{cw}) 
 			= unpack('VvCCCCn', substr($applicationlayer,$offset)); 
-	  $self->{meter_devtypestring} =  $validDeviceTypes{$self->{meter_dev}}; 
-  	$self->{meter_manufacturer} = $self->manId2ascii($self->{meter_man});
+		$self->{meter_id} = sprintf("%08d", $self->{meter_id});	
+	  $self->{meter_devtypestring} =  $validDeviceTypes{$self->{meter_dev}} || 'unknown'; 
+   	$self->{meter_manufacturer} = uc($self->manId2ascii($self->{meter_man}));
 		$offset += 12;
   } else {
 		# unsupported
@@ -871,20 +1047,20 @@ sub decodeApplicationLayer($) {
 				$self->{decrypted} = 1;
 			} else {
 				# Decryption verification failed
-				$self->{errormsg} = 'Decryption failed';
+				$self->{errormsg} = 'Decryption failed, wrong key?';
 				$self->{errorcode} = ERR_DECRYPTION_FAILED;
 				#printf("%x\n", unpack('n', $payload));
 				return 0;
 			}
 		} else {
-			$self->{errormsg} = 'encrypted message and no aeskey given';
+			$self->{errormsg} = 'encrypted message and no aeskey provided';
 	  	$self->{errorcode} = ERR_NO_AESKEY;
 			return 0;
 		}
 
 	} else {
 		# error, encryption mode not implemented
-		$self->{errormsg} = 'Encryption mode not implemented';
+		$self->{errormsg} = sprintf('Encryption %x mode not implemented', $self->{cw_parts}{mode});
   	$self->{errorcode} = ERR_UNKNOWN_ENCRYPTION;
 		$self->{decrypted} = 0;
 		return 0;
@@ -899,14 +1075,14 @@ sub decodeLinkLayer($$)
 	my $self = shift;
 	my $linklayer = shift;
 
-	$self->{datalen} = length($self->{msg}) - 12;
-	$self->{datablocks} = $self->{datalen} / 18; # header block is 12 bytes, each following block is 16 bytes + 2 bytes CRC
-	$self->{datablocks}++ if $self->{datalen} % 18 != 0;
 
 	
-	($self->{lfield}, $self->{cfield}, $self->{mfield}, $self->{afield_id}, $self->{afield_ver}, $self->{afield_type}, 
-		$self->{crc0}) = unpack('CCvLCCn', $linklayer);
+	($self->{lfield}, $self->{cfield}, $self->{mfield}) = unpack('CCv', $linklayer);
+	$self->{afield_id} = sprintf("%08d", $self->decodeBCD(8,substr($linklayer,4,4)));
+	($self->{afield_ver}, $self->{afield_type}, $self->{crc0}) = unpack('CCn', substr($linklayer,8,4));
 
+	
+	
 	#printf("lfield %d\n", $self->{lfield});
 	#printf("crc0 %x calc %x\n", $self->{crc0}, $self->checkCRC(substr($linklayer,0,10)));
 	
@@ -917,8 +1093,22 @@ sub decodeLinkLayer($$)
 		return 0;
 	}
 
-	$self->{manufacturer} = $self->manId2ascii($self->{mfield});
-	$self->{typestring} =  $validDeviceTypes{$self->{afield_type}};
+	# header block is 12 bytes, each following block is 16 bytes + 2 bytes CRC, the last block may be smaller
+	$self->{datalen} = $self->{lfield} - 9; # this is without CRCs and the lfield itself
+	$self->{datablocks} = int($self->{datalen} / LL_BLOCK_SIZE);
+	$self->{datablocks}++ if $self->{datalen} % LL_BLOCK_SIZE != 0;
+	$self->{msglen} = 12 + $self->{datalen} + $self->{datablocks} * CRC_SIZE;
+	
+	#printf("calc len %d, actual %d\n", $self->{msglen}, length($self->{msg}));
+	if (length($self->{msg}) > $self->{msglen}) {
+		$self->{remainingData} = substr($self->{msg},$self->{msglen});
+	}
+	
+	# according to the MBus spec only upper case letters are allowed.
+	# some devices send lower case letters none the less
+	# convert to upper case to make them spec conformant
+	$self->{manufacturer} = uc($self->manId2ascii($self->{mfield}));
+	$self->{typestring} =  $validDeviceTypes{$self->{afield_type}} || 'unknown';
 	return 1;
 }
 

@@ -1,11 +1,14 @@
 #!/bin/sh
 
+#set -x
 set -e
 
-if pgrep fhem.pl >/dev/null; then
-  if test -x /sbin/initctl; then
-    initctl stop fhem
-  else
-    invoke-rc.d fhem stop
-  fi
+apt-mark unhold fhem
+
+# stop fhem if running
+if test -f /etc/init.d/fhem; then
+    /etc/init.d/fhem stop noaptmark
 fi
+
+# remove fhem autostart
+update-rc.d -f fhem remove

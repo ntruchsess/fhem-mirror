@@ -48,7 +48,7 @@ my @YahooCodes_en = (
        'mostly cloudy', # day
        'partly cloudy', # night
        'partly cloudy', # day
-       'clear', #night
+       'clear', 
        'sunny',
        'fair', #night
        'fair', #day
@@ -117,8 +117,8 @@ my @iconlist = (
        'chance_of_rain', 'snowflurries', 'chance_of_snow', 'heavysnow', 'snow', 'sleet',
        'sleet', 'dust', 'fog', 'haze', 'smoke', 'flurries',
        'windy', 'icy', 'cloudy', 'mostlycloudy_night', 'mostlycloudy', 'partly_cloudy_night',
-       'partly_cloudy', 'clear', 'sunny', 'mostly_clear_night', 'clear', 'heavyrain',
-       'clear', 'scatteredthunderstorms', 'scatteredthunderstorms', 'scatteredthunderstorms', 'scatteredshowers', 'heavysnow',
+       'partly_cloudy', 'sunny', 'sunny', 'mostly_clear_night', 'mostly_sunny', 'heavyrain',
+       'sunny', 'scatteredthunderstorms', 'scatteredthunderstorms', 'scatteredthunderstorms', 'scatteredshowers', 'heavysnow',
        'chance_of_snow', 'heavysnow', 'partly_cloudy', 'heavyrain', 'chance_of_snow', 'scatteredshowers');
 
 ###################################
@@ -219,8 +219,14 @@ sub Weather_RetrieveData($$)
   my $url = "http://weather.yahooapis.com/forecastrss?w=" . $location . "&u=" . $units;
   
   if ($blocking) {
-  	my $response = GetFileFromURL($url, 5, undef, 0);
-    
+  	#my $response = GetFileFromURL($url, 5, undef, 0);
+  	my $response = HttpUtils_BlockingGet(
+			{
+			  url        => $url,
+			  timeout    => 5,
+			  #noshutdown => 0,
+			}
+			);
     my %param = (hash => $hash, doTrigger => 0);
     Weather_RetrieveDataFinished(\%param, undef, $response);
   }
@@ -229,7 +235,7 @@ sub Weather_RetrieveData($$)
       {
           url        => $url,
           timeout    => 5,
-          noshutdown => 0,
+          #noshutdown => 0,
           hash       => $hash,
           doTrigger  => 1,
           callback   => \&Weather_RetrieveDataFinished,
@@ -417,15 +423,17 @@ sub Weather_Get($@) {
 
   return "argument is missing" if(int(@a) != 2);
 
-  Weather_GetUpdateLocal($hash);
-
   my $reading= $a[1];
   my $value;
 
   if(defined($hash->{READINGS}{$reading})) {
         $value= $hash->{READINGS}{$reading}{VAL};
   } else {
-        return "no such reading: $reading";
+        my $rt= ""; 
+        if(defined($hash->{READINGS})) {
+                $rt= join(" ", sort keys %{$hash->{READINGS}});
+        }   
+        return "Unknown reading $reading, choose one of " . $rt;
   }
 
   return "$a[0] $reading => $value";

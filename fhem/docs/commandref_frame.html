@@ -8,7 +8,7 @@
   <noscript>
     <link rel="stylesheet" type="text/css" href="../www/pgm2/style.css" />
   </noscript>
-  <meta http-equiv="Content-type" content="text/html;charset=ISO-8859-1"/>
+  <meta http-equiv="Content-type" content="text/html; charset=UTF-8">
   <link rel="shortcut icon" href="/fhem/icons/favicon.ico"/>
 </head>
 
@@ -29,6 +29,7 @@
   <a href="#intro">Introduction</a><br>
   <a href="#command">Fhem command types</a><br>
   <a href="#devspec">Device specification</a><br>
+  <a href="#attributes">Attributes</a><br>
 
   <br>
   <b>Fhem commands</b>
@@ -61,6 +62,7 @@
       <a href="#quit">quit</a> &nbsp;
       <a href="#reload">reload</a> &nbsp;
       <a href="#rename">rename</a> &nbsp;
+      <a href="#restore">restore</a> &nbsp;
       <a href="#rereadcfg">rereadcfg</a> &nbsp;
       <a href="#save">save</a> &nbsp;
       <a href="#set">set</a> &nbsp;
@@ -92,6 +94,8 @@
     <a href="#average">average</a> &nbsp;
     <a href="#Calendar">Calendar</a> &nbsp;
     <a href="#configDB">configDB</a> &nbsp;
+    <a href="#CustomReadings">CustomReadings</a> &nbsp;
+    <a href="#DOIF">DOIF</a> &nbsp;
     <a href="#Dashboard">Dashboard</a> &nbsp;
     <a href="#DbLog">DbLog</a> &nbsp;
     <a href="#dewpoint">dewpoint</a> &nbsp;
@@ -106,10 +110,10 @@
     <a href="#HTTPSRV">HTTPSRV</a> &nbsp;
     <a href="#Heating_Control">Heating_Control</a> &nbsp;
     <a href="#holiday">holiday</a> &nbsp;
+    <a href="#HourCounter">HourCounter</a> &nbsp;    
     <a href="#LightScene">LightScene</a> &nbsp;
     <a href="#mailcheck">mailcheck</a> &nbsp;
     <a href="#notify">notify</a> &nbsp;
-    <a href="#PID">PID</a> &nbsp;
     <a href="#PRESENCE">PRESENCE</a> &nbsp;
     <a href="#PachLog">PachLog</a> &nbsp;
     <a href="#RSS">RSS</a> &nbsp;
@@ -311,7 +315,7 @@ A line ending with \ will be concatenated with the next one, so long lines
   <li>the spec may not contain space characters.</n>
   <li>if there is a device which exactly corresponds to the spec, then
       no special processing is done.</li>
-  <li>first the spec is separated by komma, then the regular expression and
+  <li>first the spec is separated by comma, then the regular expression and
       filter operations are executed.</li>
   <li>the returned list can contain the same device more than once, so
       "set lamp3,lamp3 on" switches lamp3 twice.</li>
@@ -320,30 +324,44 @@ A line ending with \ will be concatenated with the next one, so long lines
   </ul>
 </ul>
 
-<a name="help"></a>
-<h3>?, help</h3>
+
+<a name="attributes"></a>
+<h3>Attributes</h3>
+
+All devices have attributes. These can be set by means of the <a
+href="#attr">attr</a> command, displayed with the <a
+href="#displayattr">displayattr</a> command, and deleted by the <a
+href="#deleteattr">deleteattr</a> command.<p>
+
+There are global attributes that are used by all devices and local attributes
+that apply to individual device classes only.<p>
+
+Some devices (like <a href="#FHEMWEB">FHEMWEB</a>) automatically define new
+global attributes on the first definition of a device of such type.<p>
+
+You can use the command <p><code>attr global userattr
+&lt;attributelist&gt;</code><p> for the <a href="#global">global</a> device to
+declare new global attributes and <p><code>attr &lt;devicespec&gt; userattr
+&lt;attributelist&gt;</code><p> for individual devices according to <a
+href="#devspec">devspec</a> to declare new local attributes. 
+
+<code>&lt;attributelist&gt;</code> is a space-separated list which contains the
+names of the additional attributes. See the documentation of the <a
+href="#attr">attr</a> command for examples.<p>
+
+Be careful not to overwrite additional global attributes previously defined by
+yourself or a device. Use the <code>attr global userattr
+&lt;attributelist&gt;</code> as early in your configuration as possible.
+
+<h4>Device specific attributes</h4>
+
+Device specific attributes are documented in the corresponding device section.
+
+
+<h4>Global attributes used by all devices</h4>
+ 
 <ul>
-  <code>?</code><br>
-  <code>help</code><br>
-  <br>
-  Get a list of all commands and short description for each one
-</ul>
 
-<a name="attr"></a>
-<h3>attr</h3>
-<ul>
-  <code>attr &lt;devspec&gt; &lt;attrname&gt; [&lt;value&gt;] </code><br>
-
-  <br>Set an attribute for a device defined by <a href="#define">define</a>.
-  You can define your own attributes too to use them in other applications.
-
-  Use "attr &lt;name&gt; ?" to get a list of possible attributes.
-  See the <a href="#devspec">Device specification</a> section for details on
-  &lt;devspec&gt;.
-  <br><br>
-
-  Attributes used by all devices:
-  <ul>
     <a name="verbose"></a>
     <li>verbose<br>
         Set the verbosity level. Possible values:
@@ -362,10 +380,12 @@ A line ending with \ will be concatenated with the next one, so long lines
     <a name="comment"></a>
     <li>comment<br>
         Add an arbitrary comment.
+        
     <a name="alias"></a>
     <li>alias<br>
         Used by FHEMWEB to display a device with another name e.g. when using
         special characters/spaces not accepted by device definition.
+        
     <a name="room"></a>
     <li>room<br>
         Filter/group devices. Recognized by web-pgm2 and web-pgm3.  A device
@@ -393,15 +413,33 @@ A line ending with \ will be concatenated with the next one, so long lines
         instead of the state in the summary view. Useful e.g. for FS20 PIRI
         devices.
     </li>
+    
+    <a name="eventMap"></a>
+    <li>eventMap<br>
+        Replace event names and set arguments. The value of this attribute
+        consists of a list of space separated values, each value is a colon
+        separated pair. The first part specifies the "old" value, the second
+        the new/desired value. If the first character is slash(/) or comma(,)
+        then split not by space but by this character, enabling to embed spaces.
+        Examples:<ul><code>
+        attr store eventMap on:open off:closed<br>
+        attr store eventMap /on-for-timer 10:open/off:closed/<br>
+        set store open
+        </code></ul>
+        </li><br>
+    
 
-    <a name="readingFnAttributes"></a>
-    <h4>readingFnAttributes</h4>
-    The following attributes are honored by the modules that make use
-    of the standardized readings updating mechanism in fhem.pl. Check the
-    modules attribute list if you want to know if it is supporting it.
-    <br>
-    <br>
+</ul>
 
+<a name="readingFnAttributes"></a>
+<h4>readingFnAttributes</h4><p>
+
+The following global attributes are honored by the modules that make use of the
+standardized readings updating mechanism in fhem.pl. Check the module's
+attribute list if you want to know if a device supports these attributes.  <br>
+
+<ul>
+    
     <a name="stateFormat"></a>
     <li>stateFormat<br>
     Modifies the STATE of the device, shown by the list command or in the room
@@ -484,6 +522,11 @@ A line ending with \ will be concatenated with the next one, so long lines
             seconds between the current and the previous evaluation. Granularity
             of time is one second. No value is calculated if the time past is
             below one second.  Useful to calculate rates.</li>
+        <li>integral: reverse function of differential. The result is incremented 
+            by the product of the time difference between the last two readings 
+            and the avarage of the last two readings. <br>
+            result += (time - timeold) * (oldval + value) / 2
+            </li>
         <li>offset: if the current evaluated value is smaler than the previously
             evaluated value the reading is incremented by the previous value.
             the reading can then be used as an offset correct for a counter that
@@ -506,11 +549,51 @@ A line ending with \ will be concatenated with the next one, so long lines
       <li>the name of the defined Readings consists of alphanumeric characters
         with underscore (_) and the minus (-) sign.</li>
       </ul>
-    </li><br>
-    </ul>
-  <br>
+    </li>
+ </ul>
 
-  Device specific attributes are documented in the corresponding device section.
+<h4>Common attributes</h4>
+
+The following local attributes are used by a wider range of devices:
+
+<ul>
+   <a name="IODev"></a>
+    <li>IODev<br>
+        Set the IO or physical device which should be used for sending signals
+        for this "logical" device. An example for the physical device is an FHZ
+        or a CUL. Note: Upon startup FHEM assigns each logical device
+        (FS20/HMS/KS300/etc) the last physical device which can receive data
+        for this type of device. The attribute IODev needs to be used only if
+        you attached more than one physical device capable of receiving signals
+        for this logical device.</li><br>
+
+</ul>
+
+
+<br><br>
+
+<a name="help"></a>
+<h3>?, help</h3>
+<ul>
+  <code>?</code><br>
+  <code>help</code><br>
+  <br>
+  Get a list of all commands and short description for each one
+</ul>
+
+<a name="attr"></a>
+<h3>attr</h3>
+<ul>
+  <code>attr &lt;devspec&gt; &lt;attrname&gt; [&lt;value&gt;] </code><br>
+
+  <br>Set an attribute for a device defined by <a href="#define">define</a>.
+  You can define your own <a href="#attributes">attributes</a> too to use them
+  in other applications.
+
+  Use "attr &lt;name&gt; ?" to get a list of possible attributes.
+  See the <a href="#devspec">Device specification</a> section for details on
+  &lt;devspec&gt;.
+  After setting the attribute, the global event "ATTR" will be generated.
   <br><br>
 
   Examples:
@@ -606,6 +689,7 @@ A line ending with \ will be concatenated with the next one, so long lines
   or all attributes for a device (if no &lt;attrname&gt; is defined).
   See the <a href="#devspec">Device specification</a> section for details on
   &lt;devspec&gt;.<br>
+  After deleting the attribute, the global event "DELETEATTR" will be generated.
   <br>
 
   Examples:
@@ -809,6 +893,7 @@ A line ending with \ will be concatenated with the next one, so long lines
   one argument to an at type definition, only the time part will be changed. In
   case of a notify type definition, only the regex part will be changed.  All
   other values (state, attributes, etc) will remain intact.
+  After modify, the global event "MODIFIED" will be generated.
   <br><br>
   Example:
   <ul>
@@ -978,6 +1063,8 @@ A line ending with \ will be concatenated with the next one, so long lines
   <ul>
     setreading lamp state on
   </ul>
+  Note: setreading won't generate an event for device X, if it is called from a
+  notify for device X. Use "sleep 0.1; setreading X Y Z" in this case.
 </ul>
 
 <a name="setstate"></a>
@@ -1103,27 +1190,6 @@ A line ending with \ will be concatenated with the next one, so long lines
         receiving a corresponding message.
     </li><br>
 
-    <a name="updateInBackground"></a>
-    <li>updateInBackground<br>
-        If this attribute is set to 1, the update will be executed in the
-        backgrund process. The return message is communicated via events, and
-        in telnet the inform command is activated, in FHEMWEB the Event
-        Monitor.
-        </li><br>
-
-    <a name="backup_before_update"></a>
-    <li>backup_before_update<br>
-        If this attribute is set to 0, an update skip always backing up your
-        installation via the <a href="#backup">backup</a> command. The default
-        is to backup always before updates.<br>
-        Note: Set this attribute only if you know what you do!<br>
-        This Attribute is used by the <a href="#update">update</a> command.<br>
-        Example:<br>
-        <ul>
-          attr global backup_before_update 0
-        </ul>
-    </li><br>
-
     <a name="backupcmd"></a>
     <li>backupcmd<br>
         You could pass the backup to your own command / script by using this attribute.
@@ -1163,7 +1229,7 @@ A line ending with \ will be concatenated with the next one, so long lines
         This Attribute is used by the <a href="#backup">backup</a> command.<br>
         Example:<br>
         <ul>
-          attr global backupsymlinks yes
+          attr global backupsymlink yes
         </ul>
     </li><br>
 
@@ -1172,16 +1238,6 @@ A line ending with \ will be concatenated with the next one, so long lines
         Contains the name of the fhem configuration file. If <a
         href="#save">save</a> is called without argument, then the output will
         be written to this file.
-    </li><br>
-
-    <a name="exclude_from_update"></a>
-    <li>exclude_from_update<br>
-        Contains a space separated list of file which will be excluded by an update.
-        This Attribute is used by the <a href="#update">update</a> command.<br>
-        Example:<br>
-        <ul>
-          attr global exclude_from_update 21_OWTEMP.pm temp4hum4.gplot FS20.on.png FS20.off.png
-        </ul>
     </li><br>
 
     <a name="holiday2we"></a>
@@ -1275,30 +1331,13 @@ A line ending with \ will be concatenated with the next one, so long lines
 
     <li><a href="#fheminfo">uniqueID</a>
 
-    <a name="updatebranch"></a>
-    <li>updatebranch<br>
-        The update branch will be set by the file FhemUtils/release.pm contained
-        in the modpath. For example, if a stable version (version 5.3 upwards) of
-        fhem is installed via a direct download connection of the archieve on the
-        fhem-website, then the branch of the update is automatically on "stable".
-        In this branch, only updates fixing confirmed errors, relevant security
-        fixes or new stable versions are provided.<br>
-        By using the command "update development &lt;filename&gt;", particular files
-        or packages can always be installed directly from the development branch
-        (e.g. "update development &lt;package&gt;").<br>
-        If you want to update from the development branch in stable verion in
-        general, you can force this behaviour by using the attribute "updatebranch DEVELOPMENT".
-        In case the installation of fhem should generally using the development
-        branch, this attribute would not have to be set. Instead, use "update development force"
-        to update all files including release.pm (containing the release-information)
-        to the newest version.
-    </li><br>
-
     <a name="userattr"></a>
     <li>userattr<br>
         A space separated list which contains the names of additional
-        attributes. Without specifying them you will not be able to set them
-        (in order to prevent typos).
+        attributes for all devices. Without specifying them you will not be
+        able to set them (in order to prevent typos).<br>
+        userattr can also specified for other devices, in this case
+        these additinal attribute names are only valid for this device.
     </li><br>
 
     <a name="dupTimeout"></a>
@@ -1314,6 +1353,11 @@ A line ending with \ will be concatenated with the next one, so long lines
         hidden, and will only be visible, if this attribute is set to 1.
         The attribute is checked by the list command, by the FHEMWEB room
         overview and by xmllist.
+    </li>
+
+    <a name="stacktrace"></a>
+    <li>stacktrace<br>
+        if set (to 1), dump a stacktrace to the log for each "PERL WARNING".
     </li>
   </ul>
 </ul>
@@ -1414,6 +1458,10 @@ A line ending with \ will be concatenated with the next one, so long lines
       <li>
         ReadingsVal(&lt;devicename&gt;,&lt;reading&gt;,&lt;defaultvalue&gt;)<br>
         Return the reading (the value in the Readings section of "list device")
+        </li><br>
+      <li>
+        ReadingsNum(&lt;devicename&gt;,&lt;reading&gt;,&lt;defaultvalue&gt;)<br>
+        Return the reading as a number, i.e. delete non-numerical values.
         </li><br>
       <li>
         AttrVal(&lt;devicename&gt;,&lt;attribute&gt;,&lt;defaultvalue&gt;)<br>

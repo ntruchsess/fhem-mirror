@@ -1,5 +1,9 @@
-VERS=5.5
-DATE=2013-09-29
+VERS=5.6
+DATE=2014-11-09
+
+# used for nightly build
+DATEN=$(shell date +"%Y-%m-%d")
+VERSN=$(VERS).$(shell svn info | grep 'Revision' | awk '{ print $$2; }')
 
 RELATIVE_PATH=YES
 BINDIR=/opt/fhem
@@ -27,6 +31,7 @@ all:
 	@echo "    install       - to install fhem"
 	@echo "    dist          - to create a .tar.gz file"
 	@echo "    deb           - to create a .deb file"
+	@echo "    synology      - to create an spk file"
 	@echo "    fb7390        - to create an AVM Fritz!Box 7390 imagefile"
 	@echo "    fb7270        - to create a zip file for the AVM Fritz!Box 7270"
 	@echo "    backup        - to backup current installation of fhem"
@@ -65,6 +70,49 @@ install:
 	@echo "  perl $(BINDIR)/fhem.pl $(ETCDIR)/fhem.cfg"
 	@echo
 
+dist:
+	mkdir .f
+	cp -r fhem.pl fhem.cfg CHANGED HISTORY Makefile README.SVN\
+                demolog fhem.cfg.demo README_DEMO.txt\
+		FHEM configDB.pm contrib docs www webfrontend .f
+	mkdir .f/log
+	touch .f/log/empty_file.txt
+	(cd .f; perl contrib/commandref_join.pl)
+	find .f -name .svn -print | xargs rm -rf
+	find .f -name svn-commit\* -print | xargs rm -rf
+	find .f -name \*.orig -print | xargs rm -f
+	find .f -name .#\* -print | xargs rm -f
+	find .f -type f -print | grep -v Makefile | grep -v SWAP |\
+		xargs perl -pi -e 's/=VERS=/$(VERS)/g;s/=DATE=/$(DATE)/g'
+	@echo "    deb-nightly   - to create a nightly .deb file from current svn"
+	rm -rf .f/www/SVGcache
+	mv .f $(DESTDIR)
+	tar cf - $(DESTDIR) | gzip -9 > $(DESTDIR).tar.gz
+	rm -rf $(DESTDIR)
+
+deb:
+	@echo $(PWD)
+	rm -rf .f
+	rm -rf $(DESTDIR)
+	make ROOT=`pwd`/.f install
+	cp -r contrib/DEBIAN .f
+	rm -rf .f/$(MODDIR)/contrib/FB7*/var
+	rm -rf .f/$(MODDIR)/contrib/FB7*/*.image
+	rm -rf .f/$(MODDIR)/contrib/FB7*/*.zip
+	find .f -name .svn -print | xargs rm -rf
+	find .f -name \*.orig -print | xargs rm -f
+	find .f -name .#\* -print | xargs rm -f
+	find .f -type f -print | grep -v Makefile |\
+		xargs perl -pi -e 's/=VERS=/$(VERSN)/g;s/=DATE=/$(DATEN)/g'
+	wget -qO .f/$(MODDIR)/FHEM/controls_fhem.txt http://fhem.de/fhemupdate/controls_fhem.txt
+	find .f -type f | xargs chmod 644
+	find .f -type d | xargs chmod 755
+	chmod 755 `cat contrib/executables`
+	chown -R root:root .f
+	mv .f $(DESTDIR)
+	dpkg-deb --build $(DESTDIR)
+	rm -rf $(DESTDIR)
+
 backup:
 	@echo
 	@echo "Saving fhem to the .backup directory in the current directory"
@@ -84,51 +132,17 @@ uninstall:backup
 	@echo done
 	@echo
 
-dist:
-	mkdir .f
-	cp -r fhem.pl fhem.cfg CHANGED HISTORY Makefile README.SVN\
-                demolog fhem.cfg.demo README_DEMO.txt\
-		FHEM configDB.pm contrib docs www webfrontend .f
-	mkdir .f/log
-	touch .f/log/empty_file.txt
-	(cd .f; perl contrib/commandref_join.pl)
-	find .f -name .svn -print | xargs rm -rf
-	find .f -name svn-commit\* -print | xargs rm -rf
-	find .f -name \*.orig -print | xargs rm -f
-	find .f -name .#\* -print | xargs rm -f
-	find .f -type f -print | grep -v Makefile | grep -v SWAP |\
-		xargs perl -pi -e 's/=VERS=/$(VERS)/g;s/=DATE=/$(DATE)/g'
-	rm -rf .f/www/SVGcache
-	mv .f $(DESTDIR)
-	tar cf - $(DESTDIR) | gzip -9 > $(DESTDIR).tar.gz
-	rm -rf $(DESTDIR)
-
-dist-clean:
-	rm -rf *.html $(DESTDIR).tar.gz
-
-deb:
-	@echo $(PWD)
-	rm -rf .f
-	make ROOT=`pwd`/.f install
-	cp -r contrib/DEBIAN .f
-	rm -rf .f/$(MODDIR)/contrib/FB7*/var
-	rm -rf .f/$(MODDIR)/contrib/FB7*/*.image
-	rm -rf .f/$(MODDIR)/contrib/FB7*/*.zip
-	find .f -name .svn -print | xargs rm -rf
-	find .f -name \*.orig -print | xargs rm -f
-	find .f -name .#\* -print | xargs rm -f
-	find .f -type f -print | grep -v Makefile |\
-		xargs perl -pi -e 's/=VERS=/$(VERS)/g;s/=DATE=/$(DATE)/g'
-	find .f -type f | xargs chmod 644
-	find .f -type d | xargs chmod 755
-	chmod 755 `cat contrib/executables`
-	chown -R root:root .f
-	mv .f $(DESTDIR)
-	dpkg-deb --build $(DESTDIR)
-	rm -rf $(DESTDIR)
-
 fb7390:
 	cd contrib/FB7390 && sh ./makeimage $(DESTDIR)
 
 fb7270:
 	cd contrib/FB7270 && ./makeimage $(DESTDIR)
+
+synology:
+	rm -f contrib/Synology/package.tgz
+	rm -f $(DESTDIR).spk
+	sed -ie 's/\.\/log/\/var\/log/g' fhem.cfg
+	sed -ie 's/modpath \./modpath \/var\/packages\/FHEM\/target/g' fhem.cfg
+	sed -ie 's/version=".*"/version="$(DESTDIR)"/g' contrib/Synology/INFO
+	tar -vpczf contrib/Synology/package.tgz * --exclude "contrib/Synology"
+	cd contrib/Synology && tar -vcf ../../$(DESTDIR).spk *

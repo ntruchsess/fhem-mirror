@@ -70,6 +70,7 @@ BlockingCall($$@)
   }
 
   if($pid) {
+    Log 4, "BlockingCall created child ($pid), uses $tName to connect back";
     my %h = ( pid=>$pid, fn=>$blockingFn, finishFn=>$finishFn, 
               abortFn=>$abortFn, abortArg=>$abortArg );
     if($timeout) {
@@ -80,7 +81,10 @@ BlockingCall($$@)
 
   # Child here
 
-  foreach my $d (sort keys %defs) {   # Close all kind of FD
+  # Close all kind of FD. Reasons:
+  # - cannot restart FHEM if child keeps TCP Serverports open
+  # ...?
+  foreach my $d (sort keys %defs) {
     my $h = $defs{$d};
     $h->{DBH}->{InactiveDestroy} = 1 if($h->{TYPE} eq 'DbLog');
     TcpServer_Close($h) if($h->{SERVERSOCKET});
@@ -112,7 +116,7 @@ BlockingInformParent($;$$)
   if(!$telnetClient) {
     my $addr = "localhost:$defs{$telnetDevice}{PORT}";
     $telnetClient = IO::Socket::INET->new(PeerAddr => $addr);
-    Log 1, "CallBlockingFn: Can't connect to $addr\n" if(!$telnetClient);
+    Log 1, "CallBlockingFn: Can't connect to $addr: $@" if(!$telnetClient);
   }
 
   if(defined($param)) {

@@ -17,11 +17,9 @@ log(txt)
 function
 addcsrf(arg)
 {
-var oarg=arg;
   var csrf = document.body.getAttribute('fwcsrf');
   if(csrf && arg.indexOf('fwcsrf') < 0)
     arg += '&fwcsrf='+csrf;
-log(oarg+" -> "+arg);
   return arg;
 }
 
@@ -30,7 +28,7 @@ FW_cmd(arg)     /* see also FW_devState */
 {
   arg = addcsrf(arg);
   var req = new XMLHttpRequest();
-  req.open("GET", arg, true);
+  req.open("POST", arg, true);
   req.send(null);
   req.onreadystatechange = function(){
     if(req.readyState == 4)
@@ -88,9 +86,8 @@ FW_doUpdate()
       if(el.nodeName.toLowerCase() == "select") {
         // dropdown: set the selected index to the current value
         for(var j=0;j<el.options.length;j++)
-            if(el.options[j].value == d[2]) {
-              el.selectedIndex = j;
-            }
+          if(el.options[j].value == d[2])
+            el.selectedIndex = j;
 
       } else {
         el.innerHTML=d[2];
@@ -100,11 +97,9 @@ FW_doUpdate()
       }
     }
 
-    for(var w in FW_widgets) {
-      if(FW_widgets[w].updateLine) {
+    for(var w in FW_widgets)
+      if(FW_widgets[w].updateLine)
         FW_widgets[w].updateLine(d);
-      }
-    }
 
     if(d[0].indexOf("-") == -1) // Wont contain -
       devs.push(d[0]);

@@ -275,9 +275,15 @@ sub HMLAN_Attr(@) {############################################################
       RemoveInternalTimer( "keepAliveCk:".$name);
       RemoveInternalTimer( "keepAlive:".$name);
       DevIo_CloseDev($defs{$name});
-      HMLAN_condUpdate($defs{$name},251);#set dummy
+      HMLAN_condUpdate($defs{$name},251);#state: dummy
     }
     else{
+      if ($cmd eq "set"){
+        $attr{$name}{$aName} = $aVal;
+      }
+      else{
+        delete $attr{$name}{$aName};
+      }
       DevIo_OpenDev($defs{$name}, 1, "HMLAN_DoInit");
     }
   }
@@ -433,7 +439,7 @@ sub HMLAN_Write($$$) {#########################################################
     HMLAN_SimpleWrite($hash,$msg);
     return;
   }
-  elsif (length($msg)>22){
+  elsif (length($msg)>21){
     my ($mtype,$src,$dst) = (substr($msg, 8, 2),
                              substr($msg, 10, 6),
                              substr($msg, 16, 6));
@@ -555,7 +561,6 @@ sub HMLAN_Parse($$) {##########################################################
 
   if ($letter =~ m/^[ER]/){#@mFld=($src, $status, $msec, $d2, $rssi, $msg)
     # max speed for devices is 100ms after receive - example:TC
-
     my ($mNo,$flg,$type,$src,$dst,$p) = unpack('A2A2A2A6A6A*',$mFld[5]);
     my $mLen = length($mFld[5])/2;
     my $CULinfo = "";
@@ -698,7 +703,8 @@ sub HMLAN_Parse($$) {##########################################################
     my $dmsg = sprintf("A%02X%s:$CULinfo:$rssi:$name",
                          $mLen, uc($mFld[5]));
     my %addvals = (RAWMSG => $rmsg, RSSI => hex($mFld[4])-65536);
-    Dispatch($hash, $dmsg, \%addvals);
+
+    Dispatch($hash, $dmsg, \%addvals) if($mFld[5] !~ m/99.112999999000000/);#ignore overload test
   }
   elsif($mFld[0] eq 'HHM-LAN-IF'){#HMLAN version info
 
@@ -752,8 +758,7 @@ sub HMLAN_Ready($) {###########################################################
 }
 sub HMLAN_SimpleWrite(@) {#####################################################
   my ($hash, $msg, $nonl) = @_;
-
-  return if(!$hash || AttrVal($hash->{NAME}, "dummy", undef));
+  return if(!$hash || AttrVal($hash->{NAME}, "dummy", 0) != 0);
 
   my $name = $hash->{NAME};
   my $len = length($msg);

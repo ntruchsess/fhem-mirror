@@ -35,7 +35,6 @@ use Net::FTP;
 use List::MoreUtils 'first_index'; 
 use XML::Simple;
 use HttpUtils;
-use Blocking;
 require LWP::UserAgent;
 
 my ($bulaList, $cmapList, %rmapList, $fmapList, %bula2bulaShort, %bulaShort2dwd, %dwd2Dir, %dwd2Name,
@@ -61,8 +60,9 @@ sub GDS_Initialize($) {
 	$hash->{SetFn}		=	"GDS_Set";
 	$hash->{ShutdownFn}	=	"GDS_Shutdown";
 	$hash->{AttrFn}		=	"GDS_Attr";
-	$hash->{AttrList}	=	"gdsFwName gdsFwType:0,1,2,3,4,5,6,7 ".
-							"gdsAll:0,1 gdsDebug:0,1 gdsLong:0,1 gdsPolygon:0,1 ".
+	$hash->{AttrList}	=	"disable:0,1 ".
+							"gdsFwName gdsFwType:0,1,2,3,4,5,6,7 gdsAll:0,1 ".
+							"gdsDebug:0,1 gdsLong:0,1 gdsPolygon:0,1 ".
 							"gdsSetCond gdsPassiveFtp:0,1 ".
 							$readingFnAttributes;
 
@@ -71,6 +71,22 @@ sub GDS_Initialize($) {
 	fillMappingTables($hash);
 	initDropdownLists($hash);
 	createIndexFile($hash);
+
+	if($name){
+		(undef, $found) = retrieveFile($hash,"conditions");
+		if($found){
+			$sList = getListStationsDropdown($hash)
+		} else {
+			Log3($name, 2, "GDS $name: No datafile (conditions) found");
+		}
+
+		(undef, $found) = retrieveFile($hash,"alerts");
+		if($found){
+			($aList, undef) = buildCAPList($hash);
+		} else {
+			Log3($name, 2, "GDS $name: No datafile (alerts) found");
+		}
+	}
 }
 
 sub GDS_Define($$$) {
@@ -84,7 +100,7 @@ sub GDS_Define($$$) {
 	$hash->{helper}{USER}		= $a[2];
 	$hash->{helper}{PASS}		= $a[3];
 	$hash->{helper}{URL}		= "ftp-outgoing2.dwd.de";
-	$hash->{helper}{INTERVAL}	= 1200;
+	$hash->{helper}{INTERVAL} = 1200;
 
 	Log3($name, 3, "GDS $name: created");
 	Log3($name, 3, "GDS $name: tempDir=".$tempDir);
@@ -98,8 +114,18 @@ sub GDS_Define($$$) {
 	initDropdownLists($hash);
 	createIndexFile($hash);
 
-	BlockingCall("nb_defRead", $hash);
-
+	(undef, $found) = retrieveFile($hash,"conditions");
+	if($found){
+		$sList = getListStationsDropdown($hash)
+	} else {
+		Log3($name, 2, "GDS $name: No datafile (conditions) found");
+	}
+	retrieveFile($hash,"alerts");
+	if($found){
+		($aList, undef) = buildCAPList($hash);
+	} else {
+		Log3($name, 3, "GDS $name: No datafile (alerts) found");
+	}
 	readingsSingleUpdate($hash, '_tzOffset', _calctz(time,localtime(time))*3600, 0);
 	readingsSingleUpdate($hash, 'state', 'active',1);
 
@@ -117,7 +143,7 @@ sub GDS_Undef($$) {
 sub GDS_Shutdown($) {
 	my ($hash) = @_;
 	my $name = $hash->{NAME};
-	Log3 ($name, 4, "GDS $name: shutdown requested");
+	Log3 ($name,4,"GDS $name: shutdown requested");
 	return undef;
 }
 
@@ -136,6 +162,15 @@ sub GDS_Set($@) {
 
 	$hash->{LOCAL} = 1;
 
+	return $usage if $command eq '?';
+
+	if(IsDisabled($name)) {
+		readingsSingleUpdate($hash, 'state', 'disabled', 0);
+		return "GDS $name is disabled. Aborting..." if IsDisabled($name);
+	}
+
+	readingsSingleUpdate($hash, 'state', 'active', 0);
+
 	given($command) {
 		when("clear"){
 			CommandDeleteReading(undef, "$name a_.*");
@@ -148,7 +183,14 @@ sub GDS_Set($@) {
 			}
 
 		when("rereadcfg"){
-			BlockingCall("nb_setReread",$hash);
+			eval {
+				retrieveFile($hash,"conditions");
+				$sList = getListStationsDropdown($hash);
+			}; 
+			eval {
+				retrieveFile($hash,"alerts");
+				($aList, undef) = buildCAPList($hash);
+			}; 
 			break;
 			}
 
@@ -191,6 +233,14 @@ sub GDS_Get($@) {
 				"warningsmap:"."Deutschland,Bodensee,".$bulaList." ".
 				"warnings:".$bulaList;
 
+	return $usage if $command eq '?';
+
+	if(IsDisabled($name)) {
+		readingsSingleUpdate($hash, 'state', 'disabled', 0);
+		return "GDS $name is disabled. Aborting..." if IsDisabled($name);
+	}
+
+	readingsSingleUpdate($hash, 'state', 'active', 0);
 	readingsSingleUpdate($hash, '_tzOffset', _calctz(time,localtime(time))*3600, 0);
 
 	my ($result, $datensatz, $found);
@@ -199,26 +249,26 @@ sub GDS_Get($@) {
 
 		when("conditionsmap"){
 			# retrieve map: current conditions
-			BlockingCall("nb_retrieveFile", "$name|$command|$parameter");
+			retrieveFile($hash,$command,$parameter);
 			break;
 		}
 
 		when("forecastsmap"){
 			# retrieve map: forecasts
-			BlockingCall("nb_retrieveFile", "$name|$command|$parameter");
+			retrieveFile($hash,$command,$parameter);
 			break;
 		}
 
 		when("warningsmap"){
 			# retrieve map: warnings
-			BlockingCall("nb_retrieveFile", "$name|$command|$parameter");
+			retrieveFile($hash,$command,$parameter);
 			break;
 		}
 
 		when("radarmap"){
 			# retrieve map: radar
 			$parameter = ucfirst($parameter);
-			BlockingCall("nb_retrieveFile", "$name|$command|$parameter|$rmapList{$parameter}");
+			retrieveFile($hash,$command,$parameter,$rmapList{$parameter});
 			break;
 			}
 
@@ -258,7 +308,9 @@ sub GDS_Get($@) {
 			}
 
 		when("rereadcfg"){
-			BlockingCall("nb_getReread",$hash);
+			retrieveFile($hash,"conditions");
+			retrieveFile($hash,"alerts");
+			initDropdownLists($hash);
 			break;
 			}
 
@@ -268,9 +320,11 @@ sub GDS_Get($@) {
 						"     VHDL32 = preliminary      |     VHDL33 = cancel VHDL32\n".
 						sepLine(31)."+".sepLine(38);
 			for ($vhdl=30; $vhdl <=33; $vhdl++){
-				nb_retrieveFile("$name|$command|$parameter|$vhdl|1");
-				$result .= retrieveTextWarn($hash);
-				$result .= "\n".sepLine(70);
+				(undef, $found) = retrieveFile($hash, $command, $parameter, $vhdl,1);
+				if($found){
+					$result .= retrieveTextWarn($hash);
+					$result .= "\n".sepLine(70);
+				}
 			}
 			$result .= "\n\n";
 			break;
@@ -291,11 +345,17 @@ sub GDS_Attr(@){
 			break;
 			}
 		when("gdsSetCond"){
-			CommandDefine(undef, "gdsDummy at +00:00:30 set $name conditions $attrValue");
-			$attr{gdsDummy}{room} = 'hidden';
+			my $dummy = "gdsDummy_$name";
+			CommandDefine(undef, "$dummy at +00:00:30 set $name conditions $attrValue");
+			$attr{$dummy}{room} = 'hidden';
 			break;
 			}
 		default {$attr{$name}{$attrName} = $attrValue;}
+	}
+	if(IsDisabled($name)) {
+		readingsSingleUpdate($hash, 'state', 'disabled', 0);
+	} else {
+		readingsSingleUpdate($hash, 'state', 'active', 0);
 	}
 	return "";
 }
@@ -305,10 +365,16 @@ sub GDS_GetUpdate($) {
 	my $name = $hash->{NAME};
 	my (@a, $next);
 
-	push @a, undef;
-	push @a, undef;
-	push @a, ReadingsVal($name, "c_stationName", "");
-	retrieveConditions($hash, "c", @a);
+	if(IsDisabled($name)) {
+		readingsSingleUpdate($hash, 'state', 'disabled', 0);
+		Log3 ($name, 2, "GDS $name is disabled, data update cancelled.");
+	} else {
+		readingsSingleUpdate($hash, 'state', 'active', 0);
+		push @a, undef;
+		push @a, undef;
+		push @a, ReadingsVal($name, "c_stationName", "");
+		retrieveConditions($hash, "c", @a);
+	}
 
 	$next = gettimeofday()+$hash->{helper}{INTERVAL};
 	readingsSingleUpdate($hash, "c_nextUpdate", localtime($next), 1);
@@ -324,44 +390,6 @@ sub GDS_GetUpdate($) {
 #
 ####################################################################################################
 
-sub nb_getReread($) {
-	my ($hash) = @_;
-	my $name = $hash->{NAME};
-	Log3($name, 4, "GDS $name: nb_getReread started");
-	nb_retrieveFile("$name|conditions");
-	nb_retrieveFile("$name|alerts");
-	initDropdownLists($hash);
-	Log3($name, 4, "GDS $name: nb_getReread finished");
-	return;
-}
-
-sub nb_setReread($) {
-	my ($hash) = @_;
-	my $name = $hash->{NAME};
-	Log3($name, 4, "GDS $name: nb_setReread started");
-	eval {
-		nb_retrieveFile("$name|conditions");
-		$sList = getListStationsDropdown($hash);
-	}; 
-	eval {
-		nb_retrieveFile("$name|alerts");
-		($aList, undef) = buildCAPList($hash);
-	}; 
-	Log3($name, 4, "GDS $name: nb_setReread finished");
-	return;
-}
-
-sub nb_defRead($) {
-	my ($hash) = @_;
-	my $name = $hash->{NAME};
-	Log3($name, 4, "GDS $name: nb_defRead started");
-	nb_retrieveFile("$name|conditions");
-	$sList = getListStationsDropdown($hash);
-	nb_retrieveFile("$name|alerts");
-	($aList, undef) = buildCAPList($hash);
-	Log3($name, 4, "GDS $name: nb_defRead finished");
-	return;
-}
 
 sub getHelp(){
 	return	"Use one of the following commands:\n".
@@ -420,7 +448,7 @@ sub getListCapStations($$){
 	# prüfen, ob CSV schon vorhanden,
 	# falls nicht: vom Server holen
 	if (!-e $tempDir."caplist.csv"){
-		nb_retrieveFile("$name|$command");
+		retrieveFile($hash, $command);
 	}
 
 	# CSV öffnen und parsen
@@ -592,6 +620,7 @@ sub decodeCAPData($$){
 		readingsBulkUpdate($hash, $k, latin1ToUtf8($v)) if(defined($v)); }
 	readingsEndUpdate($hash, 1);
 	eval {readingsSingleUpdate($hash, 'a_eventCode_AREA_COLOR_hex', _rgbd2h(ReadingsVal($name, 'a_eventCode_AREA_COLOR', '')),0);};
+
 	return;
 }
 
@@ -672,7 +701,7 @@ sub retrieveConditions($$@){
 
 	Log3($name, 4, "GDS $name: Retrieving conditions data");
 	
-	nb_retrieveFile("$name|conditions|||1");
+	($dataFile, $found) = retrieveFile($hash,"conditions",undef,undef,1);
 	open WXDATA, $tempDir.$name."_conditions";
 	while (chomp($line = <WXDATA>)) {
 		map {s/\r//g;} ($line);
@@ -735,12 +764,11 @@ sub retrieveConditions($$@){
 	return ;
 }
 
-sub xxx_retrieveFile($$;$$$){
+sub retrieveFile($$;$$$){
 #
 # request = type, e.g. alerts, conditions, warnings
 # parameter = additional selector, e.g. Bundesland
 #
-Debug "retrieveFile started!";
 	my ($hash, $request, $parameter, $parameter2, $useFtp) = @_;
 	my $name		= $hash->{NAME};
 	my $user		= $hash->{helper}{USER};
@@ -749,153 +777,6 @@ Debug "retrieveFile started!";
 	my $proxyType	= AttrVal($name, "gdsProxyType", "");
 	my $passive		= AttrVal($name, "gdsPassiveFtp", 0);
 	my $debug		= AttrVal($name, "gdsDebug",0);
-
-	my ($dwd, $dir, $ftp, @files, $dataFile, $targetFile, $found, $readingName);
-	
-	my $urlString =	"ftp://$user:$pass\@ftp-outgoing2.dwd.de/";
-	my $ua;
-	eval { $ua = LWP::UserAgent->new; };
-
-	if(!defined($ua)) {
-		Log3($name, 1, "GDS $name: LWP not available!");
-		readingsSingleUpdate($hash, 'LWP error', 'LWP not available!',1);
-		return;
-	}
-
-	$ua->timeout(10);
-	$ua->env_proxy;
-
-	given($request){
-
-		when("capstations"){
-			$dir = "gds/help/";
-			$dwd = "legend_warnings_CAP_WarnCellsID.csv";
-			$targetFile = $tempDir.$request.".csv";
-			break;
-		}
-
-		when("conditionsmap"){
-			$dir = "gds/specials/observations/maps/germany/";
-			$dwd = $parameter."*";
-			$targetFile = $tempDir.$name."_".$request.".jpg";
-			break;
-		}
-
-		when("forecastsmap"){
-			$dir = "gds/specials/forecasts/maps/germany/";
-			$dwd = $parameter."*";
-			$targetFile = $tempDir.$name."_".$request.".jpg";
-			break;
-		}
-
-		when("warningsmap"){
-			if(length($parameter) != 2){
-				$parameter = $bula2bulaShort{lc($parameter)};
-			}
-			$dwd = "Schilder".$dwd2Dir{$bulaShort2dwd{lc($parameter)}}.".jpg";
-			$dir = "gds/specials/warnings/maps/";
-			$targetFile = $tempDir.$name."_".$request.".jpg";
-			break;
-		}
-
-		when("radarmap"){
-			$dir = "gds/specials/radar/".$parameter2;
-			$dwd = "Webradar_".$parameter."*";
-			$targetFile = $tempDir.$name."_".$request.".jpg";
-			break;
-		}
-
-		when("alerts"){
-			$dir = "gds/specials/warnings/xml/PVW/";
-			$dwd = "Z_CAP*";
-			$targetFile = $tempDir.$name."_".$request;
-			break;
-			}
-
-		when("conditions"){
-			$useFtp = 1;
-			$dir = "gds/specials/observations/tables/germany/";
-			$dwd = "*";
-			$targetFile = $tempDir.$name."_".$request;
-			break;
-			}
-
-		when("warnings"){
-			$useFtp = 1;
-			if(length($parameter) != 2){
-				$parameter = $bula2bulaShort{lc($parameter)};
-			}
-			$dwd = $bulaShort2dwd{lc($parameter)};
-			$dir = $dwd2Dir{$dwd};
-			$dwd = "VHDL".$parameter2."_".$dwd."*";
-			$dir = "gds/specials/warnings/".$dir."/";
-			$targetFile = $tempDir.$name."_".$request;
-			break;
-			}
-	}
-
-	Log3($name, 4, "GDS $name: searching for $dir".$dwd." on DWD server");
-	$urlString .= $dir;
-
-	$found = 0;
-	eval {
-		$ftp = Net::FTP->new(	"ftp-outgoing2.dwd.de",
-								Debug => 0,
-								Timeout => 10,
-								Passive => $passive,
-								FirewallType => $proxyType,
-								Firewall => $proxyName);
-		Log3($name, 4, "GDS $name: ftp connection established.");
-		if(defined($ftp)){
-			$ftp->login($user, $pass);
-			$ftp->cwd("$dir");
-			@files = undef;
-			@files = $ftp->ls($dwd);
-			if(@files){
-				Log3($name, 4, "GDS $name: filelist found.");
-				@files = sort(@files);
-				$dataFile = $files[-1];
-				$urlString .= $dataFile;
-				Log3($name, 4, "GDS $name: retrieving $dataFile");
-				if($useFtp){
-					Log3($name, 4, "GDS $name: using FTP for retrieval");
-					$ftp->get($files[-1], $targetFile);
-				} else {
-					Log3($name, 4, "GDS $name: using HTTP for retrieval");
-					$ua->get($urlString,':content_file' => $targetFile);
-				}
-				$found = 1;
-			} else { 
-				Log3($name, 4, "GDS $name: filelist not found.");
-				$found = 0;
-			}
-			$ftp->quit;
-		}
-		Log3($name, 4, "GDS $name: updating readings.");
-		readingsBeginUpdate($hash);
-		readingsBulkUpdate($hash, "_dataSource",		"Quelle: Deutscher Wetterdienst");
-		readingsBulkUpdate($hash, "_dF_".$request, $dataFile) if(AttrVal($name, "gdsDebug", 0));
-		readingsEndUpdate($hash, 1);
-	};
-	return ($dataFile, $found);
-}
-
-sub nb_retrieveFile($){
-#
-# request = type, e.g. alerts, conditions, warnings
-# parameter = additional selector, e.g. Bundesland
-#
-	my ($string) = @_;
-	my ($name, $request, $parameter, $parameter2, $useFtp) = split("\\|",$string);
-	my $hash = $defs{$name};
-	my $user		= $hash->{helper}{USER};
-	my $pass		= $hash->{helper}{PASS};
-	my $proxyName	= AttrVal($name, "gdsProxyName", "");
-	my $proxyType	= AttrVal($name, "gdsProxyType", "");
-	my $passive		= AttrVal($name, "gdsPassiveFtp", 0);
-	my $debug		= AttrVal($name, "gdsDebug",0);
-
-	Log3($name, 4, "GDS $name: nb_retrievFile started");
 
 	my ($dwd, $dir, $ftp, @files, $dataFile, $targetFile, $found, $readingName);
 	
@@ -1075,7 +956,7 @@ sub sepLine($) {
 sub _rgbd2h($) {
 	my ($input) = @_;
 	my @a = split(" ", $input);
-	my $output = sprintf( "%x%x%x", $a[0],$a[1],$a[2]);
+	my $output = sprintf( "%02x%02x%02x", $a[0],$a[1],$a[2]);
 	return $output;
 }
 
@@ -1317,6 +1198,8 @@ sub initDropdownLists($){
 #	2014-05-23	added set <name> clear alerts|all
 #							fixed some typos in docu and help
 #
+#	2014-10-15	added:	attr disable
+#
 ####################################################################################################
 #
 # Further informations
@@ -1497,6 +1380,7 @@ sub initDropdownLists($){
 		<li><a href="#do_not_notify">do_not_notify</a></li>
 		<li><a href="#readingFnAttributes">readingFnAttributes</a></li>
 		<br/>
+		<li><b>disable</b> - if set, gds will not try to connect to internet</li>
 		<li><b>gdsAll</b> - defines filter for "all data" from alert message</li>
 		<li><b>gdsDebug</b> - defines filter for debug informations</li>
 		<li><b>gdsSetCond</b> - defines conditions area to be used after system restart</li>
