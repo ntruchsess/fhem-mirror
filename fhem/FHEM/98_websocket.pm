@@ -291,6 +291,7 @@ Timer($) {
   unless ($cl->{pong_received}) {
     Log3 ($cl->{NAME},3,"websocket $cl->{NAME} disconnect due to timeout");
     closeSocket($cl);
+    return undef;
   }
   $cl->{pong_received} = 0;
   InternalTimer(gettimeofday()+$cl->{timeout}, "websocket::Timer", $cl, 0);
