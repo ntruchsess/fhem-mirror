@@ -151,12 +151,13 @@ Read($) {
     }
     #Log3 ($sname,5,Dumper($cl->{hs}));
     Log3 ($sname,5,$cl->{hs}->to_string);
-    syswrite($cl->{CD},$cl->{hs}->to_string);
-    $cl->{ws} = 'open';
-    $cl->{frame} = $cl->{hs}->build_frame;
     $cl->{resource} = $cl->{hs}->req->resource_name;
     $cl->{protocols} = [split "[ ,]",$cl->{hs}->req->subprotocol];
     $cl->{json} = grep (/^json$/,@{$cl->{protocols}}) ? 1 : 0;
+    $cl->{hs}->res->subprotocol('json') if ($cl->{json});
+    syswrite($cl->{CD},$cl->{hs}->to_string);
+    $cl->{ws} = 'open';
+    $cl->{frame} = $cl->{hs}->build_frame;
     
     if ($hash = $main::defs{$sname}) {
       foreach my $arg (keys %{$hash->{onopen}}) {
