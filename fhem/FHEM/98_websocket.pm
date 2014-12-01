@@ -100,6 +100,7 @@ Define($$$)
   $hash->{NOTIFYDEV} = '';
   $hash->{onopen} = {};
   $hash->{onclose} = {};
+  $hash->{onprotocol} = {};
 
   if ($main::init_done) {
     Init($hash);
@@ -114,6 +115,7 @@ Init($) {
   } elsif ($ret = TcpServer_Open($hash, $hash->{port}, $hash->{global})) {
     Log3 ($hash->{NAME}, 1, "websocket failed to open port: $ret");
   }
+  subscribeProtocol($hash,\&onSocketProtocol,$hash);
   subscribeOpen($hash,\&onSocketConnected,$hash);
 }
 
@@ -153,12 +155,24 @@ Read($) {
     Log3 ($sname,5,$cl->{hs}->to_string);
     $cl->{resource} = $cl->{hs}->req->resource_name;
     $cl->{protocols} = [split "[ ,]",$cl->{hs}->req->subprotocol];
-    $cl->{json} = grep (/^json$/,@{$cl->{protocols}}) ? 1 : 0;
-    $cl->{hs}->res->subprotocol('json') if ($cl->{json});
+    if ($hash = $main::defs{$sname}) {
+      foreach my $arg (keys %{$hash->{onprotocol}}) {
+        my $protocol = eval {
+          return &{$hash->{onprotocol}->{$arg}}($cl,$arg,@{$cl->{protocols}});
+        };
+        Log3 ($sname,4,"websocket: ".GP_Catch($@)) if $@;
+        if (defined $protocol) {
+          Log3 ($sname,4,"websocket: protocol chosen '$protocol'");
+          $cl->{hs}->res->subprotocol($protocol);
+          $cl->{protocol} = $protocol;
+          last;
+        }
+      }
+    }
     syswrite($cl->{CD},$cl->{hs}->to_string);
     $cl->{ws} = 'open';
     $cl->{frame} = $cl->{hs}->build_frame;
-    
+
     if ($hash = $main::defs{$sname}) {
       foreach my $arg (keys %{$hash->{onopen}}) {
         eval {
@@ -326,6 +340,13 @@ sendMessage($%) {
 }
 
 sub
+onSocketProtocol($$@) {
+  my ($cl,$hash,@protocols) = @_;
+  $cl->{json} = grep (/^json$/,@protocols) ? 1 : 0;
+  return $cl->{json} ? 'json' : undef;
+}
+
+sub
 onSocketConnected($$) {
   my ($cl,$hash) = @_;
   Log3($cl->{SNAME},5,"websocket onSocketConnected");
@@ -396,6 +417,21 @@ sub _fhemTimeGm($)
 }
 
 # these are master hash API methods:
+
+sub
+subscribeProtocol($$$) {
+  my ($hash,$fn,$arg) = @_;
+  $hash->{onprotocol}->{$arg} = $fn;
+  Log3 ($hash->{NAME},5,"websocket subscribeProtocol $fn");
+}
+
+sub
+unsubscribeProtocol($$) {
+  my ($hash,$arg) = @_;
+  my $deleted = (delete $hash->{onprotocol}->{$arg}) // "- undefined -";
+  Log3 ($hash->{NAME},5,"websocket unsubscribeProtocol");
+}
+
 sub
 subscribeOpen($$$) {
   my ($hash,$fn,$arg) = @_;
