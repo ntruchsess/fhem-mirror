@@ -100,7 +100,6 @@ Define($$$)
   $hash->{NOTIFYDEV} = '';
   $hash->{onopen} = {};
   $hash->{onclose} = {};
-  $hash->{onprotocol} = {};
 
   if ($main::init_done) {
     Init($hash);
@@ -115,7 +114,6 @@ Init($) {
   } elsif ($ret = TcpServer_Open($hash, $hash->{port}, $hash->{global})) {
     Log3 ($hash->{NAME}, 1, "websocket failed to open port: $ret");
   }
-  subscribeProtocol($hash,\&onSocketProtocol,$hash);
   subscribeOpen($hash,\&onSocketConnected,$hash);
 }
 
@@ -131,6 +129,8 @@ Read($) {
     $chash->{ws} = 'new';
     $chash->{timeout} = AttrVal($name,"timeout",30);
     $chash->{pong_received} = 1;
+    $chash->{ontextmessage} = {};
+    $chash->{onbinarymessage} = {};
     return;
   }
 
@@ -156,9 +156,9 @@ Read($) {
     $cl->{resource} = $cl->{hs}->req->resource_name;
     $cl->{protocols} = [split "[ ,]",$cl->{hs}->req->subprotocol];
     if ($hash = $main::defs{$sname}) {
-      foreach my $arg (keys %{$hash->{onprotocol}}) {
+      foreach my $arg (keys %{$hash->{onopen}}) {
         my $protocol = eval {
-          return &{$hash->{onprotocol}->{$arg}}($cl,$arg,@{$cl->{protocols}});
+          return &{$hash->{onopen}->{$arg}}($cl,$arg,$cl->{resource},@{$cl->{protocols}});
         };
         Log3 ($sname,4,"websocket: ".GP_Catch($@)) if $@;
         if (defined $protocol) {
@@ -172,15 +172,6 @@ Read($) {
     syswrite($cl->{CD},$cl->{hs}->to_string);
     $cl->{ws} = 'open';
     $cl->{frame} = $cl->{hs}->build_frame;
-
-    if ($hash = $main::defs{$sname}) {
-      foreach my $arg (keys %{$hash->{onopen}}) {
-        eval {
-          &{$hash->{onopen}->{$arg}}($cl,$arg);
-        };
-        Log3 ($sname,4,"websocket: ".GP_Catch($@)) if $@;
-      }
-    }
     Timer($cl);
   }
 
@@ -195,33 +186,22 @@ Read($) {
         };
         $frame->is_text and do {
           Log3 ($sname,5,"websocket text $message");
-          if ($cl->{json}) {
+          foreach my $arg (keys %{$cl->{ontextmessage}}) {
             eval {
-              if (my $json = decode_json $message) {
-                #Log3 ($sname,5,"websocket jsonmessage: ".Dumper($json));
-                if (defined (my $type = $json->{type})) {
-                  if (defined (my $subscriptions = $cl->{typeSubscriptions}->{$type})) {
-                    foreach my $arg (keys %$subscriptions) {
-                      my $fn = $subscriptions->{$arg};
-                      &$fn($cl,$json->{payload},$arg);
-                    }
-                  } else {
-                    Log3 ($sname,5,"websocket ignoring json-message type '$type' without subscription");
-                  }
-                } else {
-                  Log3 ($sname,4,"websocket json-message without type: $message");
-                }
-              }
+              &{$cl->{ontextmessage}->{$arg}}($cl,$arg,$message);
             };
             Log3 ($sname,4,"websocket: ".GP_Catch($@)) if $@;
-          } else {
-            my $ret = AnalyzeCommandChain($cl, $message);
-            sendMessage($cl, type => 'text', buffer => $ret) if (defined $ret);
           }
           last;
         };
         $frame->is_binary and do {
           Log3 ($sname,5,"websocket binary $message");
+          foreach my $arg (keys %{$cl->{onbinarymessage}}) {
+            eval {
+              &{$cl->{onbinarymessage}->{$arg}}($cl,$arg,$message);
+            };
+            Log3 ($sname,4,"websocket: ".GP_Catch($@)) if $@;
+          }
           last;
         };
         $frame->is_ping and do {
@@ -282,18 +262,11 @@ sub Notify() {
     unless ($cl->{CD} and $cl->{hs} and $cl->{ws} eq 'open') {; # for connected clients in state open only
       Log3 ($name,5,"skip notify unconnected $clname for $dev->{NAME}");
     } else {
-      foreach my $arg (keys %{$cl->{eventSubscriptions}}) {
-        my @changed = ();
-        foreach my $changed (@{$dev->{CHANGED}}) {
-          push @changed,$changed if (grep {($dev->{NAME} =~ /$_->{name}/) and ($dev->{TYPE} =~ /$_->{type}/) and ($changed =~ /$_->{changed}/)} @{$cl->{eventSubscriptions}->{$arg}});
-        }
-        sendTypedMessage($cl,'event',{
-          name    => $dev->{NAME},
-          type    => $dev->{TYPE},
-          arg     => $arg,
-          'time'  => strftime ("%c GMT", _fhemTimeGm($dev->{NTFY_TRIGGERTIME})),
-          changed => {map {$_=~ /^([^:]+)(: )?(.*)$/; ((defined $3) and ($3 ne "")) ? ($1 => $3) : ('STATE' => $1) } @changed},
-        }) if (@changed);
+      foreach my $arg (keys %{$cl->{onevent}}) {
+        eval {
+          &{$cl->{onevent}->{$arg}}($cl,$arg,$dev);
+        };
+        Log3 ($name,4,"websocket: ".GP_Catch($@)) if $@;
       }
     }
   }
@@ -339,18 +312,61 @@ sendMessage($%) {
   syswrite($cl->{CD}, $cl->{hs}->build_frame(%msg)->to_bytes);
 }
 
+# these are websocket-protocol callback methods:
+
 sub
-onSocketProtocol($$@) {
-  my ($cl,$hash,@protocols) = @_;
-  $cl->{json} = grep (/^json$/,@protocols) ? 1 : 0;
-  return $cl->{json} ? 'json' : undef;
+onSocketConnected($$$@) {
+  my ($cl,$hash,$resource,@protocols) = @_;
+  if (grep (/^json$/,@protocols)) {
+    subscribeTextMessage($cl,\&onJsonMessage,$cl);
+    subscribeEvents($cl,\&onEventJson,$cl);
+    subscribeMsgType($cl,'command',\&onCommandMessage,$cl);
+    return 'json';
+  } else {
+    subscribeTextMessage($cl,\&onFhemMessage,$cl);
+    return 'fhem';
+  }
 }
 
 sub
-onSocketConnected($$) {
-  my ($cl,$hash) = @_;
-  Log3($cl->{SNAME},5,"websocket onSocketConnected");
-  subscribeMsgType($cl,'command',\&onCommandMessage,$cl);
+onJsonMessage($$$) {
+  my ($cl,$hash,$message) = @_;
+  eval {
+    if (my $json = decode_json $message) {
+      #Log3 ($sname,5,"websocket jsonmessage: ".Dumper($json));
+      if (defined (my $type = $json->{type})) {
+        if (defined (my $subscriptions = $cl->{typeSubscriptions}->{$type})) {
+          foreach my $arg (keys %$subscriptions) {
+            my $fn = $subscriptions->{$arg};
+            &$fn($cl,$json->{payload},$arg);
+          }
+        } else {
+          Log3 ($cl->{SNAME},5,"websocket ignoring json-message type '$type' without subscription");
+        }
+      } else {
+        Log3 ($cl->{SNAME},4,"websocket json-message without type: $message");
+      }
+    }
+  };
+  Log3 ($cl->{SNAME},4,"websocket: ".GP_Catch($@)) if $@;
+}
+
+sub
+onEventJson($$$) {
+  my ($cl,$hash,$dev) = @_;
+  foreach my $arg (keys %{$cl->{eventSubscriptions}}) {
+    my @changed = ();
+    foreach my $changed (@{$dev->{CHANGED}}) {
+      push @changed,$changed if (grep {($dev->{NAME} =~ /$_->{name}/) and ($dev->{TYPE} =~ /$_->{type}/) and ($changed =~ /$_->{changed}/)} @{$cl->{eventSubscriptions}->{$arg}});
+    }
+    sendTypedMessage($cl,'event',{
+      name    => $dev->{NAME},
+      type    => $dev->{TYPE},
+      arg     => $arg,
+      'time'  => strftime ("%c GMT", _fhemTimeGm($dev->{NTFY_TRIGGERTIME})),
+      changed => {map {$_=~ /^([^:]+)(: )?(.*)$/; ((defined $3) and ($3 ne "")) ? ($1 => $3) : ('STATE' => $1) } @changed},
+    }) if (@changed);
+  }
 }
 
 sub
@@ -409,6 +425,12 @@ onCommandMessage($$$) {
   }
 }
 
+sub onFhemMessage($$$) {
+  my ($cl,$hash,$message) = @_;
+  my $ret = AnalyzeCommandChain($cl, $message);
+  sendMessage($cl, type => 'text', buffer => $ret) if (defined $ret);
+}
+
 sub _fhemTimeGm($)
 {
   my ($fhemtime) = @_;
@@ -417,20 +439,6 @@ sub _fhemTimeGm($)
 }
 
 # these are master hash API methods:
-
-sub
-subscribeProtocol($$$) {
-  my ($hash,$fn,$arg) = @_;
-  $hash->{onprotocol}->{$arg} = $fn;
-  Log3 ($hash->{NAME},5,"websocket subscribeProtocol $fn");
-}
-
-sub
-unsubscribeProtocol($$) {
-  my ($hash,$arg) = @_;
-  my $deleted = (delete $hash->{onprotocol}->{$arg}) // "- undefined -";
-  Log3 ($hash->{NAME},5,"websocket unsubscribeProtocol");
-}
 
 sub
 subscribeOpen($$$) {
@@ -461,6 +469,51 @@ unsubscribeClose($$) {
 }
 
 # these are client hash API methods:
+
+sub
+subscribeTextMessage($$$) {
+  my ($cl,$fn,$arg) = @_;
+  $cl->{ontextmessage}->{$arg} = $fn;
+  Log3 ($cl->{SNAME},5,"websocket subscribeTextMessage $fn");
+}
+
+sub
+unsubscribeTextMessage($$) {
+  my ($cl,$arg) = @_;
+  my $deleted = (delete $cl->{ontextmessage}->{$arg}) // "- undefined -";
+  Log3 ($cl->{SNAME},5,"websocket unsubscribeTextMessage");
+}
+
+sub
+subscribeBinaryMessage($$$) {
+  my ($cl,$fn,$arg) = @_;
+  $cl->{onbinarymessage}->{$arg} = $fn;
+  Log3 ($cl->{SNAME},5,"websocket subscribeBinaryMessage $fn");
+}
+
+sub
+unsubscribeBinaryMessage($$) {
+  my ($cl,$arg) = @_;
+  my $deleted = (delete $cl->{onbinarymessage}->{$arg}) // "- undefined -";
+  Log3 ($cl->{SNAME},5,"websocket unsubscribeBinaryMessage");
+}
+
+sub
+subscribeEvents($$$) {
+  my ($cl,$fn,$arg) = @_;
+  $cl->{onevent}->{$arg} = $fn;
+  Log3 ($cl->{SNAME},5,"websocket subscribeEvents $fn");
+}
+
+sub
+unsubscribeEvents($$) {
+  my ($cl,$arg) = @_;
+  my $deleted = (delete $cl->{onevent}->{$arg}) // "- undefined -";
+  Log3 ($cl->{SNAME},5,"websocket unsubscribeEvents");
+}
+
+# these are json-protocol API methods:
+
 sub
 subscribeMsgType($$$$) {
   my ($cl,$type,$sub,$arg) = @_;
