@@ -40,6 +40,7 @@ websocket_json_Initialize($)
   # Provider
   $hash->{DefFn}    = "websocket_json::Define";
   $hash->{NotifyFn} = "websocket_json::Notify";
+  $hash->{AttrFn}   = "websocket_json::Attr";
   $hash->{AttrList} = "IODev";
   
   main::LoadModule("websocket");
@@ -60,6 +61,7 @@ use Data::Dumper;
 
 BEGIN {GP_Import(qw(
   AssignIoPort
+  CommandDefine
   Log3
   devspec2array
   IsIgnored
@@ -74,8 +76,11 @@ Define($$$)
 {
   my ($hash, $def) = @_;
 
-  return "Usage: define <name> websocket_json" if (split("[ \t][ \t]*", $def) != 2);
+  my @args = split("[ \t][ \t]*", $def);
 
+  return "Usage: define <name> websocket_json" if (@args < 2 or @args > 3);
+
+  $hash->{resource} = @args == 3 ? $args[3] : '/';
   $hash->{NOTIFYDEV} = '';
   $hash->{websockets} = [];
   subscribeMsgType($hash,'command',\&onCommandMessage);
@@ -89,6 +94,10 @@ sub
 Init($) {
   my ($hash) = @_;
   AssignIoPort($hash);
+  unless ($hash->{IODev}) {
+    CommandDefine(undef, "websocketPort websocket 8080 global");
+    AssignIoPort($hash);
+  }
   if ($hash->{IODev}) {
     websocket::subscribeOpen($hash->{IODev},\&onSocketConnected,$hash);
     websocket::subscribeClose($hash->{IODev},\&onSocketClosed,$hash);
@@ -122,12 +131,40 @@ sub Notify() {
   }
 }
 
+sub
+Attr($$$$) {
+  my ($command,$name,$attribute,$value) = @_;
+  my $hash = $main::defs{$name};
+  eval {
+    ARGUMENT_HANDLER: {
+      $attribute eq "IODev" and do {
+        if ($hash->{IODev}) {
+          websocket::unsubscribeOpen($hash->{IODev},$hash);
+          websocket::unsubscribeClose($hash->{IODev},$hash);
+        };
+        if ($command eq "set") {
+          if ($main::init_done and (!defined ($hash->{IODev}) or $hash->{IODev}->{NAME} ne $value)) {
+            AssignIOPort($hash,$value);
+            if ($hash->{IODev}) {
+              websocket::subscribeOpen($hash->{IODev},\&onSocketConnected,$hash);
+              websocket::subscribeClose($hash->{IODev},\&onSocketClosed,$hash);
+            }
+          }
+        };
+        last;
+      };
+    }
+  };
+  return "websocket_json: error setting attr '$attribute': ".GP_Catch($@) if $@;
+  return undef;
+}
+
 # these are websocket-protocol callback methods:
 
 sub
 onSocketConnected($$$@) {
   my ($cl,$hash,$resource,@protocols) = @_;
-  if (grep (/^json$/,@protocols)) {
+  if ($resource eq $hash->{resource} and grep (/^json$/,@protocols)) {
     websocket::subscribeTextMessage($cl,\&onMessage,$hash);
     push @{$hash->{websockets}},$cl;
     return 'json';
@@ -159,7 +196,7 @@ onMessage($$$) {
       }
     }
   };
-  Log3 ($cl->{SNAME},4,"websocket: ".GP_Catch($@)) if $@;
+  Log3 ($cl->{SNAME},4,"websocket_json: ".GP_Catch($@)) if $@;
 }
 
 sub
@@ -289,9 +326,13 @@ sendTypedMessage($$$) {
   <a name="websocket_jsondefine"></a>
   <b>Define</b>
   <ul>
-    <code>define &lt;name&gt; websocket_json</code><br><br>
+    <code>define &lt;name&gt; websocket_json [resource]</code><br><br>
 
-    Defines a protocol-handler for json over websocket
+    Defines a protocol-handler for json over websocket.<br>
+    The optional parameter 'resource' defines an URL-path that this websocket_json<br>
+    device should be configured for. e.g. 'define json websocket_json /fhem'<br>
+    This way multiple websocket_json-devices may share a single port.<br>
+    'resource' defaults to '/'
   </ul>
   <br>
 

@@ -90,7 +90,7 @@ function fhem() {
 		if (fhem.connected) {
 			fhem.disconnect();
 		}
-		
+
 		con = new WebSocket((fhem.secure ? 'wss://' : 'ws://')+address+':'+port, ['json']);
 
 		con.onopen = function() {

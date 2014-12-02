@@ -30,13 +30,13 @@ fhem.onlist = function() {
 }
 
 openCon = function() {
-	fhem.secure = false;
+  fhem.secure = false;
   fhem.connect('localhost','8080');
 }
 
 openSecureCon = function() {
-	fhem.secure = true;
-	fhem.connect('localhost','8080')
+  fhem.secure = true;
+  fhem.connect('localhost','8080')
 }
 
 closeCon = function() {
