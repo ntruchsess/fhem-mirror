@@ -5,6 +5,7 @@ function fhem() {
 	var msgtypes = {};
 
 	fhem.connected = false;
+	fhem.secure = false;
 	fhem.devices = {};
 	fhem.ondebug = null;
 	fhem.onerror = null;
@@ -90,7 +91,7 @@ function fhem() {
 			fhem.disconnect();
 		}
 		
-		con = new WebSocket('ws://'+address+':'+port, ['json']);
+		con = new WebSocket((fhem.secure ? 'wss://' : 'ws://')+address+':'+port, ['json']);
 
 		con.onopen = function() {
 			fhem.connected = true;

@@ -133,12 +133,15 @@ Read($) {
     $chash->{pong_received} = 1;
     $chash->{ontextmessage} = {};
     $chash->{onbinarymessage} = {};
+    $chash->{SSL} = $hash->{SSL};
     return;
   }
 
   my $cl = $hash; # $hash is master device, $cl is open client
+  my $c = $cl->{CD};
   my $buf;
-  my $ret = sysread($cl->{CD}, $buf, 256);
+  my $ret = sysread($c, $buf, 256);
+
   if(!defined($ret) || $ret <= 0) {
     CommandDelete(undef, $name);
     return;
@@ -147,8 +150,17 @@ Read($) {
   my $sname = $cl->{SNAME};
   Log3 ($sname,5,$buf);
 
+  $cl->{BUF} .= $buf;
+  if($cl->{SSL} && $c->can('pending')) {
+    while($c->pending()) {
+      sysread($c, $buf, 256);
+      Log3 ($sname,5,$buf);
+      $cl->{BUF} .= $buf;
+    }
+  }
+
   if ($cl->{ws} eq 'new') {
-    unless ($cl->{hs}->parse($buf) and $cl->{hs}->is_done) {
+    unless ($cl->{hs}->parse($cl->{BUF}) and $cl->{hs}->is_done) {
       Log3 ($sname,5,$cl->{hs}->error) if ($cl->{hs}->error);
       #closeSocket($cl);
       return;
@@ -179,7 +191,7 @@ Read($) {
 
   if ($cl->{ws} eq 'open') {
     my $frame = $cl->{frame};
-    $frame->append($buf);
+    $frame->append($cl->{BUF});
     while (defined(my $message = $frame->next)) {
       MESSAGE: {
         $frame->is_continuation and do {
@@ -415,12 +427,8 @@ unsubscribeBinaryMessage($$) {
     <li>SSL<br>
         Enable SSL encryption of the connection, see the description <a
         href="#HTTPS">here</a> on generating the needed SSL certificates. To
-        connect to such a port use one of the following commands:
-        <ul>
-          socat openssl:fhemhost:fhemport,verify=0 readline<br>
-          ncat --ssl fhemhost fhemport<br>
-          openssl s_client -connect fhemhost:fhemport<br>
-        </ul>
+        connect to such a port you need to specify wss:// as protocol in URL
+        to connect the websocket to.
         </li><br>
 
     <a name="allowfrom"></a>
