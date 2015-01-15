@@ -1,6 +1,6 @@
 ##############################################
 #
-# fhem driver for MySensors serial or network gateway (see http://mysensors.org)
+# fhem bridge to MySensors (see http://mysensors.org)
 #
 # Copyright (C) 2014 Norbert Truchsess
 #
@@ -19,126 +19,212 @@
 #     You should have received a copy of the GNU General Public License
 #     along with fhem.  If not, see <http://www.gnu.org/licenses/>.
 #
-# $Id$
+# $Id: 10_MYSENSORS_DEVICE.pm 7112 2014-12-01 17:18:54Z ntruchsess $
 #
 ##############################################
-
-my %sets = (
-  "connect" => [],
-  "disconnect" => [],
-  "inclusion-mode" => [qw(on off)],
-);
-
-my %gets = (
-  "version"   => ""
-);
-
-my @clients = qw(
-  MYSENSORS_DEVICE
-);
-
-sub MYSENSORS_Initialize($) {
-
-  my $hash = shift @_;
-
-  require "$main::attr{global}{modpath}/FHEM/DevIo.pm";
-
-  # Provider
-  $hash->{Clients} = join (':',@clients);
-  $hash->{ReadyFn} = "MYSENSORS::Ready";
-  $hash->{ReadFn}  = "MYSENSORS::Read";
-
-  # Consumer
-  $hash->{DefFn}    = "MYSENSORS::Define";
-  $hash->{UndefFn}  = "MYSENSORS::Undef";
-  $hash->{SetFn}    = "MYSENSORS::Set";
-  $hash->{AttrFn}   = "MYSENSORS::Attr";
-  $hash->{NotifyFn} = "MYSENSORS::Notify";
-
-  $hash->{AttrList} = 
-    "autocreate:1 ".
-    "requestAck:1 ".
-    "first-sensorid ".
-    "last-sensorid ".
-    "stateFormat";
-}
-
-package MYSENSORS;
-
-use Exporter ('import');
-@EXPORT = ();
-@EXPORT_OK = qw(sendMessage);
-%EXPORT_TAGS = (all => [@EXPORT_OK]);
 
 use strict;
 use warnings;
 
+my %gets = (
+  "version"   => "",
+);
+
+sub MYSENSORS_DEVICE_Initialize($) {
+
+  my $hash = shift @_;
+
+  # Consumer
+  $hash->{DefFn}    = "MYSENSORS::DEVICE::Define";
+  $hash->{UndefFn}  = "MYSENSORS::DEVICE::UnDefine";
+  $hash->{SetFn}    = "MYSENSORS::DEVICE::Set";
+  $hash->{AttrFn}   = "MYSENSORS::DEVICE::Attr";
+  
+  $hash->{AttrList} =
+    "config:M,I ".
+    "mode:node,repeater ".
+    "version:1.4 ".
+    "setCommands ".
+    "setReading_.+ ".
+    "mapReadingType_.+ ".
+    "mapReading_.+ ".
+    "requestAck:1 ". 
+    "IODev ".
+    $main::readingFnAttributes;
+
+  main::LoadModule("MYSENSORS");
+}
+
+package MYSENSORS::DEVICE;
+
+use strict;
+use warnings;
 use GPUtils qw(:all);
 
 use Device::MySensors::Constants qw(:all);
 use Device::MySensors::Message qw(:all);
+use SetExtensions qw/ :all /;
 
-BEGIN {GP_Import(qw(
-  CommandDefine
-  CommandModify
-  CommandAttr
-  gettimeofday
-  readingsSingleUpdate
-  DevIo_OpenDev
-  DevIo_SimpleWrite
-  DevIo_SimpleRead
-  DevIo_CloseDev
-  RemoveInternalTimer
-  InternalTimer
-  AttrVal
-  Log3
-  ))};
+BEGIN {
+  MYSENSORS->import(qw(:all));
 
-my %sensorAttr = (
-  LIGHT => ['setCommands on:V_LIGHT:1 off:V_LIGHT:0' ],
-  ARDUINO_NODE => [ 'config M' ],
-  ARDUINO_REPEATER_NODE => [ 'config M' ],
+  GP_Import(qw(
+    AttrVal
+    readingsSingleUpdate
+    CommandAttr
+    CommandDeleteAttr
+    CommandDeleteReading
+    AssignIoPort
+    Log3
+    SetExtensions
+    ReadingsVal
+  ))
+};
+
+my %static_types = (
+  S_DOOR                  => { receives => [], sends => [V_TRIPPED] }, # BinarySwitchSensor
+  S_MOTION                => { receives => [], sends => [V_TRIPPED] }, # MotionSensor
+  S_SMOKE                 => { receives => [], sends => [] }, # Not used so far
+  S_LIGHT                 => { receives => [V_LIGHT], sends => [V_LIGHT] }, # BinarySwitchSensor
+  S_DIMMER                => { receives => [V_LIGHT,V_DIMMER], sends => [V_LIGHT,V_DIMMER] }, # DimmableLEDActuator
+  S_COVER                 => { receives => [V_DIMMER,V_UP,V_DOWN,V_STOP], sends => [V_DIMMER] }, # ServoActuator
+  S_TEMP                  => { receives => [], sends => [V_TEMP] }, # DallasTemperatureSensor
+  S_HUM                   => { receives => [], sends => [V_HUM] }, # HumiditySensor
+  S_BARO                  => { receives => [], sends => [V_PRESSURE,V_FORECAST] },
+  S_WIND                  => { receives => [], sends => [] }, # Not used so far
+  S_RAIN                  => { receives => [], sends => [] }, # Not used so far
+  S_UV                    => { receives => [], sends => [V_UV] }, # UVSensor
+  S_WEIGHT                => { receives => [], sends => [] }, # Not used so far
+  S_POWER                 => { receives => [V_VAR1], sends => [V_WATT,V_KWH,V_VAR1] }, # EnergyMeterPulseSensor
+  S_HEATER                => { receives => [], sends => [] }, # Not used so far
+  S_DISTANCE              => { receives => [], sends => [V_DISTANCE] }, # DistanceSensor
+  S_LIGHT_LEVEL           => { receives => [], sends => [V_LIGHT_LEVEL] }, # LightSensor
+  S_ARDUINO_NODE          => { receives => [], sends => [] }, # Not used so far
+  S_ARDUINO_REPEATER_NODE => { receives => [], sends => [] }, # Not used so far
+  S_LOCK                  => { receives => [V_LOCK_STATUS], sends => [V_LOCK_STATUS] }, #R FIDLockSensor
+  S_IR                    => { receives => [], sends => [] }, # Not used so far
+  S_WATER                 => { receives => [V_VAR1], sends => [V_FLOW,V_VOLUME,V_VAR1] }, # WaterMeterPulseSensor
+  S_AIR_QUALITY           => { receives => [], sends => [V_VAR1] }, # AirQualitySensor
+  S_CUSTOM                => { receives => [], sends => [] }, # Not used so far
+  S_DUST                  => { receives => [], sends => [V_DUST_LEVEL] }, # Not used so far
+  S_SCENE_CONTROLLER      => { receives => [], sends => [V_SCENE_ON,V_SCENE_OFF] }, # TouchDisplaySceneControllerDisplaySensor
+);
+
+my %static_mappings = (
+  V_TEMP        => { type => "temperature" },
+  V_HUM         => { type => "humidity" },
+  V_PRESSURE    => { type => "pressure" },
+  V_LIGHT_LEVEL => { type => "brightness" },
+  V_LIGHT       => { type => "switch", val => { 0 => 'off', 1 => 'on' }},
+  V_DIMMER      => { type => "dimmer", range => { min => 0, step => 1, max => 100 }},
+  V_FORECAST    => { type => "forecast", val => { # PressureSensor, DP/Dt explanation
+                                                  0 => 'stable',       # 0 = "Stable Weather Pattern"
+                                                  1 => 'slow rising',  # 1 = "Slowly rising Good Weather", "Clear/Sunny "
+                                                  2 => 'slow falling', # 2 = "Slowly falling L-Pressure ", "Cloudy/Rain "
+                                                  3 => 'quick rising', # 3 = "Quickly rising H-Press",     "Not Stable"
+                                                  4 => 'quick falling',# 4 = "Quickly falling L-Press",    "Thunderstorm"
+                                                  5 => 'unknown' }},   # 5 = "Unknown (More Time needed) 
+  V_RAIN        => { type => "rain" },
+  V_RAINRATE    => { type => "rainrate" },
+  V_WIND        => { type => "wind" },
+  V_GUST        => { type => "gust" },
+  V_DIRECTION   => { type => "direction" },
+  V_UV          => { type => "uv" },
+  V_WEIGHT      => { type => "weight" },
+  V_DISTANCE    => { type => "distance" },
+  V_IMPEDANCE   => { type => "impedance" },
+  V_ARMED       => { type => "armed" },
+  V_TRIPPED     => { type => "tripped", val => { 0 => 'off', 1 => 'on' }},
+  V_WATT        => { type => "power" },
+  V_KWH         => { type => "energy" },
+  V_SCENE_ON    => { type => "button_on" },
+  V_SCENE_OFF   => { type => "button_off" },
+  V_HEATER      => { type => "heater" },
+  V_HEATER_SW   => { type => "heater_sw" },
+  V_VAR1        => { type => "value1" },
+  V_VAR2        => { type => "value2" },
+  V_VAR3        => { type => "value3" },
+  V_VAR4        => { type => "value4" },
+  V_VAR5        => { type => "value5" },
+  V_UP          => { type => "up" },
+  V_DOWN        => { type => "down" },
+  V_STOP        => { type => "stop" },
+  V_IR_SEND     => { type => "ir_send" },
+  V_IR_RECEIVE  => { type => "ir_receive" },
+  V_FLOW        => { type => "flow" },
+  V_VOLUME      => { type => "volume" },
+  V_LOCK_STATUS => { type => "lockstatus", val => { 0 => 'off', 1 => 'on' }},
+  V_DUST_LEVEL  => { type => "dustlevel" },
+  V_VOLTAGE     => { type => "voltage" },
+  V_CURRENT     => { type => "current" },
 );
 
 sub Define($$) {
   my ( $hash, $def ) = @_;
+  my ($name, $type, $radioId) = split("[ \t]+", $def);
+  return "requires 1 parameters" unless (defined $radioId and $radioId ne "");
+  $hash->{radioId} = $radioId;
+  $hash->{sets} = {
+    'time' => "",
+    reboot => "",
+  };
+  $hash->{ack} = 0;
+  $hash->{typeMappings} = {map {variableTypeToIdx($_) => $static_mappings{$_}} keys %static_mappings};
+  $hash->{sensorMappings} = {map {sensorTypeToIdx($_) => $static_types{$_}} keys %static_types};
 
-  $hash->{NOTIFYDEV} = "global";
+  $hash->{readingMappings} = {};
+  AssignIoPort($hash);
+};
 
-  if ($main::init_done) {
-    return Start($hash);
-  } else {
-    return undef;
-  }
-}
+sub UnDefine($) {
+  my ($hash) = @_;
 
-sub Undef($) {
-  Stop(shift);
+  return undef;
 }
 
 sub Set($@) {
-  my ($hash, @a) = @_;
-  return "Need at least one parameters" if(@a < 2);
-  return "Unknown argument $a[1], choose one of " . join(" ", map {@{$sets{$_}} ? $_.':'.join ',', @{$sets{$_}} : $_} sort keys %sets)
-    if(!defined($sets{$a[1]}));
-  my $command = $a[1];
-  my $value = $a[2];
-
+  my ($hash,$name,$command,@values) = @_;
+  return "Need at least one parameters" unless defined $command;
+  if(!defined($hash->{sets}->{$command})) {
+    my $list = join(" ", map {$hash->{sets}->{$_} ne "" ? "$_:$hash->{sets}->{$_}" : $_} sort keys %{$hash->{sets}});
+    return grep (/(^on$)|(^off$)/,keys %{$hash->{sets}}) == 2 ? SetExtensions($hash, $list, $name, $command, @values) : "Unknown argument $command, choose one of $list";
+  }
   COMMAND_HANDLER: {
-    $command eq "connect" and do {
-      Start($hash);
+    $command eq "clear" and do {
+      sendClientMessage($hash, childId => 255, cmd => C_INTERNAL, subType => I_CHILDREN, payload => "C");
       last;
     };
-    $command eq "disconnect" and do {
-      Stop($hash);
+    $command eq "time" and do {
+      sendClientMessage($hash, childId => 255, cmd => C_INTERNAL, subType => I_TIME, payload => time);
       last;
     };
-    $command eq "inclusion-mode" and do {
-      sendMessage($hash,radioId => 0, childId => 0, cmd => C_INTERNAL, ack => 0, subType => I_INCLUSION_MODE, payload => $value eq 'on' ? 1 : 0);
-      $hash->{'inclusion-mode'} = $value eq 'on' ? 1 : 0;
+    $command eq "reboot" and do {
+      sendClientMessage($hash, childId => 255, cmd => C_INTERNAL, subType => I_REBOOT);
       last;
     };
-  };
+    (defined ($hash->{setcommands}->{$command})) and do {
+      my $setcommand = $hash->{setcommands}->{$command};
+      eval {
+        my ($type,$childId,$mappedValue) = mappedReadingToRaw($hash,$setcommand->{var},$setcommand->{val});
+        sendClientMessage($hash,
+          childId => $childId,
+          cmd => C_SET,
+          subType => $type,
+          payload => $mappedValue,
+        );
+        readingsSingleUpdate($hash,$setcommand->{var},$setcommand->{val},1) unless ($hash->{ack} or $hash->{IODev}->{ack});
+      };
+      return "$command not defined: ".GP_Catch($@) if $@;
+      last;
+    };
+    my $value = @values ? join " ",@values : "";
+    eval {
+      my ($type,$childId,$mappedValue) = mappedReadingToRaw($hash,$command,$value);
+      sendClientMessage($hash, childId => $childId, cmd => C_SET, subType => $type, payload => $mappedValue);
+      readingsSingleUpdate($hash,$command,$value,1) unless ($hash->{ack} or $hash->{IODev}->{ack});
+    };
+    return "$command not defined: ".GP_Catch($@) if $@;
+  }
 }
 
 sub Attr($$$$) {
@@ -146,11 +232,109 @@ sub Attr($$$$) {
 
   my $hash = $main::defs{$name};
   ATTRIBUTE_HANDLER: {
-    $attribute eq "autocreate" and do {
+    $attribute eq "config" and do {
       if ($main::init_done) {
-        my $mode = $command eq "set" ? 1 : 0;
-        sendMessage($hash,radioId => $hash->{radioId}, childId => $hash->{childId}, ack => 0, subType => I_INCLUSION_MODE, payload => $mode);
-        $hash->{'inclusion-mode'} = $mode;
+        sendClientMessage($hash, cmd => C_INTERNAL, childId => 255, subType => I_CONFIG, payload => $command eq 'set' ? $value : "M");
+      }
+      last;
+    };
+    $attribute eq "mode" and do {
+      if ($command eq "set" and $value eq "repeater") {
+        $hash->{repeater} = 1;
+        $hash->{sets}->{clear} = "";
+      } else {
+        $hash->{repeater} = 0;
+        delete $hash->{sets}->{clear};
+      }
+      last;
+    };
+    $attribute eq "version" and do {
+      if ($command eq "set") {
+        $hash->{protocol} = $value;
+      } else {
+        delete $hash->{protocol};
+      }
+      last;
+    };
+    $attribute eq "setCommands" and do {
+      foreach my $set (keys %{$hash->{setcommands}}) {
+        delete $hash->{sets}->{$set};
+      }
+      $hash->{setcommands} = {};
+      if ($command eq "set" and $value) {
+        foreach my $setCmd (split ("[, \t]+",$value)) {
+          if ($setCmd =~ /^(.+):(.+):(.+)$/) {
+            $hash->{sets}->{$1}="";
+            $hash->{setcommands}->{$1} = {
+              var => $2,
+              val => $3,
+            };
+          } else {
+            return "unparsable value in setCommands for $name: $setCmd";
+          }
+        }
+      }
+      last;
+    };
+    $attribute =~ /^setReading_(.+)$/ and do {
+      if ($command eq "set") {
+        $hash->{sets}->{$1}= (defined $value) ? join(",",split ("[, \t]+",$value)) : "";
+      } else {
+        CommandDeleteReading(undef,"$hash->{NAME} $1");
+        delete $hash->{sets}->{$1};
+      }
+      last;
+    };
+    $attribute =~ /^mapReadingType_(.+)/ and do {
+      my $type = variableTypeToIdx("V_$1");
+      if ($command eq "set") {
+        my @values = split ("[, \t]",$value);
+        $hash->{typeMappings}->{$type}={
+          type => shift @values,
+          val => {map {$_ =~ /^(.+):(.+)$/; $1 => $2} @values},
+        }
+      } else {
+        if ($static_mappings{"V_$1"}) {
+          $hash->{typeMappings}->{$type}=$static_mappings{"V_$1"};
+        } else {
+          delete $hash->{typeMappings}->{$type};
+        }
+        my $readings = $hash->{READINGS};
+        my $readingMappings = $hash->{readingMappings};
+        foreach my $todelete (map {$readingMappings->{$_}->{name}} grep {$readingMappings->{$_}->{type} == $type} keys %$readingMappings) {
+          CommandDeleteReading(undef,"$hash->{NAME} $todelete"); #TODO do propper remap of existing readings
+        }
+      }
+      last;
+    };
+    $attribute =~ /^mapReading_(.+)/ and do {
+      my $readingMappings = $hash->{readingMappings};
+      FIND: foreach my $id (keys %$readingMappings) {
+        my $readingsForId = $readingMappings->{$id};
+        foreach my $type (keys %$readingsForId) {
+          if (($readingsForId->{$type}->{name} // "") eq $1) {
+            delete $readingsForId->{$type};
+            unless (keys %$readingsForId) {
+              delete $readingMappings->{$id};
+            }
+            last FIND;
+          }
+        }
+      }
+      if ($command eq "set") {
+        my ($id,$typeStr,@values) = split ("[, \t]",$value);
+        my $typeMappings = $hash->{typeMappings};
+        if (my @match = grep {$typeMappings->{$_}->{type} eq $typeStr} keys %$typeMappings) {
+          my $type = shift @match;
+          $readingMappings->{$id}->{$type}->{name} = $1;
+          if (@values) {
+            $readingMappings->{$id}->{$type}->{val} = {map {$_ =~ /^(.+):(.+)$/; $1 => $2} @values}; #TODO range?
+          }
+        } else {
+          return "unknown reading type $typeStr";
+        }
+      } else {
+        CommandDeleteReading(undef,"$hash->{NAME} $1");
       }
       last;
     };
@@ -159,309 +343,214 @@ sub Attr($$$$) {
         $hash->{ack} = 1;
       } else {
         $hash->{ack} = 0;
-        $hash->{messages} = {};
-        $hash->{outstandingAck} = 0;
       }
       last;
     };
   }
 }
 
-sub Notify($$) {
-  my ($hash,$dev) = @_;
-  if( grep(m/^(INITIALIZED|REREADCFG)$/, @{$dev->{CHANGED}}) ) {
-    Start($hash);
-  } elsif( grep(m/^SAVE$/, @{$dev->{CHANGED}}) ) {
-  }
-}
-
-sub Start($) {
-  my $hash = shift;
-  my ($dev) = split("[ \t]+", $hash->{DEF});
-  $hash->{DeviceName} = $dev;
-  CommandAttr(undef, "$hash->{NAME} stateFormat connection") unless AttrVal($hash->{NAME},"stateFormat",undef);
-  DevIo_CloseDev($hash);
-  return DevIo_OpenDev($hash, 0, "MYSENSORS::Init");
-}
-
-sub Stop($) {
-  my $hash = shift;
-  DevIo_CloseDev($hash);
-  RemoveInternalTimer($hash);
-  readingsSingleUpdate($hash,"connection","disconnected",1);
-}
-
-sub Ready($) {
-  my $hash = shift;
-  return DevIo_OpenDev($hash, 1, "MYSENSORS::Init") if($hash->{STATE} eq "disconnected");
-}
-
-sub Init($) {
-  my $hash = shift;
-  my $name = $hash->{NAME};
-  $hash->{'inclusion-mode'} = AttrVal($name,"autocreate",0);
-  $hash->{ack} = AttrVal($name,"requestAck",0);
-  $hash->{outstandingAck} = 0;
-  if ($hash->{ack}) {
-    GP_ForallClients($hash,sub {
-      my $client = shift;
-      $hash->{messagesForRadioId}->{$client->{radioId}} = {
-        lastseen => -1,
-        nexttry  => -1,
-        numtries => 1,
-        messages => [],
-      };
-    });
-  }
-  readingsSingleUpdate($hash,"connection","connected",1);
-  sendMessage($hash, radioId => 0, childId => 0, cmd => C_INTERNAL, ack => 0, subType => I_VERSION, payload => '');
-  return undef;
-}
-
-sub Timer($) {
-  my $hash = shift;
-  my $now = time;
-  foreach my $radioid (keys %{$hash->{messagesForRadioId}}) {
-    my $msgsForId = $hash->{messagesForRadioId}->{$radioid};
-    if ($now > $msgsForId->{nexttry}) {
-      foreach my $msg (@{$msgsForId->{messages}}) {
-        my $txt = createMsg(%$msg);
-        Log3 ($hash->{NAME},5,"MYSENSORS outstanding ack, re-send: ".dumpMsg($msg));
-        DevIo_SimpleWrite($hash,"$txt\n",undef);
-      }
-      $msgsForId->{numtries}++;
-      $msgsForId->{nexttry} = gettimeofday()+$msgsForId->{numtries};
-    }
-  }
-  _scheduleTimer($hash);
-}
-
-sub Read {
+sub onGatewayStarted($) {
   my ($hash) = @_;
-  my $name = $hash->{NAME};
-
-  my $buf = DevIo_SimpleRead($hash);
-  return "" if(!defined($buf));
-
-  my $data = $hash->{PARTIAL};
-  Log3 ($name, 5, "MYSENSORS/RAW: $data/$buf");
-  $data .= $buf;
-
-  while ($data =~ m/\n/) {
-    my $txt;
-    ($txt,$data) = split("\n", $data, 2);
-    $txt =~ s/\r//;
-    if (my $msg = parseMsg($txt)) {
-      Log3 ($name,5,"MYSENSORS Read: ".dumpMsg($msg));
-
-      if ($msg->{ack}) {
-        onAcknowledge($hash,$msg);
-      }
-
-      my $type = $msg->{cmd};
-      MESSAGE_TYPE: {
-        $type == C_PRESENTATION and do {
-          onPresentationMsg($hash,$msg);
-          last;
-        };
-        $type == C_SET and do {
-          onSetMsg($hash,$msg);
-          last;
-        };
-        $type == C_REQ and do {
-          onRequestMsg($hash,$msg);
-          last;
-        };
-        $type == C_INTERNAL and do {
-          onInternalMsg($hash,$msg);
-          last;
-        };
-        $type == C_STREAM and do {
-          onStreamMsg($hash,$msg);
-          last;
-        };
-      }
-    } else {
-      Log3 ($name,5,"MYSENSORS Read: ".$txt."is no parsable mysensors message");
-    }
-  }
-  $hash->{PARTIAL} = $data;
-  return undef;
-};
-
-sub onPresentationMsg($$) {
-  my ($hash,$msg) = @_;
-  my $client = matchClient($hash,$msg);
-  my $clientname;
-  my $sensorType = $msg->{subType};
-  unless ($client) {
-    if ($hash->{'inclusion-mode'}) {
-      $clientname = "MYSENSOR_$msg->{radioId}";
-      CommandDefine(undef,"$clientname MYSENSORS_DEVICE $msg->{radioId}");
-      $client = $main::defs{$clientname};
-      return unless ($client);
-    } else {
-      Log3($hash->{NAME},3,"MYSENSORS: ignoring presentation-msg from unknown radioId $msg->{radioId}, childId $msg->{childId}, sensorType $sensorType");
-      return;
-    }
-  }
-  MYSENSORS::DEVICE::onPresentationMessage($client,$msg);
-};
-
-sub onSetMsg($$) {
-  my ($hash,$msg) = @_;
-  if (my $client = matchClient($hash,$msg)) {
-    MYSENSORS::DEVICE::onSetMessage($client,$msg);
-  } else {
-    Log3($hash->{NAME},3,"MYSENSORS: ignoring set-msg from unknown radioId $msg->{radioId}, childId $msg->{childId} for ".variableTypeToStr($msg->{subType}));
-  }
-};
-
-sub onRequestMsg($$) {
-  my ($hash,$msg) = @_;
-  if (my $client = matchClient($hash,$msg)) {
-    MYSENSORS::DEVICE::onRequestMessage($client,$msg);
-  } else {
-    Log3($hash->{NAME},3,"MYSENSORS: ignoring req-msg from unknown radioId $msg->{radioId}, childId $msg->{childId} for ".variableTypeToStr($msg->{subType}));
-  }
-};
-
-sub onInternalMsg($$) {
-  my ($hash,$msg) = @_;
-  my $address = $msg->{radioId};
-  my $type = $msg->{subType};
-  if ($address == 0 or $address == 255) { #msg to or from gateway
-    TYPE: {
-      $type == I_INCLUSION_MODE and do {
-        if (AttrVal($hash->{NAME},"autocreate",0)) { #if autocreate is switched on, keep gateways inclusion-mode active
-          if ($msg->{payload} == 0) {
-            sendMessage($hash,radioId => $msg->{radioId}, childId => $msg->{childId}, ack => 0, subType => I_INCLUSION_MODE, payload => 1);
-          }
-        } else {
-          $hash->{'inclusion-mode'} = $msg->{payload};
-        }
-        last;
-      };
-      $type == I_STARTUP_COMPLETE and do {
-        readingsSingleUpdate($hash,'connection','startup complete',1);
-        GP_ForallClients($hash,sub {
-          my $client = shift;
-          MYSENSORS::DEVICE::onGatewayStarted($client);
-        });
-        last;
-      };
-      $type == I_VERSION and do {
-        $hash->{version} = $msg->{payload};
-        last;
-      };
-      $type == I_LOG_MESSAGE and do {
-        Log3($hash->{NAME},5,"MYSENSORS gateway $hash->{NAME}: $msg->{payload}");
-        last;
-      };
-      $type == I_ID_REQUEST and do {
-        if ($hash->{'inclusion-mode'}) {
-          my %nodes = map {$_ => 1} (AttrVal($hash->{NAME},"first-sensorid",20) ... AttrVal($hash->{NAME},"last-sensorid",254));
-          GP_ForallClients($hash,sub {
-            my $client = shift;
-            delete $nodes{$client->{radioId}};
-          });
-          if (keys %nodes) {
-            my $newid = (sort keys %nodes)[0];
-            sendMessage($hash,radioId => 255, childId => 255, cmd => C_INTERNAL, ack => 0, subType => I_ID_RESPONSE, payload => $newid);
-            Log3($hash->{NAME},4,"MYSENSORS $hash->{NAME} assigned new nodeid $newid");
-          } else {
-            Log3($hash->{NAME},4,"MYSENSORS $hash->{NAME} cannot assign new nodeid");
-          }
-        } else {
-          Log3($hash->{NAME},4,"MYSENSORS: ignoring id-request-msg from unknown radioId $msg->{radioId}");
-        }
-        last;
-      };
-    }
-  } elsif (my $client = matchClient($hash,$msg)) {
-    MYSENSORS::DEVICE::onInternalMessage($client,$msg);
-  } else {
-    Log3($hash->{NAME},3,"MYSENSORS: ignoring internal-msg from unknown radioId $msg->{radioId}, childId $msg->{childId} for ".internalMessageTypeToStr($msg->{subType}));
-  }
-};
-
-sub onStreamMsg($$) {
-  my ($hash,$msg) = @_;
-};
-
-sub onAcknowledge($$) {
-  my ($hash,$msg) = @_;
-  my $ack;
-  if (defined (my $outstanding = $hash->{messagesForRadioId}->{$msg->{radioId}}->{messages})) {
-    my @remainMsg = grep {
-         $_->{childId} != $msg->{childId}
-      or $_->{cmd}     != $msg->{cmd}
-      or $_->{subType} != $msg->{subType}
-      or $_->{payload} ne $msg->{payload}
-    } @$outstanding;
-    if ($ack = @remainMsg < @$outstanding) {
-      $hash->{outstandingAck} -= 1;
-      @$outstanding = @remainMsg;
-    }
-    $hash->{messagesForRadioId}->{$msg->{radioId}}->{numtries} = 1;
-  }
-  Log3 ($hash->{NAME},4,"MYSENSORS Read: unexpected ack ".dumpMsg($msg)) unless $ack;
 }
 
-sub sendMessage($%) {
-  my ($hash,%msg) = @_;
-  $msg{ack} = $hash->{ack} unless defined $msg{ack};
-  my $txt = createMsg(%msg);
-  Log3 ($hash->{NAME},5,"MYSENSORS send: ".dumpMsg(\%msg));
-  DevIo_SimpleWrite($hash,"$txt\n",undef);
-  if ($msg{ack}) {
-    my $messagesForRadioId = $hash->{messagesForRadioId}->{$msg{radioId}};
-    unless (defined $messagesForRadioId) {
-      $messagesForRadioId = {
-        lastseen => -1,
-        numtries => 1,
-        messages => [],
+sub onPresentationMessage($$) {
+  my ($hash,$msg) = @_;
+  my $name = $hash->{NAME};
+  my $nodeType = $msg->{subType};
+  my $id = $msg->{childId};
+  if ($id == 255) { #special id
+    NODETYPE: {
+      $nodeType == S_ARDUINO_NODE and do {
+        CommandAttr(undef, "$name mode node");
+        last;
       };
-      $hash->{messagesForRadioId}->{$msg{radioId}} = $messagesForRadioId;
-    }
-    my $messages = $messagesForRadioId->{messages};
-    @$messages = grep {
-         $_->{childId} != $msg{childId}
-      or $_->{cmd}     != $msg{cmd}
-      or $_->{subType} != $msg{subType}
-    } @$messages;
-    push @$messages,\%msg;
-
-    $messagesForRadioId->{nexttry} = gettimeofday()+$messagesForRadioId->{numtries};
-    _scheduleTimer($hash);
-  }
-};
-
-sub _scheduleTimer($) {
-  my ($hash) = @_;
-  $hash->{outstandingAck} = 0;
-  RemoveInternalTimer($hash);
-  my $next;
-  foreach my $radioid (keys %{$hash->{messagesForRadioId}}) {
-    my $msgsForId = $hash->{messagesForRadioId}->{$radioid};
-    $hash->{outstandingAck} += @{$msgsForId->{messages}};
-    $next = $msgsForId->{nexttry} unless (defined $next and $next < $msgsForId->{nexttry});
+      $nodeType == S_ARDUINO_REPEATER_NODE and do {
+        CommandAttr(undef, "$name mode repeater");
+        last;
+      };
+    };
+    CommandAttr(undef, "$name version $msg->{payload}");
   };
-  InternalTimer($next, "MYSENSORS::Timer", $hash, 0) if (defined $next);
+
+  my $readingMappings = $hash->{readingMappings};
+  my $typeMappings = $hash->{typeMappings};
+  if (my $sensorMappings = $hash->{sensorMappings}->{$nodeType}) {
+    my $idStr = ($id > 0 ? $id : "");
+    my @ret = ();
+    foreach my $type (@{$sensorMappings->{sends}}) {
+      next if (defined $readingMappings->{$id}->{$type});
+      my $typeStr = $typeMappings->{$type}->{type};
+      if ($hash->{IODev}->{'inclusion-mode'}) {
+        if (my $ret = CommandAttr(undef,"$name mapReading_$typeStr$idStr $id $typeStr")) {
+          push @ret,$ret;
+        }
+      } else {
+        push @ret,"no mapReading for $id, $typeStr";
+      }
+    }
+    foreach my $type (@{$sensorMappings->{receives}}) {
+      my $typeMapping = $typeMappings->{$type};
+      my $typeStr = $typeMapping->{type};
+      next if (defined $hash->{sets}->{"$typeStr$idStr"});
+      if ($hash->{IODev}->{'inclusion-mode'}) {
+        my @values = ();
+        if ($typeMapping->{range}) {
+          @values = ('slider',$typeMapping->{range}->{min},$typeMapping->{range}->{step},$typeMapping->{range}->{max});
+        } elsif ($typeMapping->{val}) {
+          @values = values %{$typeMapping->{val}};
+        }
+        if (my $ret = CommandAttr(undef,"$name setReading_$typeStr$idStr".(@values ? " ".join (",",@values) : ""))) {
+          push @ret,$ret;
+        }
+      } else {
+        push @ret,"no setReading for $id, $typeStr";
+      }
+    }
+    Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{NAME}: errors on C_PRESENTATION-message for childId $id, subType ".sensorTypeToStr($nodeType)." ".join (", ",@ret)) if @ret;
+  }
 }
 
-sub matchClient($$) {
+sub onSetMessage($$) {
   my ($hash,$msg) = @_;
-  my $radioId = $msg->{radioId};
-  my $found;
-  GP_ForallClients($hash,sub {
-    return if $found;
-    my $client = shift;
-    if ($client->{radioId} == $radioId) {
-      $found = $client;
+  if (defined $msg->{payload}) {
+    eval {
+      my ($reading,$value) = rawToMappedReading($hash,$msg->{subType},$msg->{childId},$msg->{payload});
+      readingsSingleUpdate($hash,$reading,$value,1);
+    };
+    Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{NAME}: ignoring C_SET-message ".GP_Catch($@)) if $@;
+  } else {
+    Log3 ($hash->{NAME},5,"MYSENSORS_DEVICE $hash->{NAME}: ignoring C_SET-message without payload");
+  }
+}
+
+sub onRequestMessage($$) {
+  my ($hash,$msg) = @_;
+
+  eval {
+    my ($readingname,$val) = rawToMappedReading($hash, $msg->{subType}, $msg->{childId}, $msg->{payload});
+    sendClientMessage($hash,
+      childId => $msg->{childId},
+      cmd => C_SET,
+      subType => $msg->{subType},
+      payload => ReadingsVal($hash->{NAME},$readingname,$val)
+    );
+  };
+  Log3 ($hash->{NAME},4,"MYSENSORS_DEVICE $hash->{NAME}: ignoring C_REQ-message ".GP_Catch($@)) if $@;
+}
+
+sub onInternalMessage($$) {
+  my ($hash,$msg) = @_;
+  my $name = $hash->{NAME};
+  my $type = $msg->{subType};
+  my $typeStr = internalMessageTypeToStr($type);
+  INTERNALMESSAGE: {
+    $type == I_BATTERY_LEVEL and do {
+      readingsSingleUpdate($hash,"batterylevel",$msg->{payload},1);
+      Log3 ($name,4,"MYSENSORS_DEVICE $name: batterylevel $msg->{payload}");
+      last;
+    };
+    $type == I_TIME and do {
+      if ($msg->{ack}) {
+        Log3 ($name,4,"MYSENSORS_DEVICE $name: respons to time-request acknowledged");
+      } else {
+        sendClientMessage($hash,cmd => C_INTERNAL, childId => 255, subType => I_TIME, payload => time);
+        Log3 ($name,4,"MYSENSORS_DEVICE $name: update of time requested");
+      }
+      last;
+    };
+    $type == I_VERSION and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_ID_REQUEST and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_ID_RESPONSE and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_INCLUSION_MODE and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_CONFIG and do {
+      if ($msg->{ack}) {
+        Log3 ($name,4,"MYSENSORS_DEVICE $name: respons to config-request acknowledged");
+      } else {
+        sendClientMessage($hash,cmd => C_INTERNAL, childId => 255, subType => I_CONFIG, payload => AttrVal($name,"config","M"));
+        Log3 ($name,4,"MYSENSORS_DEVICE $name: respond to config-request");
+      }
+      last;
+    };
+    $type == I_PING and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_PING_ACK and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_LOG_MESSAGE and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_CHILDREN and do {
+      readingsSingleUpdate($hash,"state","routingtable cleared",1);
+      Log3 ($name,4,"MYSENSORS_DEVICE $name: routingtable cleared");
+      last;
+    };
+    $type == I_SKETCH_NAME and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_SKETCH_VERSION and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_REBOOT and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+  }
+}
+
+sub sendClientMessage($%) {
+  my ($hash,%msg) = @_;
+  $msg{radioId} = $hash->{radioId};
+  $msg{ack} = $hash->{ack} unless defined $msg{ack};
+  sendMessage($hash->{IODev},%msg);
+}
+
+sub rawToMappedReading($$$$) {
+  my($hash, $type, $childId, $value) = @_;
+
+  my $name;
+  if (defined (my $mapping = $hash->{readingMappings}->{$childId}->{$type})) {
+    my $val = $mapping->{val} // $hash->{typeMappings}->{$type}->{val};
+    return ($mapping->{name},defined $val ? ($val->{$value} // $value) : $value);
+  }
+  die "no reading-mapping for childId $childId, type ".($hash->{typeMappings}->{$type}->{type} ? $hash->{typeMappings}->{$type}->{type} : variableTypeToStr($type));
+}
+
+sub mappedReadingToRaw($$$) {
+  my ($hash,$reading,$value) = @_;
+  
+  my $readingsMapping = $hash->{readingMappings};
+  foreach my $id (keys %$readingsMapping) {
+    my $readingTypesForId = $readingsMapping->{$id};
+    foreach my $type (keys %$readingTypesForId) {
+      if (($readingTypesForId->{$type}->{name} // "") eq $reading) {
+        if (my $valueMappings = $readingTypesForId->{$type}->{val} // $hash->{typeMappings}->{$type}->{val}) {
+          if (my @mappedValues = grep {$valueMappings->{$_} eq $value} keys %$valueMappings) {
+            return ($type,$id,shift @mappedValues);
+          }
+        }
+        return ($type,$id,$value);
+      }
     }
-  });
-  return $found;
+  }
+  die "no mapping for reading $reading";
 }
 
 1;
@@ -469,51 +558,70 @@ sub matchClient($$) {
 =pod
 =begin html
 
-<a name="MYSENSORS"></a>
-<h3>MYSENSORS</h3>
+<a name="MYSENSORS_DEVICE"></a>
+<h3>MYSENSORS_DEVICE</h3>
 <ul>
-  <p>connects fhem to <a href="http://MYSENSORS.org">MYSENSORS</a>.</p>
-  <p>A single MYSENSORS device can serve multiple <a href="#MYSENSORS_DEVICE">MYSENSORS_DEVICE</a> clients.<br/>
-     Each <a href="#MYSENSORS_DEVICE">MYSENSORS_DEVICE</a> represents a mysensors node.<br/>
-  <a name="MYSENSORSdefine"></a>
+  <p>represents a mysensors sensor attached to a mysensor-node</p>
+  <p>requires a <a href="#MYSENSOR">MYSENSOR</a>-device as IODev</p>
+  <a name="MYSENSORS_DEVICEdefine"></a>
   <p><b>Define</b></p>
   <ul>
-    <p><code>define &lt;name&gt; MYSENSORS &lt;serial device&gt|&lt;ip:port&gt;</code></p>
-    <p>Specifies the MYSENSORS device.</p>
+    <p><code>define &lt;name&gt; MYSENSORS_DEVICE &lt;Sensor-type&gt; &lt;node-id&gt;</code><br/>
+      Specifies the MYSENSOR_DEVICE device.</p>
   </ul>
-  <a name="MYSENSORSset"></a>
+  <a name="MYSENSORS_DEVICEset"></a>
   <p><b>Set</b></p>
   <ul>
     <li>
-      <p><code>set &lt;name&gt; connect</code><br/>
-         (re-)connects the MYSENSORS-device to the MYSENSORS-gateway</p>
+      <p><code>set &lt;name&gt; clear</code><br/>
+         clears routing-table of a repeater-node</p>
     </li>
     <li>
-      <p><code>set &lt;name&gt; disconnect</code><br/>
-         disconnects the MYSENSORS-device from the MYSENSORS-gateway</p>
+      <p><code>set &lt;name&gt; time</code><br/>
+         sets time for nodes (that support it)</p>
     </li>
     <li>
-      <p><code>set &lt;name&gt; inclusion-mode on|off</code><br/>
-         turns the gateways inclusion-mode on or off</p>
+      <p><code>set &lt;name&gt; reboot</code><br/>
+         reboots a node (requires a bootloader that supports it).<br/>
+         Attention: Nodes that run the standard arduino-bootloader will enter a bootloop!<br/>
+         Dis- and reconnect the nodes power to restart in this case.</p>
     </li>
   </ul>
-  <a name="MYSENSORSattr"></a>
+  <a name="MYSENSORS_DEVICEattr"></a>
   <p><b>Attributes</b></p>
   <ul>
     <li>
-      <p><code>att &lt;name&gt; autocreate</code><br/>
-         enables auto-creation of MYSENSOR_DEVICE-devices on receival of presentation-messages</p>
+      <p><code>attr &lt;name&gt; config [&lt;M|I&gt;]</code><br/>
+         configures metric (M) or inch (I). Defaults to 'M'</p>
+    </li>
+    <li>
+      <p><code>attr &lt;name&gt; setCommands [&lt;command:reading:value&gt;]*</code><br/>
+         configures one or more commands that can be executed by set.<br/>
+         e.g.: <code>attr &lt;name&gt; setCommands on:switch_1:on off:switch_1:off</code><br/>
+         if list of commands contains both 'on' and 'off' <a href="#setExtensions">set extensions</a> are supported</p>
+    </li>
+    <li>
+      <p><code>attr &lt;name&gt; setReading_&lt;reading&gt; [&lt;value&gt;]*</code><br/>
+         configures a reading that can be modified by set-command<br/>
+         e.g.: <code>attr &lt;name&gt; setReading_switch_1 on,off</code></p>
+    </li>
+    <li>
+      <p><code>attr &lt;name&gt; mapReading_&lt;reading&gt; &lt;childId&gt; &lt;readingtype&gt; [&lt;value&gt;:&lt;mappedvalue&gt;]*</code><br/>
+         configures the reading-name for a given childId and sensortype<br/>
+         E.g.: <code>attr xxx mapReading_aussentemperatur 123 temperature</code></p>
     </li>
     <li>
       <p><code>att &lt;name&gt; requestAck</code><br/>
          request acknowledge from nodes.<br/>
          if set the Readings of nodes are updated not before requested acknowledge is received<br/>
-         if not set the Readings of nodes are updated immediatly (not awaiting the acknowledge).
-         May also be configured for individual nodes if not set for gateway.</p>
+         if not set the Readings of nodes are updated immediatly (not awaiting the acknowledge).<br/>
+         May also be configured on the gateway for all nodes at once</p>
     </li>
     <li>
-      <p><code>att &lt;name&gt; first-sensorid <&lt;number &lth; 255&gt;></code><br/>
-         configures the lowest node-id assigned to a mysensor-node on request (defaults to 20)</p>
+      <p><code>attr &lt;name&gt; mapReadingType_&lt;reading&gt; &lt;new reading name&gt; [&lt;value&gt;:&lt;mappedvalue&gt;]*</code><br/>
+         configures reading type names that should be used instead of technical names<br/>
+         E.g.: <code>attr xxx mapReadingType_LIGHT switch 0:on 1:off</code>
+         to be used for mysensor Variabletypes that have no predefined defaults (yet)</p>
     </li>
   </ul>
 </ul>
