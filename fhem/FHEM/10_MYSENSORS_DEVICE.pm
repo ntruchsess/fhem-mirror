@@ -110,10 +110,8 @@ my %static_types = (
   S_CUSTOM                => { receives => [], sends => [V_VAR1,V_VAR2,V_VAR3,V_VAR4,V_VAR5] }, # Use this for custom sensors where no other fits.
   S_DUST                  => { receives => [], sends => [V_LEVEL,V_UNIT_PREFIX] }, # Dust level sensor
   S_SCENE_CONTROLLER      => { receives => [], sends => [V_SCENE_ON,V_SCENE_OFF] }, # Scene controller device
-  # start receives?
   S_RGB_LIGHT             => { receives => [V_RGB,V_WATT], sends => [V_RGB,V_WATT] }, # RGB light
   S_RGBW_LIGHT            => { receives => [V_RGBW,V_WATT], sends => [V_RGBW,V_WATT] }, # RGBW light (with separate white component)
-  # end receives?
   S_COLOR_SENSOR          => { receives => [V_RGB], sends => [V_RGB] }, # Color sensor
   S_HVAC                  => { receives => [], sends => [V_HVAC_SETPOINT_HEAT,V_HVAC_SETPOINT_COLD,V_HVAC_FLOW_STATE,V_HVAC_FLOW_MODE,V_HVAC_SPEED] }, # Thermostat/HVAC device
   S_MULTIMETER            => { receives => [], sends => [V_VOLTAGE,V_CURRENT,V_IMPEDANCE] }, # Multimeter device	
