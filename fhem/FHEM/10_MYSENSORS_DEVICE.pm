@@ -83,9 +83,9 @@ BEGIN {
 };
 
 my %static_types = (
-  S_DOOR                  => { receives => [], sends => [V_TRIPPED,V_AMRED] }, # Door and window sensors
-  S_MOTION                => { receives => [], sends => [V_TRIPPED,V_AMRED] }, # MotionSensor
-  S_SMOKE                 => { receives => [], sends => [V_TRIPPED,V_AMRED] }, # Smoke sensor
+  S_DOOR                  => { receives => [], sends => [V_TRIPPED,V_ARMED] }, # Door and window sensors
+  S_MOTION                => { receives => [], sends => [V_TRIPPED,V_ARMED] }, # MotionSensor
+  S_SMOKE                 => { receives => [], sends => [V_TRIPPED,V_ARMED] }, # Smoke sensor
   S_LIGHT                 => { receives => [V_STATUS,V_WATT], sends => [V_STATUS,V_WATT] }, # Light Actuator (on/off)
   S_BINARY                => { receives => [V_STATUS,V_WATT], sends => [V_STATUS,V_WATT] }, # Binary device (on/off), Alias for S_LIGHT
   S_DIMMER                => { receives => [V_STATUS,V_DIMMER,V_WATT], sends => [V_STATUS,V_DIMMER,V_WATT] }, # Dimmable device of some kind
