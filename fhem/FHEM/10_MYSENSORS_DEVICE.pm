@@ -146,7 +146,7 @@ my %static_mappings = (
   V_WEIGHT      => { type => "weight" },
   V_DISTANCE    => { type => "distance" },
   V_IMPEDANCE   => { type => "impedance" },
-  V_ARMED       => { type => "armed", val => { 0 => 'off', 1 => 'on' } },
+  V_ARMED       => { type => "armed", val => { 0 => 'off', 1 => 'on' }},
   V_TRIPPED     => { type => "tripped", val => { 0 => 'off', 1 => 'on' }},
   V_WATT        => { type => "power" },
   V_KWH         => { type => "energy" },
