@@ -533,6 +533,22 @@ sub onInternalMessage($$) {
       $hash->{$typeStr} = $msg->{payload};
       last;
     };
+    $type == I_GATEWAY_READY and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_REQUEST_SIGNING and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_GET_NONCE and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
+    $type == I_GET_NONCE_RESPONSE and do {
+      $hash->{$typeStr} = $msg->{payload};
+      last;
+    };
   }
 }
 
