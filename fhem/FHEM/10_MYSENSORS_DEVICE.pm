@@ -504,11 +504,11 @@ sub onInternalMessage($$) {
       }
       last;
     };
-    $type == I_PING and do {
+    $type == I_FIND_PARENT and do {
       $hash->{$typeStr} = $msg->{payload};
       last;
     };
-    $type == I_PING_ACK and do {
+    $type == I_FIND_PARENT_RESPONSE and do {
       $hash->{$typeStr} = $msg->{payload};
       last;
     };
