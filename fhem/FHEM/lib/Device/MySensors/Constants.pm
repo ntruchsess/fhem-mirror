@@ -22,9 +22,9 @@ use constant {
   V_TEMP        => 0,
   V_HUM         => 1,
   V_STATUS      => 2,
-  V_LIGHT       => 2,
+  #V_LIGHT       => 2,
   V_PERCENTAGE  => 3,
-  V_DIMMER      => 3,
+  #V_DIMMER      => 3,
   V_PRESSURE    => 4,
   V_FORECAST    => 5,
   V_RAIN        => 6,
@@ -70,7 +70,7 @@ use constant {
   V_HVAC_FLOW_MODE => 46,
 };
 
-use constant variableTypes => qw{ V_TEMP V_HUM V_STATUS V_LIGHT V_PERCENTAGE V_DIMMER V_PRESSURE V_FORECAST V_RAIN
+use constant variableTypes => qw{ V_TEMP V_HUM V_STATUS V_PERCENTAGE V_PRESSURE V_FORECAST V_RAIN
         V_RAINRATE V_WIND V_GUST V_DIRECTION V_UV V_WEIGHT V_DISTANCE
         V_IMPEDANCE V_ARMED V_TRIPPED V_WATT V_KWH V_SCENE_ON V_SCENE_OFF
         V_HVAC_FLOW_STATE V_HVAC_SPEED V_LIGHT_LEVEL V_VAR1 V_VAR2 V_VAR3 V_VAR4 V_VAR5
