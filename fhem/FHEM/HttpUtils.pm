@@ -77,7 +77,7 @@ HttpUtils_ConnErr($)
   if(defined($hash->{FD})) {
     delete($hash->{FD});
     delete($selectlist{$hash});
-    $hash->{conn}->close();
+    $hash->{conn}->close() if($hash->{conn});
     $hash->{callback}($hash, "connect to $hash->{addr} timed out", "");
   }
 }
@@ -170,9 +170,11 @@ HttpUtils_Connect($)
             return $hash->{callback}($hash, "$host: ".strerror($errno), "")
                 if($errno);
 
-            return HttpUtils_Connect2($hash);
+            my $err = HttpUtils_Connect2($hash);
+            $hash->{callback}($hash, $err, "") if($err);
+            return $err;
           };
-          $hash->{NAME} = "" if(!defined($hash->{NAME})); #Delete might check it
+          $hash->{NAME}="" if(!defined($hash->{NAME}));# Delete might check this
           $selectlist{$hash} = $hash;
           InternalTimer(gettimeofday()+$hash->{timeout},
                         "HttpUtils_ConnErr", \%timerHash, 0);
@@ -351,7 +353,9 @@ HttpUtils_ParseAnswer($$)
   my $code= $header0[1];
 
   # Close if server doesn't support keepalive
-  HttpUtils_Close($hash) if($hash->{keepalive} and $hash->{httpheader} =~ m/^Connection:\s*close\s*$/mi);
+  HttpUtils_Close($hash)
+        if($hash->{keepalive} &&
+           $hash->{httpheader} =~ m/^Connection:\s*close\s*$/mi);
   
   if(!defined($code) || $code eq "") {
     return ("$hash->{displayurl}: empty answer received", "");

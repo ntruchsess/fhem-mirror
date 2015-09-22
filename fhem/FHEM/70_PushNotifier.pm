@@ -1,19 +1,33 @@
 ###############################################
-#$Id: 70_PushNotifier.pm 2014-12-16 17:00:00 xusader
+#$Id: 70_PushNotifier.pm 2015-09-10 20:30:00 xusader
+#
+#	regex part by pirmanji
 #
 #	download client-app http://pushnotifier.de/apps/
 #	create account http://pushnotifier.de/login/
-#	get apiToken from http://gidix.de/setings/api/ and add a new app 
+#	
+#	register your app:
+#	http://pushnotifier.de/settings/api
 #
-#	Define example:
-#	define yourname PushNotifier apiToken appname user password deviceID
+#	Define example for all devices:
+#	define yourname PushNotifier apiToken appname user password .*
+#
+#	Define example for device group:
+#	define yourname PushNotifier apiToken appname user password iPhone.*
+#
+#	Define example for specific device:
+#	define yourname PushNotifier apiToken appname user password iPhone5
 #
 #	notify example:
 #	define LampON notify Lamp:on set yourDefineName message Your message!
 #
+#	notify with two lines:
+#	define LampON notify Lamp:on set yourDefineName message Your message!_Second Line message
+#
 
 package main;
 use LWP::UserAgent;
+use Try::Tiny;
 
 sub
 PushNotifier_Initialize($)
@@ -33,6 +47,14 @@ PushNotifier_Define($$)
   my @args = split("[ \t]+", $def);
 
   my ($name, $type, $apiToken, $app, $user, $passwd, $deviceID) = @args;
+  
+  if (! eval { qr/$deviceID/ }) {
+    return "$deviceID is not a valid regex for <deviceID>";
+  }
+  
+  if (!eval { require Try::Tiny }) {
+    return "Perl module Try::Tiny not installed but is needed by this module. Please install it first (e.g. \"cpan -i Try::Tiny\")";
+  }
   
   $hash->{STATE} = 'Initialized';
 
@@ -57,18 +79,10 @@ PushNotifier_Define($$)
 	['apiToken' => $apiToken,
 	'appToken' => $appToken]);
   my $strg_chkID = $responseID->as_string;
-  $strg_chkID =~ s/[-"{}_]//g;
 
-  $re1='.*?';
-  $re2='(\\[.*?\\])';
-
-  $re=$re1.$re2;
-  if ($strg_chkID =~ m/$re/is)
-  {
-    $sbraces1=$1;
-    my $devices = $sbraces1;
-    $hash->{devices} = $devices;
-  }
+  (my $devIDs = $strg_chkID) =~ s/.*\{"status":.*,"devices":\[(.*)\]\}/$1/s;
+  $devIDs =~ s/[-"{}_]//g;
+  $hash->{devices} = $devIDs;
 
   return undef; 
   }
@@ -93,23 +107,45 @@ PushNotifier_Send_Message
   my $msg = join(" ", @_);
   $msg =~ s/\_/\n/g;
 
-  my $response = LWP::UserAgent->new()->post('http://a.pushnotifier.de/1/sendToDevice', 
-	['apiToken' => $hash->{apiToken},
-	'appToken' => $hash->{appToken},
-	'app' => $hash->{app},
-	'deviceID' => $hash->{deviceID},
-	'type' => 'MESSAGE',
-	'content' => "$msg"]);
+  my $result="";
+  my $mc=0;
 
-    my $error_chk = $response->as_string; 
+  try {
+    while ($hash->{devices} =~ /title:(.*?),id:(\d+),model:(.*?)(?=,title:|$)/g) {
+        my ($nd_title, $nd_id, $nd_model) = ("$1", "$2", "$3");
 
-    if($error_chk =~ m/"status":"ok"/) {
-	return "OK!\n\n$msg";
-	}
-	else 
-	{
-	return $error_chk; 
-    }   
+        # Log3 (undef, 3, "PushNotifier: Send Message $msg to device title: $nd_title, id: $nd_id, model: $nd_model");
+
+        if ( $nd_id =~ m/$hash->{deviceID}/ || $nd_title =~ m/$hash->{deviceID}/ || $nd_model =~ m/$hash->{deviceID}/ ) {
+          my $response = LWP::UserAgent->new()->post('http://a.pushnotifier.de/1/sendToDevice',
+            ['apiToken' => $hash->{apiToken},
+             'appToken' => $hash->{appToken},
+             'app' => $hash->{app},
+             'deviceID' => $nd_id,
+             'type' => 'MESSAGE',
+             'content' => "$msg"]);
+
+          my $error_chk = $response->as_string;
+
+          $mc++;
+
+          if($error_chk =~ m/"status":"ok"/) {
+            $result.="OK! Message sent to $nd_title (id: $nd_id)\n\n$msg\n\n";
+          }
+          else
+          {
+            $result.="ERROR sending message to $nd_title (id: $nd_id)\n\nResponse:\n$error_chk\n\n";
+          }
+        }
+      }
+
+  };
+
+  if ( !$mc ) {
+    $result.="Regex ".$hash->{deviceID}." seems not to fit on any of your devices.";
+  }
+
+  return $result;
 }
 
 1;
@@ -176,7 +212,7 @@ PushNotifier_Send_Message
   PushNotifier ist ein Dienst, um Benachrichtigungen von einer vielzahl
   von Quellen auf Deinem Smartphone oder Tablet zu empfangen.<br>
   Du brauchst einen Account um dieses Modul zu verwenden.<br>
-  Für weitere Informationen besuche <a href="http://www.fhemwiki.de/wiki/PushNotifier">FhemWiki PushNotifier</a>.<br>
+  F��r weitere Informationen besuche <a href="http://www.fhemwiki.de/wiki/PushNotifier">FhemWiki PushNotifier</a>.<br>
   <br>
   Diskutiere das Modul <a href="http://forum.fhem.de/index.php/topic,25440.0.html">hier</a>.<br>
   <br>

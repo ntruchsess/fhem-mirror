@@ -139,6 +139,7 @@ SYSSTAT_InitSNMP($)
   } elsif ( !defined($session) ) {
     Log3 $name, 2, "$name: can't connect to host $host";
   } else {
+    $session->timeout(3);
     $hash->{session} = $session;
   }
 }
@@ -344,7 +345,7 @@ SYSSTAT_GetUpdate($)
     }
   } elsif( AttrVal($name, "synologytemperature", 0) > 0 ) {
     my $temp = SYSSTAT_getSynoTemp($hash);
-    if( $temp > 0 && $temp < 200  ) {
+    if( $temp && $temp > 0 && $temp < 200  ) {
       if( AttrVal($name, "synologytemperature", 0) eq 2 ) {
           $temp = sprintf( "%.1f", (3 * ReadingsVal($name,"temperature",$temp) + $temp ) / 4 );
         }

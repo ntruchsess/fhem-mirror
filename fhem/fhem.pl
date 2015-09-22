@@ -1761,7 +1761,7 @@ AssignIoPort($;$)
   $proposed = $attr{$hn}{IODev}
         if(!$proposed && $attr{$hn} && $attr{$hn}{IODev});
   
-  if($proposed && $defs{$proposed}) {
+  if($proposed && $defs{$proposed} && !IsDisabled($proposed)) {
     $hash->{IODev} = $defs{$proposed};
     $attr{$hn}{IODev} = $proposed if($hasIODevAttr);
     delete($defs{$proposed}{".clientArray"});
@@ -1770,6 +1770,7 @@ AssignIoPort($;$)
   # Set the I/O device, search for the last compatible one.
   for my $p (sort { $defs{$b}{NR} <=> $defs{$a}{NR} } keys %defs) {
 
+    next if(IsDisabled($p));
     my $cl = $defs{$p}{Clients};
     $cl = $modules{$defs{$p}{TYPE}}{Clients} if(!$cl);
 
@@ -2670,7 +2671,8 @@ HandleTimeout()
   # Check the internal list.
   foreach my $i (sort { $intAt{$a}{TRIGGERTIME} <=>
                         $intAt{$b}{TRIGGERTIME} } keys %intAt) {
-    next if(!defined($i) || !$intAt{$i}); # deleted in the loop
+    $i = "" if(!defined($i)); # Forum #40598
+    next if(!$intAt{$i}); # deleted in the loop
     my $tim = $intAt{$i}{TRIGGERTIME};
     my $fn = $intAt{$i}{FN};
     if(!defined($tim) || !defined($fn)) {

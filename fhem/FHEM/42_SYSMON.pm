@@ -2189,13 +2189,27 @@ SYSMON_getCPUProcStat_intern($$$)
     # Diff. ausrechnen, falls vorherigen Werte vorhanden sind.
     my($altCPUuser, $altCPUnice, $altCPUsystem, $altCPUidle, $altCPUiowait, $altCPUirq, $altCPUsoftirq) = split(/\s+/, $lastVal);
     
-    my $CPUuser    = $neuCPUuser    - $altCPUuser;
-    my $CPUnice    = $neuCPUnice    - $altCPUnice;
-    my $CPUsystem  = $neuCPUsystem  - $altCPUsystem;
-    my $CPUidle    = $neuCPUidle    - $altCPUidle;
-    my $CPUiowait  = $neuCPUiowait  - $altCPUiowait;
-    my $CPUirq     = $neuCPUirq     - $altCPUirq;
-    my $CPUsoftirq = $neuCPUsoftirq - $altCPUsoftirq;
+    my ($CPUuser, $CPUnice, $CPUsystem, $CPUidle, $CPUiowait, $CPUirq, $CPUsoftirq);
+
+  	if($neuCPUuser < $altCPUuser) {
+        $CPUuser    = $neuCPUuser;
+        $CPUnice    = $neuCPUnice;
+        $CPUsystem  = $neuCPUsystem;
+        $CPUidle    = $neuCPUidle;
+        $CPUiowait  = $neuCPUiowait;
+        $CPUirq     = $neuCPUirq;
+        $CPUsoftirq = $neuCPUsoftirq;
+  	}
+  	else {
+        $CPUuser    = $neuCPUuser    - $altCPUuser;
+        $CPUnice    = $neuCPUnice    - $altCPUnice;
+        $CPUsystem  = $neuCPUsystem  - $altCPUsystem;
+        $CPUidle    = $neuCPUidle    - $altCPUidle;
+        $CPUiowait  = $neuCPUiowait  - $altCPUiowait;
+        $CPUirq     = $neuCPUirq     - $altCPUirq;
+        $CPUsoftirq = $neuCPUsoftirq - $altCPUsoftirq;
+  	}
+    
     $map->{$pName."_diff"}=$CPUuser." ".$CPUnice." ".$CPUsystem." ".$CPUidle." ".$CPUiowait." ".$CPUirq." ".$CPUsoftirq;
     
     my $GesammtCPU = $CPUuser + $CPUnice + $CPUsystem + $CPUidle + $CPUiowait + $CPUirq + $CPUsoftirq;
@@ -3070,7 +3084,7 @@ sub SYSMON_getFBStreamRate($$) {
   my $us_rate = SYSMON_execute($hash, "ctlmgr_ctl r sar status/dsl_us_rate");
   
   if($ds_rate ne "" && $us_rate ne "") {
-    $map->{+FB_DSL_RATE}="down: ".int($ds_rate)." KBit/s, up: ".int($us_rate)." KBit/s";
+    $map->{+FB_DSL_RATE}="down: ".int($ds_rate)." kBit/s, up: ".int($us_rate)." kBit/s";
   }
   
   return $map;
@@ -3088,7 +3102,7 @@ sub SYSMON_getFBStreamRate2($$) {
   if(defined($ds_rate) && defined($us_rate) && $ds_rate ne "" && $us_rate ne "") {
     $ds_rate = $ds_rate/1000;
     $us_rate = $us_rate/1000;
-    $map->{+FB_DSL_RATE}="down: ".int($ds_rate)." KBit/s, up: ".int($us_rate)." KBit/s";
+    $map->{+FB_DSL_RATE}="down: ".int($ds_rate)." kBit/s, up: ".int($us_rate)." kBit/s";
   }
   
   return $map;
