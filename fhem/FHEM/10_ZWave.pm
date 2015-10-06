@@ -97,14 +97,14 @@ my %zwave_class = (
     parse => { "..3202(.*)" => 'ZWave_meterParse($hash, $1)',
                "..3204(.*)" => 'ZWave_meterSupportedParse($hash, $1)' } },
   COLOR_CONTROL            => { id => '33',
-    get   => { ccCapabilityGet  => '01', # no more args
-               ccStatus    => '03', # no more args
+    get   => { ccCapability=> '01', # no more args
+               ccStatus    => '03%02x',
              },
     set   => { # Forum #36050
-               rgb         => '050a0000010002%02x03%02x04%02x',
-               wcrgb       => '050a00%02x01%02x02%02x03%02x04%02x' },
-    parse => { "043302(.*)"=> 'ccCapabilityGetResponse:$1',
-               "043304(.*)"=> 'ccStatusResponse:$1' } },
+               rgb         => '05050000010002%02x03%02x04%02x',
+               wcrgb       => '050500%02x01%02x02%02x03%02x04%02x' },
+    parse => { "043302(.*)"=> '"ccCapability:$1"',
+               "043304(..)(.*)"=> '"ccStatus_$1:$2"' } },
   ZIP_ADV_CLIENT           => { id => '34' },
   METER_PULSE              => { id => '35' },
   BASIC_TARIFF_INFO        => { id => '36' },
@@ -202,7 +202,11 @@ my %zwave_class = (
   CRC_16_ENCAP             => { id => '56' }, # Parse is handled in the code
   APPLICATION_CAPABILITY   => { id => '57' },
   ZIP_ND                   => { id => '58' },
-  ASSOCIATION_GRP_INFO     => { id => '59' },
+  ASSOCIATION_GRP_INFO     => { id => '59',
+    get   => { associationGroupName => "01%02x",
+               associationGroupCmdList => "0500%02x" },
+    parse => { "..5902(..)(.*)"=> '"assocGroupName_$1:".pack("H*", $2)',
+               "..5906(..)..(.*)"=> '"assocGroupCmdList_$1:".$2' } },
   DEVICE_RESET_LOCALLY     => { id => '5a',
     parse => { "025a01"    => "deviceResetLocally:yes" } },
   CENTRAL_SCENE            => { id => '5b',
@@ -477,7 +481,7 @@ ZWave_Define($$)
 
   $id = sprintf("%0*x", ($id > 255 ? 4 : 2), $id);
   $hash->{homeId} = $homeId;
-  $hash->{id}     = $id;
+  $hash->{nodeIdHex} = $id;
 
   $modules{ZWave}{defptr}{"$homeId $id"} = $hash;
   my $proposed;
@@ -584,11 +588,19 @@ ZWave_Cmd($$@)
     }
   }
 
-  my $id = $hash->{id};
+  my $id = $hash->{nodeIdHex};
   my $isMc = ($id =~ m/(....)/);
-  if($type eq "set" && !$isMc) {
-    $cmdList{neighborUpdate}{fmt} = "48$id";
-    $cmdList{neighborUpdate}{id} = "";
+  if(!$isMc) {
+    if($type eq "set") {
+      $cmdList{neighborUpdate}{fmt} = "48$id";
+      $cmdList{neighborUpdate}{id} = "";
+    }
+    if($type eq "get") {
+      # GET_ROUTING_TABLE_LINE, include dead links, non-routing neigbors
+      $cmdList{neighborList}{fmt} = "80${id}0101";
+      $cmdList{neighborList}{id} = "";
+      $cmdList{neighborList}{regexp} = "^0180";
+    }
   }
 
   if($type eq "set" && $cmd eq "rgb") {
@@ -682,17 +694,18 @@ ZWave_Cmd($$@)
 
 
   my $data;
-  if($cmd eq "neighborUpdate") {
+  if($cmd eq "neighborUpdate" || 
+     $cmd eq "neighborList") {
     $data = $cmdFmt;
 
   } else {
     my $len = sprintf("%02x", length($cmdFmt)/2+1);
     my $cmdEf  = (AttrVal($name, "noExplorerFrames", 0) == 0 ? "25" : "05");
     $data = "13$id$len$cmdId${cmdFmt}$cmdEf"; # 13==SEND_DATA
+    $data .= $id; # callback=>id
 
   }
 
-  $data .= $id; # callback=>id
 
   if ($data =~ m/(......)(....)(.*)(....)/) {
     my $cc_cmd=$2;
@@ -717,10 +730,14 @@ ZWave_Cmd($$@)
     no strict "refs";
     my $iohash = $hash->{IODev};
     my $fn = $modules{$iohash->{TYPE}}{ReadAnswerFn};
-    my ($err, $data) = &{$fn}($iohash, $cmd, "^000400${id}..$cmdId") if($fn);
+    my $re = $cmdList{$cmd}{regexp};
+    my ($err, $data) = &{$fn}($iohash, $cmd, $re ? $re : "^000400${id}..$cmdId")
+                        if($fn);
     use strict "refs";
 
     return $err if($err);
+    $data = "$cmd $id $data" if($re);
+
     $val = ($data ? ZWave_Parse($iohash, $data, $type) : "no data returned");
 
   } else {
@@ -1161,7 +1178,7 @@ ZWave_mcCapability($$)
   my $homeId = $iodev->{homeId};
   my @l = grep /../, split(/(..)/, lc($caps));
   my $chid = shift(@l);
-  my $id = $hash->{id};
+  my $id = $hash->{nodeIdHex};
 
   my @classes;
   shift(@l); shift(@l); # Skip generic and specific class
@@ -1232,10 +1249,11 @@ ZWave_mfsParse($$$$$)
         next;
       }
 
-      if($l =~ m/<Product type="([^"]*)".*id="([^"]*)".*name="([^"]*)"/) {
+      if($l =~ m/<Product type\s*=\s*"([^"]*)".*id\s*=\s*"([^"]*)".*name\s*=\s*"([^"]*)"/) {
         if($mf eq $lastMf && $prod eq lc($1) && $id eq lc($2)) {
           if($config) {
-            $ret = "modelConfig:".(($l =~ m/config="([^"]*)"/) ? $1:"unknown");
+            $ret = "modelConfig:".
+                (($l =~ m/config\s*=\s*"([^"]*)"/) ? $1 : "unknown");
             ZWave_mfsAddClasses($hash, $1);
             return $ret;
           } else {
@@ -1490,13 +1508,14 @@ ZWave_configCheckParam($$$$$@)
     return ("", sprintf("04%02x01%02x", $h->{index}, $h->{value}));
   }
 
-  return ("Parameter is not decimal", "") if($arg[0] !~ m/^[0-9]+$/);
+  return ("Parameter is not decimal", "") if($arg[0] !~ m/^-?[0-9]+$/);
 
   if($h->{size}) { # override type by size
     $t = ($h->{size} eq "1" ? "byte" : ($h->{size} eq "2" ? "short" : "int"));
   }
 
   my $len = ($t eq "int" ? 8 : ($t eq "short" ? 4 : 2));
+  $arg[0] += 2**($len==8 ? 32 : ($len==4 ? 16 : 8)) if($arg[0] < 0); #F:41709
   return ("", sprintf("04%02x%02x%0*x", $h->{index}, $len/2, $len, $arg[0]));
 }
 
@@ -1719,7 +1738,7 @@ ZWave_associationRequest($$)
   my ($hash, $data) = @_;
 
   if(!$data) { # called by the user
-    $zwave_parseHook{"$hash->{id}:..85"} = \&ZWave_associationRequest;
+    $zwave_parseHook{"$hash->{nodeIdHex}:..85"} = \&ZWave_associationRequest;
     return("", "05");
   }
 
@@ -1728,7 +1747,7 @@ ZWave_associationRequest($$)
   my $grp = 0;
   $grp = $1 if($data =~ m/..8503(..)/);
   return if($grp >= $nGrp);
-  $zwave_parseHook{"$hash->{id}:..85"} = \&ZWave_associationRequest;
+  $zwave_parseHook{"$hash->{nodeIdHex}:..85"} = \&ZWave_associationRequest;
   ZWave_Cmd("set", $hash, $hash->{NAME}, "associationRequest", $grp+1);
 }
 
@@ -1863,7 +1882,7 @@ ZWave_secSupported($$)
   my ($hash, $arg) = @_;
   my $name = $hash->{NAME};
   my $iodev = $hash->{IODev};
-  my $id = $hash->{id};
+  my $id = $hash->{nodeIdHex};
 
   if (!ZWave_secIsEnabled($hash)) {
     return;
@@ -1912,7 +1931,7 @@ ZWave_secNonceReceived($$)
     my $key_hex = AttrVal($iodev->{NAME}, "networkKey", "");
     my $mynonce_hex = substr (ZWave_secCreateNonce($hash), 2, 16);
     my $cryptedNetworkKeyMsg = ZWave_secNetworkkeySet($r_nonce_hex,
-      $mynonce_hex, $key_hex, $hash->{id});
+      $mynonce_hex, $key_hex, $hash->{nodeIdHex});
     ZWave_Set($hash, $name, ("secEncap", $cryptedNetworkKeyMsg));
     $hash->{secStatus}++;
     readingsSingleUpdate($hash, "SECURITY", 'INITIALIZING (Networkkey sent)',0);
@@ -2076,7 +2095,7 @@ ZWave_secEncrypt($$$)
   my ($hash, $r_nonce_hex, $plain) = @_;
   my $name = $hash->{NAME};
   my $iodev = $hash->{IODev};
-  my $id = $hash->{id};
+  my $id = $hash->{nodeIdHex};
 
   my $init_enc_key     = pack 'H*', 'a' x 32;
   my $init_auth_key    = pack 'H*', '5' x 32;
@@ -2092,7 +2111,7 @@ ZWave_secEncrypt($$$)
   my $out_hex = ZWave_secEncryptOFB ($enc_key, $iv, $msg_hex);
 
   my $auth_msg_hex = '8101';
-  $auth_msg_hex   .= sprintf "%02x", hex($hash->{id});
+  $auth_msg_hex   .= sprintf "%02x", hex($hash->{nodeIdHex});
   $auth_msg_hex   .= sprintf "%02x", (length ($out_hex))/2;
   $auth_msg_hex   .= $out_hex;
 
@@ -2164,7 +2183,7 @@ ZWave_secDecrypt($$$)
   # Rebuild message for authentification check
   # 81280103 '81' . <from-id> . <to-id> . <len> . <encrMsg>
   my $my_msg_hex = ($newnonce ? 'c1' : '81');
-  $my_msg_hex .= sprintf "%02x", hex($hash->{id});
+  $my_msg_hex .= sprintf "%02x", hex($hash->{nodeIdHex});
   $my_msg_hex .= '01';
   $my_msg_hex .= sprintf "%02x", (length ($msg_hex))/2;
   $my_msg_hex .= $msg_hex;
@@ -2189,7 +2208,7 @@ ZWave_secDecrypt($$$)
         }
       }
       my $decryptedCmd = '000400';
-      $decryptedCmd .= sprintf "%02x", hex($hash->{id});
+      $decryptedCmd .= sprintf "%02x", hex($hash->{nodeIdHex});
       $decryptedCmd .= sprintf "%02x", (length ($out_hex))/2;
       $decryptedCmd .= $out_hex;
 
@@ -2389,7 +2408,7 @@ ZWave_wakeupTimer($$)
 
   } elsif(!$direct && $now - $hash->{lastMsgSent} > 2) {
     if(!$hash->{SendStack}) {
-      my $nodeId = $hash->{id};
+      my $nodeId = $hash->{nodeIdHex};
       my $cmdEf  = (AttrVal($hash->{NAME},"noExplorerFrames",0)==0 ? "25":"05");
       # wakeupNoMoreInformation
       IOWrite($hash, "00", "13${nodeId}028408${cmdEf}$nodeId");
@@ -2462,7 +2481,8 @@ ZWave_addToSendStack($$)
   push @{$ss}, $cmd;
 
   if(ZWave_isWakeUp($hash)) {
-    if ($cmd =~ m/^......988[01].*/) {
+    # SECURITY XXX and neighborList
+    if ($cmd =~ m/^......988[01].*/ || $cmd =~ m/^80..0101$/) { 
       Log3 $hash->{NAME}, 5, "$hash->{NAME}: Sendstack bypassed for $cmd";
     } else {
       return "Scheduled for sending after WAKEUP" if(!$hash->{wakeupAlive});
@@ -2498,6 +2518,35 @@ ZWave_Parse($$@)
     return "";
   }
 
+  if($msg =~ m/^neighborList (..) 0180(.*)$/) {
+    my ($id, $data) = ($1, $2);
+    my $hash = $modules{ZWave}{defptr}{"$homeId $id"};
+    my $name = ($hash ? $hash->{NAME} : "unknown");
+
+    my @r = map { ord($_) } split("", pack('H*', $data));
+    return "Bogus answer: $msg" if(int(@r) != 29);
+
+    my @list;
+    my $ioId = ReadingsVal($ioName, "homeId", "");
+    $ioId = $1 if($ioId =~ m/CtrlNodeId:(..)/);
+    for my $byte (0..28) {
+      my $bits = $r[$byte];
+      for my $bit (0..7) {
+        if($bits & (1<<$bit)) {
+          my $dec = $byte*8+$bit+1;
+          my $hex = sprintf("%02x", $dec);
+          my $h = $modules{ZWave}{defptr}{"$homeId $hex"};
+          push @list, ($hex eq $ioId ? $ioName :
+                      ($h ? $h->{NAME} : "UNKNOWN_$dec"));
+        }
+      }
+    }
+    $msg = @list ? join(",", @list) : "empty";
+    readingsSingleUpdate($hash, "neighborList", $msg, 1) if($hash);
+    return $msg if($srcCmd);
+    return "";
+  }
+
   if($msg =~ m/^01(..)(..*)/) { # 01==ANSWER from the ZWDongle
     my ($cmd, $arg) = ($1, $2);
     $cmd = $zw_func_id{$cmd} if($zw_func_id{$cmd});
@@ -2519,6 +2568,21 @@ ZWave_Parse($$@)
       Log3 $ioName, 2, "SERIAL_API_SET_TIMEOUTS: ACK:$1 BYTES:$2";
       return "";
     }
+    if($cmd eq "ZW_REMOVE_FAILED_NODE_ID" ||
+       $cmd eq "ZW_REPLACE_FAILED_NODE") {
+      my $retval;
+           if($arg eq "00") { $retval = 'failedNodeRemoveStarted';
+      } elsif($arg eq "02") { $retval = 'notPrimaryController';
+      } elsif($arg eq "04") { $retval = 'noCallbackFunction';
+      } elsif($arg eq "08") { $retval = 'failedNodeNotFound';
+      } elsif($arg eq "10") { $retval = 'failedNodeRemoveProcessBusy';
+      } elsif($arg eq "20") { $retval = 'failedNodeRemoveFail';
+      } else                { $retval = 'unknown_'.$arg; # should never happen
+      }
+      DoTrigger($ioName, "$cmd $retval");
+      return "";
+    }
+
     Log3 $ioName, 4, "$ioName unhandled ANSWER: $cmd $arg";
     return "";
   }
@@ -2629,14 +2693,25 @@ ZWave_Parse($$@)
     }
 
   } elsif($cmd eq "ZW_REQUEST_NODE_NEIGHBOR_UPDATE") {
-    if ($id eq "21") {
-      $evt = 'started';
-    } elsif ($id eq "22") {
-      $evt = 'done';
-    } elsif ($id eq "23") {
-      $evt = 'failed';
-    } else {
-      $evt = 'unknown'; # should never happen
+         if($id eq "21") { $evt = 'started';
+    } elsif($id eq "22") { $evt = 'done';
+    } elsif($id eq "23") { $evt = 'failed';
+    } else               { $evt = 'unknown'; # should never happen
+    }
+
+  } elsif($cmd eq "ZW_REMOVE_FAILED_NODE_ID") {
+         if($id eq "00") { $evt = 'nodeOk';
+    } elsif($id eq "01") { $evt = 'failedNodeRemoved';
+    } elsif($id eq "02") { $evt = 'failedNodeNotRemoved';
+    } else               { $evt = 'unknown_'.$id; # should never happen
+    }
+
+  } elsif($cmd eq "ZW_REPLACE_FAILED_NODE") {
+         if($id eq "00") { $evt = 'nodeOk';
+    } elsif($id eq "03") { $evt = 'failedNodeReplace';
+    } elsif($id eq "04") { $evt = 'failedNodeReplaceDone';
+    } elsif($id eq "05") { $evt = 'failedNodeRemoveFailed';
+    } else               { $evt = 'unknown_'.$id; # should never happen
     }
 
   }
@@ -2684,12 +2759,7 @@ ZWave_Parse($$@)
 
 
   if(!$hash) {
-    $id=hex($id); $baseId=hex($baseId); $ep=hex($ep);
-    # $ep eq "0": Msg from a device known to the ZWDongle, but not to FHEM.
-    my $nn = "ZWave_Node_$baseId".($ep eq "0" ? "" : ".$ep");
-    my $ret = "UNDEFINED $nn ZWave $homeId $id";
-    Log3 $ioName, 3, "$ret, please define it";
-    DoTrigger("global", $ret);
+    Log3 $ioName, 1, "ZWave: unknown message $msg, please report";
     return "";
   }
 
@@ -2776,7 +2846,7 @@ ZWave_Undef($$)
 {
   my ($hash, $arg) = @_;
   my $homeId = $hash->{homeId};
-  my $id = $hash->{id};
+  my $id = $hash->{nodeIdHex};
   delete $modules{ZWave}{defptr}{"$homeId $id"};
   return undef;
 }
@@ -2879,6 +2949,14 @@ s2Hex($)
   <br>
   <b>Note</b>: devices with on/off functionality support the <a
       href="#setExtensions"> set extensions</a>.
+
+  <br><br><b>All</b>
+  <li>neighborUpdate<br>
+    Requests controller to update his routing table which is based on
+    slave's neighbor list. The update may take significant time to complete.
+    With the event "done" or "failed" ZWDongle will notify the end of the
+    update process.  To read node's neighbor list see neighborList get
+    below.</li>
 
   <br><br><b>Class ASSOCIATION</b>
   <li>associationAdd groupId nodeId ...<br>
@@ -3134,6 +3212,12 @@ s2Hex($)
   <a name="ZWaveget"></a>
   <b>Get</b>
   <ul>
+  <br><br><b>All</b>
+  <li>neighborList<br>
+    returns the list of neighbors.  Provides insights to actual network
+    topology.  List includes dead links and non-routing neighbors.
+    Since this information is stored in the dongle, the information will be
+    returned directly even for WAKE_UP devices.</li>
 
   <br><br><b>Class ALARM</b>
   <li>alarm alarmId<br>
@@ -3147,6 +3231,15 @@ s2Hex($)
     </li>
   <li>associationGroups<br>
     return the number of association groups<br>
+    </li>
+
+  <br><br><b>Class ASSOCIATION_GRP_INFO</b>
+  <li>associationGroupName groupId<br>
+    return the name of association groups
+    </li>
+  <li>associationGroupCmdList groupId<br>
+    return Command Classes and Commands that will be sent to associated
+    devices in this group<br>
     </li>
 
   <br><b>Class BASIC</b>
@@ -3171,6 +3264,13 @@ s2Hex($)
   <br><br><b>Class CLOCK</b>
   <li>clock<br>
     request the clock data
+    </li>
+
+  <br><br><b>Class COLOR_CONTROL</b>
+  <li>ccCapability<br>
+    return capabilities.</li>
+  <li>ccStatus channelId<br>
+    return status of channel ChannelId.
     </li>
 
   <br><br><b>Class CONFIGURATION</b>
@@ -3418,6 +3518,10 @@ s2Hex($)
   <li>assocGroup_X:Max Y Nodes A,B,...</li>
   <li>assocGroups:X</li>
 
+  <br><br><b>Class ASSOCIATION_GRP_INFO</b>
+  <li>assocGroupName_X:name</li>
+  <li>assocGroupCmdList_X:AABBCCDD...</li>
+
   <br><br><b>Class BASIC</b>
   <li>basicReport:XY</li>
   <li>state:basicGet</li>
@@ -3444,6 +3548,10 @@ s2Hex($)
   <br><br><b>Class CLOCK</b>
   <li>clock:get</li>
   <li>clock:[mon|tue|wed|thu|fri|sat|sun] HH:MM</li>
+
+  <br><br><b>Class COLOR_CONTROL</b>
+  <li>ccCapability:XY</li>
+  <li>ccStatus_X:Y</li>
 
   <br><br><b>Class CONFIGURATION</b>
   <li>config_X:Y<br>

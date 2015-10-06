@@ -53,6 +53,8 @@
 #                     changed: limit refresh to at least 60 secs
 #                              to prevent performance issues
 # 2015-03-29 - 8334 - changed: commandref updated
+# 2015-09-25 -      - changed: support ReadingsVal() in ticker
+#                              with \n in text
 #
 ##############################################
 # $Id$
@@ -139,7 +141,8 @@ sub InfoPanel_Initialize($) {
     $hash->{SetFn}     = "btIP_Set";
     $hash->{GetFn}     = "btIP_Get";
     $hash->{NotifyFn}  = "btIP_Notify";
-    $hash->{AttrList}  = "autoreread:1,0 bgcolor refresh size title noscript showTime:1,0 ";
+    $hash->{AttrList}  = "autoreread:1,0 useViewPort:1,0 bgcolor refresh size ";
+    $hash->{AttrList} .= "title noscript showTime:1,0 ";
     $hash->{AttrList} .= " bgcenter:1,0 bgdir bgopacity tmin" if $useImgTools;
 
     return undef;
@@ -692,6 +695,7 @@ sub btIP_itemTicker {
   $id = ($id eq '-') ? createUniqueId() : $id;
   my $pause = 2 * $speed;
   my $color = substr($params{rgb},0,6);
+  $arg =~ s/\\n/\n/g; # support ReadingsVal() with \n in text
   my @a = split("\n",$arg);
   my $liTemplate = '<li>%s</li>'."\n";
 
@@ -1369,8 +1373,10 @@ sub btIP_returnHTML {
   my $refresh = AttrVal($name, 'refresh', 60);
      $refresh = ($refresh && $refresh < 59) ? 60 : $refresh; 
   my $title   = AttrVal($name, 'title', $name);
+  my $viewport= "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0\"/>";  
+  $viewport = AttrVal($name,"useViewPort",1) ? $viewport : "";
   my $gen     = 'generated="'.(time()-1).'"';  
-  my $code    = btIP_HTMLHead($name,$title,$refresh);
+  my $code    = btIP_HTMLHead($name,$title,$viewport,$refresh);
 
   $code .=  "<body topmargin=\"0\" leftmargin=\"0\" margin=\"0\" padding=\"0\" ".
             "$gen longpoll=\"1\" longpollfilter=\"room=all\" >\n".
@@ -1383,16 +1389,16 @@ sub btIP_returnHTML {
 }
 
 sub btIP_HTMLHead {
-  my ($name,$title,$refresh) = @_;
+  my ($name,$title,$viewport,$refresh) = @_;
   my $doctype = '<?xml version="1.0" encoding="utf-8" standalone="no"?> '."\n".
                 '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" '.
                 '"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">'."\n";
   my $xmlns   = "";
 
-  my $r       = (defined($refresh) && $refresh) ? "<meta http-equiv=\"refresh\" content=\"$refresh\"/>\n" : "";
+  my $r       = (defined($refresh) && $refresh) ? "<meta http-equiv=\"refresh\" content=\"$refresh\"/>" : "";
   my $scripts = btIP_getScript($name);
-  my $meta    = "<meta charset=\"UTF-8\">\n";
-  my $code    = "$doctype\n<html $xmlns>\n<head>\n<title>$title</title>\n$meta$r$scripts</head>\n";
+  my $meta    = "<meta charset=\"UTF-8\">";
+  my $code    = "$doctype\n<html $xmlns>\n<head>\n<title>$title</title>\n$meta\n$r\n$viewport\n$scripts</head>\n";
   return $code;
 }
 
@@ -1424,7 +1430,7 @@ sub btIP_HTMLTail {
 
 sub btIP_Overview {
   my ($name, $url);
-  my $html= btIP_HTMLHead(undef, "InfoPanel Overview", undef) . "<body>\n";
+  my $html= btIP_HTMLHead(undef, "InfoPanel Overview", undef, undef) . "<body>\n";
   foreach my $def (sort keys %defs) {
     if($defs{$def}{TYPE} eq "InfoPanel") {
         $name= $defs{$def}{NAME};
@@ -1550,6 +1556,7 @@ Please read <a href="http://forum.fhem.de/index.php/topic,32828.0.html" target="
 		<li><b>showTime</b> - disables generation timestamp in state if set to 0</li>
 		<li><b>size</b> - The dimensions of the picture in the format
             <code>&lt;width&gt;x&lt;height&gt;</code></li>
+		<li><b>useViewPort</b> - add viewport meta tag to fit mobile displays</li>
 		<li><b>title</b> - webpage title to be shown in Browser</li>
 		<br/>
 		<li><b>bgcenter</b> - background images will not be centered if attribute set to 0. Default: show centered</li>

@@ -316,24 +316,40 @@ HUEDevice_SetParam($$@)
     $obj->{'transitiontime'} = $value2 * 10 if( defined($value2) );
 
   } elsif($cmd eq "dimUp") {
-    my $bri = ReadingsVal($name,"bri","0");
-    $bri += 25;
-    $bri = 254 if( $bri > 254 );
-    $obj->{'on'}  = JSON::true;
-    $obj->{'bri'}  = 0+$bri;
-    $obj->{'transitiontime'} = 1;
-    #$obj->{'transitiontime'} = $value * 10 if( defined($value) );
-    $defs{$name}->{helper}->{update_timeout} = 0;
+    if( $defs{$name}->{IODev}->{helper}{apiversion} && $defs{$name}->{IODev}->{helper}{apiversion} >= (1<<16) + (7<<8) ) {
+      $obj->{'on'}  = JSON::true if( !$defs{$name}->{helper}{on} );
+      $obj->{'bri_inc'}  = 25;
+      $obj->{'bri_inc'} = $value if( defined($value) );
+      $obj->{'transitiontime'} = 1;
+      $defs{$name}->{helper}->{update_timeout} = 0;
+    } else {
+      my $bri = ReadingsVal($name,"bri","0");
+      $bri += 25;
+      $bri = 254 if( $bri > 254 );
+      $obj->{'on'}  = JSON::true if( !$defs{$name}->{helper}{on} );
+      $obj->{'bri'}  = 0+$bri;
+      $obj->{'transitiontime'} = 1;
+      #$obj->{'transitiontime'} = $value * 10 if( defined($value) );
+      $defs{$name}->{helper}->{update_timeout} = 0;
+    }
 
   } elsif($cmd eq "dimDown") {
-    my $bri = ReadingsVal($name,"bri","0");
-    $bri -= 25;
-    $bri = 0 if( $bri < 0 );
-    $obj->{'on'}  = JSON::true;
-    $obj->{'bri'}  = 0+$bri;
-    $obj->{'transitiontime'} = 1;
-    #$obj->{'transitiontime'} = $value * 10 if( defined($value) );
-    $defs{$name}->{helper}->{update_timeout} = 0;
+    if( $defs{$name}->{IODev}->{helper}{apiversion} && $defs{$name}->{IODev}->{helper}{apiversion} >= (1<<16) + (7<<8) ) {
+      $obj->{'on'}  = JSON::true if( !$defs{$name}->{helper}{on} );
+      $obj->{'bri_inc'}  = -25;
+      $obj->{'bri_inc'} = -$value if( defined($value) );
+      $obj->{'transitiontime'} = 1;
+      $defs{$name}->{helper}->{update_timeout} = 0;
+    } else {
+      my $bri = ReadingsVal($name,"bri","0");
+      $bri -= 25;
+      $bri = 0 if( $bri < 0 );
+      $obj->{'on'}  = JSON::true if( !$defs{$name}->{helper}{on} );
+      $obj->{'bri'}  = 0+$bri;
+      $obj->{'transitiontime'} = 1;
+      #$obj->{'transitiontime'} = $value * 10 if( defined($value) );
+      $defs{$name}->{helper}->{update_timeout} = 0;
+    }
 
   } elsif($cmd eq "ct") {
     $obj->{'on'}  = JSON::true;
@@ -804,6 +820,7 @@ HUEDevice_Parse($$)
 
   $hash->{name} = $result->{'name'};
   $hash->{type} = $result->{'type'};
+  $hash->{uniqueid} = $result->{'uniqueid'};
 
   if( $hash->{helper}->{devtype} eq 'G' ) {
     $hash->{lights} = join( ",", @{$result->{lights}} ) if( $result->{lights} );
@@ -822,15 +839,15 @@ HUEDevice_Parse($$)
   }
 
   $hash->{modelid} = $result->{modelid};
-  $hash->{uniqueid} = $result->{uniqueid};
   $hash->{manufacturername} = $result->{manufacturername};
+  $hash->{luminaireuniqueid} = $result->{luminaireuniqueid};
   $hash->{swversion} = $result->{swversion};
 
   if( $hash->{helper}->{devtype} eq 'S' ) {
 
     if( $result->{state} ) {
-      substr( $result->{state}{lastupdated}, 10, 1, ' ' );
       if( $result->{state}{lastupdated} ne 'none' ) {
+        substr( $result->{state}{lastupdated}, 10, 1, ' ' );
         if( $result->{state}{buttonevent}
             && ReadingsTimestamp($name,"state","") ne $result->{state}{lastupdated} ) {
           readingsBeginUpdate($hash);
@@ -967,16 +984,16 @@ HUEDevice_Parse($$)
 
   $s = 'unreachable' if( !$reachable );
 
-  $hash->{helper}{on} = $on;
-  $hash->{helper}{reachable} = $reachable;
-  $hash->{helper}{colormode} = $colormode;
-  $hash->{helper}{bri} = $bri;
-  $hash->{helper}{ct} = $ct;
-  $hash->{helper}{hue} = $hue;
-  $hash->{helper}{sat} = $sat;
-  $hash->{helper}{xy} = $xy;
-  $hash->{helper}{alert} = $alert;
-  $hash->{helper}{effect} = $effect;
+  $hash->{helper}{on} = $on if( defined($on) );
+  $hash->{helper}{reachable} = $reachable if( defined($reachable) );
+  $hash->{helper}{colormode} = $colormode if( defined($colormode) );
+  $hash->{helper}{bri} = $bri if( defined($bri) );
+  $hash->{helper}{ct} = $ct if( defined($ct) );
+  $hash->{helper}{hue} = $hue if( defined($hue) );
+  $hash->{helper}{sat} = $sat if( defined($sat) );
+  $hash->{helper}{xy} = $xy if( defined($xy) );
+  $hash->{helper}{alert} = $alert if( defined($alert) );
+  $hash->{helper}{effect} = $effect if( defined($effect) );
 
   $hash->{helper}{percent} = $percent;
 
@@ -1067,8 +1084,8 @@ HUEDevice_Parse($$)
         set colortemperature to &lt;value&gt; kelvin.</li>
       <li>bri &lt;value&gt; [&lt;ramp-time&gt;]<br>
         set brighness to &lt;value&gt;; range is 0-254.</li>
-      <li>dimUp</li>
-      <li>dimDown</li>
+      <li>dimUp [delta]</li>
+      <li>dimDown [delta]</li>
       <li>ct &lt;value&gt; [&lt;ramp-time&gt;]<br>
         set colortemperature to &lt;value&gt; in mireds (range is 154-500) or kelvin (rankge is 2000-6493).</li>
       <li>hue &lt;value&gt; [&lt;ramp-time&gt;]<br>

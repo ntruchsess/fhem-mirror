@@ -62,7 +62,7 @@ HttpUtils_Close($)
   my ($hash) = @_;
   delete($hash->{FD});
   delete($selectlist{$hash});
-  $hash->{conn}->close() if($hash->{conn});
+  $hash->{conn}->close() if(defined($hash->{conn}));
   delete($hash->{conn});
   delete($hash->{hu_sslAdded});
   delete($hash->{hu_filecount});
@@ -370,6 +370,7 @@ HttpUtils_ParseAnswer($$)
     } else {
       my $ra;
       map { $ra=$1 if($_ =~ m/Location:\s*(\S+)$/) } @header;
+      $ra = "/$ra" if($ra !~ m/^http/ && $ra !~ m/^\//);
       $hash->{url} = ($ra =~ m/^http/) ? $ra: $hash->{addr}.$ra;
       Log3 $hash, $hash->{loglevel}, "HttpUtils $hash->{displayurl}: ".
           "Redirect to ".($hash->{hideurl} ? "<hidden>" : $hash->{url});

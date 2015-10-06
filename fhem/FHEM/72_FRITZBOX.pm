@@ -338,9 +338,11 @@ sub FRITZBOX_Set($$@)
       # }
    } 
    elsif ( lc $cmd eq 'checkapis') {
-      Log3 $name, 3, "FRITZBOX: get $name $cmd ".join(" ", @val);
+      Log3 $name, 3, "FRITZBOX: set $name $cmd ".join(" ", @val);
       $hash->{APICHECKED} = 0;
+      $hash->{fhem}{LOCAL} = 1;
       FRITZBOX_Readout_Start($hash->{helper}{TimerReadout});
+      $hash->{fhem}{LOCAL} = 0;
       return undef;
    } 
    elsif ( lc $cmd eq 'customerringtone') {
@@ -2210,7 +2212,14 @@ sub FRITZBOX_GuestWlan_Run_Web($)
 
 
 # Set guestWLAN, if necessary set also WLAN
-   if ($hash->{SECPORT}) { #TR-064
+   if ( $hash->{WEBCM} ) { #webcm
+      push @webCmdArray, "wlan:settings/wlan_enable" => "1"    if $state == 1;
+      # push @webCmdArray, "active" => "on";
+      # FRITZBOX_Web_CmdPost ($hash, \@webCmdArray, '/wlan/wlan_settings.lua');
+      push @webCmdArray, "wlan:settings/guest_ap_enabled" => $state;
+      $result = FRITZBOX_Web_CmdPost( $hash, \@webCmdArray );
+   }
+   elsif ( $hash->{SECPORT} ) { #TR-064
       if ($state == 1) { # WLAN on when Guest WLAN on
          push @tr064CmdArray, ["WLANConfiguration:1", "wlanconfig1", "SetEnable", "NewEnable", "1"];
          push @tr064CmdArray, ["WLANConfiguration:2", "wlanconfig2", "SetEnable", "NewEnable", "1"]
@@ -2222,12 +2231,8 @@ sub FRITZBOX_GuestWlan_Run_Web($)
       push @tr064CmdArray, ["WLANConfiguration:".$gWlanNo, "wlanconfig".$gWlanNo, "SetEnable", "NewEnable", $state];
       $result = FRITZBOX_TR064_Cmd( $hash, 0, \@tr064CmdArray );
    }
-   else { #webcm
-      push @webCmdArray, "wlan:settings/wlan_enable" => "1"    if $state == 1;
-      # push @webCmdArray, "active" => "on";
-      # FRITZBOX_Web_CmdPost ($hash, \@webCmdArray, '/wlan/wlan_settings.lua');
-      push @webCmdArray, "wlan:settings/guest_ap_enabled" => $state;
-      $result = FRITZBOX_Web_CmdPost( $hash, \@webCmdArray );
+   else { #no API
+      FRITZBOX_Log $hash, 2, "Error: No API available to switch WLAN.";
    }
 
    # push @webCmdArray, "autoupdate" => "on";
@@ -2318,17 +2323,20 @@ sub FRITZBOX_Wlan_Run_Web($)
    $state =~ s/off/0/;
  
 # Set WLAN
-   if ($hash->{SECPORT}) { #TR-064
+   if ($hash->{WEBCM}) { #webcm
+      push @webCmdArray, "wlan:settings/wlan_enable" => $state;
+      FRITZBOX_Web_CmdPost ($hash, \@webCmdArray);
+      # push @webCmdArray, "active" => "on" if $val[0] eq "on";
+      # FRITZBOX_Web_CmdPost ($hash, \@webCmdArray, '/wlan/wlan_settings.lua');
+   }
+   elsif ($hash->{SECPORT}) { #TR-064
       push @tr064CmdArray, ["WLANConfiguration:1", "wlanconfig1", "SetEnable", "NewEnable", $state];
       push @tr064CmdArray, ["WLANConfiguration:2", "wlanconfig2", "SetEnable", "NewEnable", $state]
                if $hash->{fhem}->{is_double_wlan} == 1;
       $result = FRITZBOX_TR064_Cmd( $hash, 0, \@tr064CmdArray );
    }
-   else { #webcm
-      push @webCmdArray, "wlan:settings/wlan_enable" => $state;
-      FRITZBOX_Web_CmdPost ($hash, \@webCmdArray);
-      # push @webCmdArray, "active" => "on" if $val[0] eq "on";
-      # FRITZBOX_Web_CmdPost ($hash, \@webCmdArray, '/wlan/wlan_settings.lua');
+   else { #no API
+      FRITZBOX_Log $hash, 2, "Error: No API available to switch WLAN.";
    }
    
 # Read WLAN-Status
@@ -2922,15 +2930,14 @@ sub FRITZBOX_Ring_Run_Web($)
          my $getCmdStr = "&ring_tone_radio_test=1&idx=".$_."&start_ringtest=1&ringtone=".$value;
             FRITZBOX_Log $hash, 4, "Reset ring tone of dect$_ to $value";
          # Reset internet station for the Fritz!Fons
-         if ($ttsLink)
-         {
+         if ($ttsLink) {
             $value = $startValue->{dectUser}->[$_]->{RadioRingID};
             push @webCmdArray, "telcfg:settings/Foncontrol/User".$_."/RadioRingID" => $value
                unless $useGuiHack;
             $getCmdStr .= "&ring_tone_radio_test=".$value;
             FRITZBOX_Log $hash, 4, "Reset radio station of dect$_ to $value";
          }
-         push @getCmdArray, [ "fon_devices/edit_dect_ring_tone.lua" => $getCmdStr] 
+         push @getCmdArray, [ "fon_devices/edit_dect_ring_tone.lua" => $getCmdStr ] 
                if $useGuiHack ;
       }
    }
@@ -4272,11 +4279,15 @@ sub FRITZBOX_Web_Query($$@)
    # FRITZBOX_Log $hash, 3, "Response: ".$response->content;
 #################
 
+   my $jsonText = $response->content;
+   # Remove illegal excape sequences
+   $jsonText =~ s/\\'/'/g;
+   
    my $jsonResult ;
    if ($charSet eq "UTF-8") {
-      $jsonResult = JSON->new->utf8->decode ($response->content);
+      $jsonResult = JSON->new->utf8->decode( $jsonText );
    } else {
-      $jsonResult = JSON   ->new->latin1->decode ($response->content);
+      $jsonResult = JSON->new->latin1->decode( $jsonText );
    }
    $jsonResult->{sid} = $sid;
    return $jsonResult;
@@ -4327,24 +4338,20 @@ sub FRITZBOX_readPassword($)
    FRITZBOX_Log $hash, 5, "Read FritzBox password from file";
    ($err, $password) = getKeyValue($index);
 
-   if(defined($err))
-   {
+   if ( defined($err) ) {
       FRITZBOX_Log $hash, 4, "unable to read FritzBox password from file: $err";
       return undef;
    }  
     
-   if(defined($password))
-   {
-      if(eval "use Digest::MD5;1")
-      {
+   if ( defined($password) ) {
+      if ( eval "use Digest::MD5;1" ) {
          $key = Digest::MD5::md5_hex(unpack "H*", $key);
          $key .= Digest::MD5::md5_hex($key);
       }
 
       my $dec_pwd = '';
      
-      for my $char (map { pack('C', hex($_)) } ($password =~ /(..)/g))
-      {
+      for my $char (map { pack('C', hex($_)) } ($password =~ /(..)/g)) {
          my $decode=chop($key);
          $dec_pwd.=chr(ord($char)^ord($decode));
          $key=$decode.$key;
@@ -4352,8 +4359,7 @@ sub FRITZBOX_readPassword($)
      
       return $dec_pwd;
    }
-   else
-   {
+   else {
       FRITZBOX_Log $hash, 4, "No password in file";
       return undef;
    }
@@ -4489,6 +4495,11 @@ sub FRITZBOX_fritztris($)
       <li><code>set &lt;name&gt; call &lt;number&gt; [duration] [say:text|play:MP3URL]</code>
          <br>
          Calls for 'duration' seconds (default 60) the given number from an internal port (default 1 or attribute 'ringWithIntern'). If the call is taken a text or sound can be played as music on hold (moh). The internal port will also ring.
+      </li><br>
+
+      <li><code>set &lt;name&gt; checkAPIs</code>
+         <br>
+         Restarts the initial check of the programming interfaces of the FRITZ!BOX.
       </li><br>
 
       <li><code>set &lt;name&gt; customerRingTone &lt;internalNumber&gt; &lt;fullFilePath&gt;</code>
@@ -4828,13 +4839,20 @@ sub FRITZBOX_fritztris($)
          <br>
          Ruf f&uuml;r 'Dauer' Sekunden (Standard 60 s) die angegebene Telefonnummer von einem internen Telefonanschluss an (Standard ist 1 oder das Attribut 'ringWithIntern'). Wenn der Angerufene abnimmt, h&ouml;rt er die Wartemusik oder den angegebenen Text oder Klang.
          Der interne Telefonanschluss klingelt ebenfalls.
+         <br>
+         Ben&ouml;tigt die API: Telnet oder webcm.
+      </li><br>
+
+      <li><code>set &lt;name&gt; checkAPIs</code>
+         <br>
+         Startet eine erneute Abfrage der exitierenden Programmierschnittstellen der FRITZ!BOX.
       </li><br>
 
       <li><code>set &lt;name&gt; customerRingTone &lt;internalNumber&gt; &lt;MP3DateiInklusivePfad&gt;</code>
          <br>
          L&auml;dt die MP3-Datei als Klingelton auf das angegebene Telefon. Die Datei muss im Dateisystem der Fritzbox liegen.
          <br>
-         Das Hochladen dauert etwa eine Minute bis der Klingelton verf&uuml;gbar ist.
+         Das Hochladen dauert etwa eine Minute bis der Klingelton verf&uuml;gbar ist. (API: Telnet)
       </li><br>
 
       <li><code>set &lt;name&gt; dect &lt;on|off&gt;</code>
@@ -4851,6 +4869,8 @@ sub FRITZBOX_fritztris($)
          Die Rufumleitung muss zuvor auf der Fritz!Box eingerichtet werden. Ben&ouml;tigt die API: Telnet oder webcm.
          <br>
          Achtung! Die Fritz!Box erm&ouml;glicht auch eine Weiterleitung in Abh&auml;ngigkeit von der anrufenden Nummer. Diese Art der Weiterleitung kann hiermit nicht geschaltet werden. 
+         <br>
+         Ben&ouml;tigt die API: Telnet oder webcm.
       </li><br>
 
       <li><code>set &lt;name&gt; guestWLAN &lt;on|off&gt;</code>

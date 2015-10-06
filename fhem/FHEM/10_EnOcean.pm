@@ -304,7 +304,7 @@ my %EnO_eepConfig = (
   "D2.40.00" => {attr => {subType => "ledCtrlState.00"}},
   "D2.40.01" => {attr => {subType => "ledCtrlState.01"}},
   "D2.A0.01" => {attr => {subType => "valveCtrl.00", defaultChannel => 0, webCmd => "opens:closes"}},
-  "D5.00.01" => {attr => {subType => "contact"}},
+  "D5.00.01" => {attr => {subType => "contact", manufID => "7FF"}},
   "F6.02.01" => {attr => {subType => "switch"}},
   "F6.02.02" => {attr => {subType => "switch"}},
   "F6.02.03" => {attr => {subType => "switch"}},
@@ -321,8 +321,9 @@ my %EnO_eepConfig = (
  # special profiles
   "G5.38.08" => {attr => {subType => "gateway", eep => "A5-38-08", gwCmd => "dimming", manufID => "00D", webCmd => "on:off:dim"}},
   "G5.3F.7F" => {attr => {subType => "manufProfile", eep => "A5-3F-7F", manufID => "00D", webCmd => "opens:stop:closes"}},
-  "L6.02.01" => {attr => {subType => "FRW", eep => "F6-02-01", manufID => "00D"}},
+  "M5.38.08" => {attr => {subType => "gateway", eep => "A5-38-08", gwCmd => "switching", manufID => "00D", webCmd => "on:off"}},
   "G5.ZZ.ZZ" => {attr => {subType => "PM101", manufID => "005"}},
+  "L6.02.01" => {attr => {subType => "FRW", eep => "F6-02-01", manufID => "00D"}},
   "ZZ.ZZ.ZZ" => {attr => {subType => "raw"}},
 );
 
@@ -575,11 +576,46 @@ EnOcean_Define($$)
   } else {
     return "wrong syntax: define <name> EnOcean <8-digit-hex-code>|getNextID|<EEP>";
   }
-  # Help FHEMWEB split up devices
-  $attr{$name}{subType} = $1 if($name =~ m/EnO_(.*)_$def/);
-  if (@a == 4) {
-    # parse received device data
+  # autocreate: parse received device telegram
+  if (@a == 4 && $name =~ m/EnO_$def/) {
     $hash->{DEF} = $def;
+    my ($data, $rorg, $status);
+    (undef, undef, $rorg, $data, undef, $status, undef) = split(':', $a[3]);     
+    $attr{$name}{subType} = $EnO_rorgname{$rorg};
+    if ($attr{$name}{subType} eq "switch") {
+      my $nu = (hex($status) & 0x10) >> 4;
+      my $t21 = (hex($status) & 0x20) >> 5;
+      $attr{$name}{manufID} = "7FF";
+      if ($t21 && $nu) {
+        $attr{$name}{eep} = "F6-02-01";
+        readingsSingleUpdate($hash, "teach", "RPS teach-in accepted EEP F6-02-01 Manufacturer: no ID", 1);
+        Log3 $name, 2, "EnOcean $name teach-in EEP F6-02-01 Manufacturer: no ID";
+      } elsif (!$t21 && $nu) {
+        $attr{$name}{eep} = "F6-03-01";
+        readingsSingleUpdate($hash, "teach", "RPS teach-in accepted EEP F6-03-01 Manufacturer: no ID", 1);
+        Log3 $name, 2, "EnOcean $name teach-in EEP F6-03-01 Manufacturer: no ID";
+      }      
+    } elsif ($attr{$name}{subType} eq "contact" && hex($data) & 8) {
+      $attr{$name}{eep} = "D5-00-01";
+      $attr{$name}{manufID} = "7FF";
+      readingsSingleUpdate($hash, "teach", "1BS teach-in accepted EEP D5-00-01 Manufacturer: no ID", 1);
+      Log3 $name, 2, "EnOcean $name teach-in EEP D5-00-01 Manufacturer: no ID";
+    } elsif ($attr{$name}{subType} eq "4BS" && hex(substr($data, 6, 2)) & 8) {
+      readingsSingleUpdate($hash, "teach", "4BS teach-in is missing", 1);
+      Log3 $name, 2, "EnOcean $name teach-in is missing";
+    } elsif ($attr{$name}{subType} eq "VLD") {
+      readingsSingleUpdate($hash, "teach", "UTE teach-in is missing", 1);
+      Log3 $name, 2, "EnOcean $name teach-in is missing";
+    } elsif ($attr{$name}{subType} eq "MSC") {
+      readingsSingleUpdate($hash, "teach", "MSC not supported", 1);
+      Log3 $name, 2, "EnOcean $name MSC not supported";
+    } elsif ($attr{$name}{subType} =~ m/^SEC|ENC$/) {
+      readingsSingleUpdate($hash, "teach", "STE teach-in is missing", 1);
+      Log3 $name, 2, "EnOcean $name secure teach-in is missing";
+    } elsif ($attr{$name}{subType} =~ m/^GPCD|GPSD$/) {
+      readingsSingleUpdate($hash, "teach", "GP teach-in is missing", 1);
+      Log3 $name, 2, "EnOcean $name teach-in is missing";
+    }
     EnOcean_Parse($hash, $a[3]);
   }
   #$hash->{NOTIFYDEV} = "global";
@@ -4525,10 +4561,10 @@ sub EnOcean_Parse($$)
       if (exists($iohash->{helper}{gpRespWait}{$destinationID}) ||
           exists($iohash->{helper}{UTERespWait}{$destinationID}) ||
           exists($iohash->{helper}{"4BSRespWait"}{$destinationID})) {
-        $ret = "UNDEFINED EnO_${rorgname}_$senderID EnOcean $senderID $msg";
-        #$ret = "UNDEFINED -temporary EnO_${rorgname}_$senderID EnOcean $senderID $msg";
+        $ret = "UNDEFINED EnO_$senderID EnOcean $senderID $msg";
+        #$ret = "UNDEFINED -temporary EnO_$senderID EnOcean $senderID $msg";
       } else {
-        $ret = "UNDEFINED EnO_${rorgname}_$senderID EnOcean $senderID $msg";
+        $ret = "UNDEFINED EnO_$senderID EnOcean $senderID $msg";
       }
       if ($rorgname =~ m/^GPCD|GPSD$/) {        
         Log3 undef, 4, "EnOcean Unknown GP device with SenderID $senderID and $rorgname telegram, please define it.";
@@ -4658,7 +4694,7 @@ sub EnOcean_Parse($$)
     # Position Switch, Home and Office Application (EEP F6-04-01)
     # Mechanical Handle (EEP F6-10-00)
     my $event = "state";
-    my $nu =  ((hex($status) & 0x10) >> 4);
+    my $nu =  (hex($status) & 0x10) >> 4;
     # unused flags (AFAIK)
     #push @event, "1:T21:".((hex($status) & 0x20) >> 5);
     #push @event, "1:NU:$nu";
@@ -4814,9 +4850,14 @@ sub EnOcean_Parse($$)
   # [Eltako FTK, STM-250]
     push @event, "3:state:" . ($db[0] & 1 ? "closed" : "open");
     if (!($db[0] & 8)) {
+      # teach-in
       $attr{$name}{eep} = "D5-00-01";
+      $attr{$name}{manufID} = "7FF";
+      $attr{$name}{subType} = "contact";
       push @event, "3:teach:1BS teach-in accepted EEP D5-00-01 Manufacturer: no ID";
       Log3 $name, 2, "EnOcean $name teach-in EEP D5-00-01 Manufacturer: no ID";
+      # store attr subType, manufID ...
+      EnOcean_CommandSave(undef, undef);
     }
 
   } elsif ($rorg eq "A5") {
@@ -5351,7 +5392,7 @@ sub EnOcean_Parse($$)
         $fspeed = 1      if ($db[3] >= 165);
         $fspeed = 0      if ($db[3] >= 190);
         $fspeed = "auto" if ($db[3] >= 210);
-        my $switch = $db[0] & 1;
+        my $switch = $db[0] & 1 ? "on" : "off";
         push @event, "3:state:T: $temp SP: $db[2] F: $fspeed SW: $switch";
         push @event, "3:fanStage:$fspeed";
         push @event, "3:switch:$switch";
@@ -8630,46 +8671,47 @@ sub EnOcean_Notify(@)
 
     } elsif ($devName eq "global" && $s =~ m/^DEFINED ([^ ]*)$/) {
       my $definedName = $1;
-      if ($definedName =~ m/FileLog_EnO_(.*)_(.*)/) {
+      if ($definedName =~ m/FileLog_(EnO_.*)/) {
         # teach-in response actions
         # delete temporary teach-in response device
-        my $rorgName = $1;
+        $definedName = $1;
+        my $rorgName = AttrVal($definedName, "subType", '');
         if (defined $hash->{IODev}{helper}{UTERespWaitDel}{$name} && $rorgName eq "UTE") {
-          CommandDelete(undef, substr($definedName, 8));
+          CommandDelete(undef, $definedName);
           delete $hash->{IODev}{helper}{UTERespWaitDel}{$name};
-          Log3 $name, 2, "EnOcean $name UTE temporary teach-in response device " . substr($definedName, 8) . " deleted";
+          Log3 $name, 2, "EnOcean $name UTE temporary teach-in response device " . $definedName . " deleted";
           EnOcean_CommandSave(undef, undef);
           #CommandRereadCfg(undef, undef);
           #####
           #delete $hash->{IODev}{helper}{UTERespWaitDel}{$name};
-          #Log3 $name, 2, "EnOcean $name UTE temporary teach-in response device " . substr($definedName, 8) . " deleted";
-          #my %functionHash = (hash => $hash, function => "delete", deleteDevice => substr($definedName, 8), oldDevice => undef);
+          #Log3 $name, 2, "EnOcean $name UTE temporary teach-in response device " . $definedName . " deleted";
+          #my %functionHash = (hash => $hash, function => "delete", deleteDevice => $definedName, oldDevice => undef);
           #RemoveInternalTimer(\%functionHash);
           #InternalTimer(gettimeofday() + 0.1, "EnOcean_CommandDelete", \%functionHash, 0);
         }
         if (defined $hash->{IODev}{helper}{"4BSRespWaitDel"}{$name} && $rorgName eq "4BS") {
-          CommandDelete(undef, substr($definedName, 8));
+          CommandDelete(undef, $definedName);
           delete $hash->{IODev}{helper}{"4BSRespWaitDel"}{$name};
-          Log3 $name, 2, "EnOcean $name 4BS temporary teach-in response device " . substr($definedName, 8) . " deleted";
+          Log3 $name, 2, "EnOcean $name 4BS temporary teach-in response device " . $definedName . " deleted";
           EnOcean_CommandSave(undef, undef);
           #CommandRereadCfg(undef, undef);
           #####
           #delete $hash->{IODev}{helper}{"4BSRespWaitDel"}{$name};
-          #Log3 $name, 2, "EnOcean $name 4BS temporary teach-in response device " . substr($definedName, 8) . " deleted";
-          #my %functionHash = (hash => $hash, function => "delete", deleteDevice => substr($definedName, 8), oldDevice => undef);
+          #Log3 $name, 2, "EnOcean $name 4BS temporary teach-in response device " . $definedName . " deleted";
+          #my %functionHash = (hash => $hash, function => "delete", deleteDevice => $definedName, oldDevice => undef);
           #RemoveInternalTimer(\%functionHash);
           #InternalTimer(gettimeofday() + 0.1, "EnOcean_CommandDelete", \%functionHash, 0);
         }
         if (defined $hash->{IODev}{helper}{gpRespWaitDel}{$name} && $rorgName eq "GPTR") {
-          CommandDelete(undef, substr($definedName, 8));
+          CommandDelete(undef, $definedName);
           delete $hash->{IODev}{helper}{gpRespWaitDel}{$name};
-          Log3 $name, 2, "EnOcean $name GP temporary teach-in response device " . substr($definedName, 8) . " deleted";
+          Log3 $name, 2, "EnOcean $name GP temporary teach-in response device " . $definedName . " deleted";
           EnOcean_CommandSave(undef, undef);
           #CommandRereadCfg(undef, undef);
           #####
           #delete $hash->{IODev}{helper}{gpRespWaitDel}{$name};
-          #Log3 $name, 2, "EnOcean $name GP temporary teach-in response device " . substr($definedName, 8) . " deleted";
-          #my %functionHash = (hash => $hash, function => "delete", deleteDevice => substr($definedName, 8), oldDevice => undef);
+          #Log3 $name, 2, "EnOcean $name GP temporary teach-in response device " . $definedName . " deleted";
+          #my %functionHash = (hash => $hash, function => "delete", deleteDevice => $definedName, oldDevice => undef);
           #RemoveInternalTimer(\%functionHash);
           #InternalTimer(gettimeofday() + 0.1, "EnOcean_CommandDelete", \%functionHash, 0);
         }
@@ -10339,7 +10381,7 @@ sub EnOcean_sec_parseTeachIn($$$$) {
 
 	  # Decode teach in type
 	  if ($type == 0) {
-	    # UTE teach-in expected
+	    # 1BS, 4BS, UTE or GP teach-in expected
             if ($info == 0) {
               $attr{$name}{comMode} = "uniDir";
     	      $attr{$name}{secMode} = "rcv";
@@ -11188,6 +11230,7 @@ EnOcean_Undef($$)
    Inofficial EEP for special devices
    <ul>
      <li>G5-38-08 Gateway, Dimming [Eltako FSG, FUD]<br></li>
+     <li>M5-38-08 Gateway, Switching [Eltako FSR14]<br></li>
      <li>G5-3F-7F Shutter [Eltako FSB]<br></li>
      <li>L6-02-01 Smoke Detector [Eltako FRW]<br></li>
      <li>G5-ZZ-ZZ Light and Presence Sensor [Omnio Ratio eagle-PM101]<br></li>
@@ -12840,7 +12883,7 @@ EnOcean_Undef($$)
              one of the above, e.g. A0,BI</li>
          <li>pressed</li>
          <li>released</li>
-         <li>teach &lt;result of teach procedure&gt;</li>
+         <li>teach: &lt;result of teach procedure&gt;</li>
          <li>energyBow: pressed|released</li>
          <li>state: &lt;BtnX&gt;|&lt;BtnX&gt;,&lt;BtnY&gt;|released|pressed|teachIn|teachOut</li>
      </ul><br>
@@ -12915,10 +12958,11 @@ EnOcean_Undef($$)
 
      <li>Single Input Contact, Door/Window Contact<br>
          1BS Telegram (EEP D5-00-01)<br>
-         [EnOcean STM 320, STM 329, STM 250, Eltako FTK, Peha D 450 FU, STM-250, BSC ?]
+         [EnOcean STM 320, STM 329, STM 250, Eltako FTK, Peha D 450 FU]
      <ul>
          <li>closed</li>
          <li>open</li>
+         <li>teach: &lt;result of teach procedure&gt;</li>
          <li>state: open|closed</li>
      </ul></li>
         The device should be created by autocreate.
@@ -13195,11 +13239,11 @@ EnOcean_Undef($$)
      <ul>
        <li>T: t/&#176C SP: 0 ... 255 F: 0|1|2|3|auto SW: 0|1</li>
        <li>fanStage: 0|1|2|3|auto</li>
-       <li>switch: 0|1</li>
+       <li>switch: on|off</li>
        <li>setpoint: 0 ... 255</li>
        <li>setpointScaled: &lt;floating-point number&gt;</li>
        <li>temperature: t/&#176C (Sensor Range: t = 0 &#176C ... 40 &#176C)</li>
-       <li>state: T: t/&#176C SP: 0 ... 255 F: 0|1|2|3|auto SW: 0|1</li><br>
+       <li>state: T: t/&#176C SP: 0 ... 255 F: 0|1|2|3|auto SW: on|off</li><br>
        Alternatively for Eltako devices
        <li>T: t/&#176C SPT: t/&#176C NR: t/&#176C</li>
        <li>block: lock|unlock</li>
@@ -13690,7 +13734,7 @@ EnOcean_Undef($$)
        <li>setpointTemp: t/&#176C</li>
        <li>temperature: t/&#176C</li>
        <li>tempSensor: failed|ok</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>window: open|closed</li>
        <li>state: setpoint/%</li>
      </ul><br>
@@ -13703,14 +13747,13 @@ EnOcean_Undef($$)
          [IntesisBox PA-AC-ENO-1i]<br>
      <ul>
        <li>on|off</li>
-       <li>ctrl auto|0...100</li>
-       <li>fanSpeed auto|1...14</li>
-       <li>occupancy occupied|off|standby|unoccupied</li>
-       <li>mode auto|heat|morning_warmup|cool|night_purge|precool|off|test|emergency_heat|fan_only|free_cool|ice|max_heat|eco|dehumidification|calibration|emergency_cool|emergency_stream|max_cool|hvc_load|no_load|auto_heat|auto_cool</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
-       <li>vanePosition auto|horizontal|position_2|position_3|position_4|vertical|swing|vertical_swing|horizontal_swing|hor_vert_swing|stop_swing</li>
+       <li>ctrl: auto|0...100</li>
+       <li>fanSpeed: auto|1...14</li>
+       <li>occupancy: occupied|off|standby|unoccupied</li>
+       <li>mode: auto|heat|morning_warmup|cool|night_purge|precool|off|test|emergency_heat|fan_only|free_cool|ice|max_heat|eco|dehumidification|calibration|emergency_cool|emergency_stream|max_cool|hvc_load|no_load|auto_heat|auto_cool</li>
+       <li>vanePosition: auto|horizontal|position_2|position_3|position_4|vertical|swing|vertical_swing|horizontal_swing|hor_vert_swing|stop_swing</li>
        <li>powerSwitch: on|off</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: on|off</li>
      </ul><br>
         The attr subType must be hvac.10. This is done if the device was created by
@@ -13722,16 +13765,16 @@ EnOcean_Undef($$)
          [IntesisBox PA-AC-ENO-1i]<br>
      <ul>
        <li>error|ok</li>
-       <li>alarm error|ok</li>
-       <li>errorCode 0...65535</li>
-       <li>externalDisable disable|enable</li>
-       <li>keyCardDisable disable|enable</li>
-       <li>otherDisable disable|enable</li>
+       <li>alarm: error|ok</li>
+       <li>errorCode: 0...65535</li>
+       <li>externalDisable: disable|enable</li>
+       <li>keyCardDisable: disable|enable</li>
+       <li>otherDisable: disable|enable</li>
        <li>powerSwitch: on|off</li>
-       <li>remoteCtrl disable|enable</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
-       <li>window closed|opened</li>
-       <li>windowDisable disable|enable</li>
+       <li>remoteCtrl: disable|enable</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
+       <li>window: closed|opened</li>
+       <li>windowDisable: disable|enable</li>
        <li>state: error|ok</li>
      </ul><br>
         The attr subType must be hvac.11. This is done if the device was created by
@@ -13745,7 +13788,7 @@ EnOcean_Undef($$)
        <li>open|closed</li>
        <li>battery: ok|low (only EEP A5-30-01)</li>
        <li>contact: open|closed</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: open|closed</li>
      </ul><br>
         The attr subType must be digitalInput.01 or digitalInput.02. This is done if the device was
@@ -13761,7 +13804,7 @@ EnOcean_Undef($$)
        <li>in1: 0|1</li>
        <li>in2: 0|1</li>
        <li>in3: 0|1</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>temperature: t/&#176C (Sensor Range: t = 0 &#176C ... 40 &#176C)</li>
        <li>wake: 0|1</li>
        <li>state: T: t/&#176C I: 0|1 0|1 0|1 0|1 W: 0|1</li>
@@ -13779,7 +13822,7 @@ EnOcean_Undef($$)
        <li>in1: 0|1</li>
        <li>in2: 0|1</li>
        <li>in3: 0...255</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: 0|1 0|1 0|1 0...255</li>
      </ul><br>
         The attr subType must be digitalInput.04. This is done if the device was
@@ -13793,7 +13836,7 @@ EnOcean_Undef($$)
        <li>error|event|heartbeat</li>
        <li>battery: U/V (Range: U = 0 V ... 3.3 V</li>
        <li>signalIdx: 0 ... 127</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>telegramType: event|heartbeat</li>
        <li>state: error|event|heartbeat</li>
      </ul><br>
@@ -13812,7 +13855,7 @@ EnOcean_Undef($$)
        <li>randomEnd: yes|no</li>
        <li>randomStart: yes|no</li>
        <li>setpoint: 0...255</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>timeout: yyyy-mm-dd hh:mm:ss</li>
        <li>state: on|off|waiting_for_start|waiting_for_stop</li>
      </ul><br>
@@ -13830,7 +13873,7 @@ EnOcean_Undef($$)
        <li>executeTime: t/s (Sensor Range: t = 0.1 s ... 6553.5 s or 0 if no time specified)</li>
        <li>executeType: duration|delay</li>
        <li>block: lock|unlock</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: on|off</li>
      </ul><br>
         The attr subType must be gateway and gwCmd must be switching. This is done if the device was
@@ -13853,7 +13896,7 @@ EnOcean_Undef($$)
            Last value saved by <code>set &lt;name&gt; dim &lt;value&gt;</code>.</li>
        <li>rampTime: t/s (Sensor Range: t = 1 s ... 255 s or 0 if no time specified,
            for Eltako: t = 1 = fast dimming ... 255 = slow dimming or 0 = dimming speed on the dimmer used)</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: on|off</li>
      </ul><br>
         The attr subType must be gateway, gwCmd must be dimming and attr manufID must be 00D
@@ -13868,7 +13911,7 @@ EnOcean_Undef($$)
      <ul>
        <li>1/K</li>
        <li>setpointShift: 1/K (Sensor Range: T = -12.7 K ... 12.8 K)</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: 1/K</li>
      </ul><br>
         The attr subType must be gateway, gwCmd must be setpointShift.
@@ -13882,7 +13925,7 @@ EnOcean_Undef($$)
      <ul>
        <li>t/&#176C</li>
        <li>setpoint: t/&#176C (Sensor Range: t = 0 &#176C ... 51.2 &#176C)</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: t/&#176C</li>
      </ul><br>
         The attr subType must be gateway, gwCmd must be setpointBasic.
@@ -13900,7 +13943,7 @@ EnOcean_Undef($$)
        <li>controllerState: auto|override</li>
        <li>energyHoldOff: normal|holdoff</li>
        <li>presence: present|absent|standby</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: auto|heating|cooling|off</li>
      </ul><br>
         The attr subType must be gateway, gwCmd must be controlVar.
@@ -13913,7 +13956,7 @@ EnOcean_Undef($$)
          [untested]<br>
      <ul>
        <li>0 ... 3|auto</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: 0 ... 3|auto</li>
      </ul><br>
         The attr subType must be gateway, gwCmd must be fanStage.
@@ -13930,8 +13973,8 @@ EnOcean_Undef($$)
        <li>dimMax: &lt;maximum dimming value&gt; (Range: dim = 0  ... 255)</li>
        <li>dimMin: &lt;minimum dimming value&gt; (Range: dim = 0  ... 255)</li>
        <li>rampTime: t/s (Range: t = 0 s ... 65535 s)</li>
-       <li>rgb RRGGBB (red (R), green (G) or blue (B) color component values: 00 ... FF)</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>rgb: RRGGBB (red (R), green (G) or blue (B) color component values: 00 ... FF)</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: on|off</li>
      </ul><br>
         Another readings, see subtype lightCtrlState.02.<br>
@@ -13948,7 +13991,7 @@ EnOcean_Undef($$)
        <li>input1: U/V (Sensor Range: U = 0 V ... 10 V)</li>
        <li>input2: U/V (Sensor Range: U = 0 V ... 10 V)</li>
        <li>input3: U/V (Sensor Range: U = 0 V ... 10 V)</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: I1: U/V I2: U/V I3: U/V</li>
      </ul><br>
         The attr subType must be manufProfile and attr manufID must be 002
@@ -13965,7 +14008,7 @@ EnOcean_Undef($$)
        <li>emergencyMode&lt;channel&gt;: on|off</li>
        <li>nightReduction&lt;channel&gt;: on|off</li>
        <li>setpointTemp&lt;channel&gt;: t/&#176C</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>temperature&lt;channel&gt;: t/&#176C</li>
        <li>window&lt;channel&gt;: on|off</li>
        <li>state: on|off</li>
@@ -13992,8 +14035,8 @@ EnOcean_Undef($$)
         <li>anglePos: &alpha;/&#176 (Sensor Range: &alpha; = -180 &#176 ... 180 &#176)</li>
         <li>endPosition: open|open_ack|closed|not_reached|not_available</li>
         <li>position: pos/% (Sensor Range: pos = 0 % ... 100 %)</li>
-        <li>teach &lt;result of teach procedure&gt;</li>
-        <li>state : open|open_ack|closed|not_reached|stop|teach</li>
+        <li>teach: &lt;result of teach procedure&gt;</li>
+        <li>state: open|open_ack|closed|not_reached|stop|teach</li>
      </ul><br>
         The values of the reading position and anglePos are updated automatically,
         if the command position is sent or the reading state was changed
@@ -14038,7 +14081,7 @@ EnOcean_Undef($$)
         <li>responseTimeMax: 1/s</li>
         <li>responseTimeMin: 1/s</li>
         <li>serialNumber: [00000000 ... FFFFFFFF]</li>
-        <li>teach &lt;result of teach procedure&gt;</li>
+        <li>teach: &lt;result of teach procedure&gt;</li>
         <li>teachInDev: enabled|disabled</li>
         <li>state: on|off</li>
      </ul>
@@ -14067,7 +14110,7 @@ EnOcean_Undef($$)
         <li>block: unlock|lock|alarm</li>
         <li>endPosition: open|closed|not_reached|unknown</li>
         <li>position: unknown|pos/% (Sensor Range: pos = 0 % ... 100 %)</li>
-        <li>teach &lt;result of teach procedure&gt;</li>
+        <li>teach: &lt;result of teach procedure&gt;</li>
         <li>state: open|closed|in_motion|stoped|pos/% (Sensor Range: pos = 0 % ... 100 %)</li>
      </ul>
         <br>
@@ -14088,7 +14131,7 @@ EnOcean_Undef($$)
        <li>roomSize: 0...350/m<sup>2</sup>|max</li>
        <li>roomSizeRef: unsed|not_used|not_supported</li>
        <li>setpointTemp: t/&#176C (Range: t = 0 &#176C ... 40 &#176C)</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>temperature: t/&#176C (Sensor Range: t = 0 &#176C ... 40 &#176C)</li>
        <li>state: on|off|not_supported</li>
      </ul><br>
@@ -14105,7 +14148,7 @@ EnOcean_Undef($$)
        <li>current1: I/A (Range: I = 0 A ... 4095 A)</li>
        <li>current2: I/A (Range: I = 0 A ... 4095 A)</li>
        <li>current3: I/A (Range: I = 0 A ... 4095 A)</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: I1: I/A I2: I/A I3: I/A</li>
      </ul><br>
        The attr subType must be currentClamp.00|currentClamp.01|currentClamp.02. This is done if the device was
@@ -14126,7 +14169,7 @@ EnOcean_Undef($$)
        <li>powerSwitch: on|off</li>
        <li>red: 0 % ... 100 %</li>
        <li>rgb: RRGGBB (red (R), green (G) or blue (B) color component values: 00 ... FF)</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>telegramType: event|heartbeat</li>
        <li>state: on|off</li>
      </ul><br>
@@ -14141,7 +14184,7 @@ EnOcean_Undef($$)
        <li>open</li>
        <li>closes</li>
        <li>closed</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
        <li>state: opens|open|closes|closed|teachIn|teachOut</li>
      </ul><br>
        The attr subType must be valveCtrl.00. This is done if the device was
@@ -14152,11 +14195,11 @@ EnOcean_Undef($$)
 
      <li>Generic Profiles<br>
      <ul>
-       <li>&lt;00...64&gt;-&lt;channel name&gt; &lt;value&gt;</li>
-       <li>&lt;00...64&gt;-&lt;channel name&gt;Unit &lt;value&gt;</li>
-       <li>&lt;00...64&gt;-&lt;channel name&gt;ValueType value|setpointAbs|setpointRel</li>
-       <li>&lt;00...64&gt;-&lt;channel name&gt;ChannelType teachIn|data|flag|enum</li>
-       <li>teach &lt;result of teach procedure&gt;</li>
+       <li>&lt;00...64&gt;-&lt;channel name&gt;: &lt;value&gt;</li>
+       <li>&lt;00...64&gt;-&lt;channel name&gt;Unit: &lt;value&gt;</li>
+       <li>&lt;00...64&gt;-&lt;channel name&gt;ValueType: value|setpointAbs|setpointRel</li>
+       <li>&lt;00...64&gt;-&lt;channel name&gt;ChannelType: teachIn|data|flag|enum</li>
+       <li>teach: &lt;result of teach procedure&gt;</li>
      </ul><br>
        The attr subType must be genericProfile. This is done if the device was
        created by autocreate. If the profile in slave mode is operated, especially the channel

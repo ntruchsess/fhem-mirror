@@ -2632,10 +2632,17 @@ CommandVersion($$)
 
   my @ret = ("# $cvsid");
   push @ret, cfgDB_svnId if(configDBUsed());
-  foreach my $m (sort keys %modules) {
-    next if(!$modules{$m}{LOADED} || $modules{$m}{ORDER} < 0);
+  my $max = 7 ; # length("fhem.pl") = 7
+  
+  foreach my $m (sort {uc($a) cmp uc($b)} keys %modules) {
+    next if(!$modules{$m}{LOADED} ||
+             $modules{$m}{ORDER} < 0 ||
+             ($param && $m !~ /$param/));
     Log 4, "Looking for SVN Id in module $m";
-    my $fn = "$attr{global}{modpath}/FHEM/".$modules{$m}{ORDER}."_$m.pm";
+    my $fn = "$attr{global}{modpath}/FHEM/".$modules{$m}{ORDER}."_$m.pm"; 
+    if($max < length($modules{$m}{ORDER}."_$m.pm")) {
+      $max = length($modules{$m}{ORDER}."_$m.pm")
+    }
     if(!open(FH, $fn)) {
       my $ret = "$fn: $!";
       if(configDBUsed()){
@@ -2644,14 +2651,14 @@ CommandVersion($$)
       }
       push @ret, $ret;
     } else {
-      push @ret, map { chomp; $_ } grep(/# \$Id:/, <FH>);
+      push @ret, grep(/\$Id. [^\$\n\r].+\$/, <FH>);
     }
   }
-  if($param) {
-    return join("\n", grep /$param/, @ret);
-  } else {
-    return join("\n", @ret);
-  }
+  @ret = map {/\$Id. (\S+) (.+?)\$/ ? sprintf("%-".$max."s %s",$1,$2) : $_}
+        @ret; 
+  
+  return sprintf("%-".$max."s %s","File","Rev  Last Change\n\n").
+         join("\n", grep((defined($param) ? ($_ =~ /$param/) : 1), @ret));
 }
 
 #####################################
@@ -2796,6 +2803,17 @@ FmtTime($)
   my @t = localtime(shift);
   return sprintf("%02d:%02d:%02d", $t[2], $t[1], $t[0]);
 }
+
+sub
+FmtDateTimeRFC1123($)
+{
+  my $t = gmtime(shift);
+  if($t =~ m/^(...) (...) (..) (..:..:..) (....)$/) {
+    return sprintf("$1, %02d $2 $5 $4 GMT", $3);
+  }
+  return $t;
+}
+
 
 #####################################
 sub
@@ -3865,9 +3883,9 @@ readingsBulkUpdate($$$@)
     my $attreour = $hash->{".attreour"};
 
     # determine whether the reading is listed in any of the attributes
-    my $eocr = $attreocr && (my @eocrv=grep { my $l = $_;
-                                            $l =~ s/:.*//;
-                                            ($reading=~ m/^$l$/) ? $_ : undef} @{$attreocr});
+    my $eocr = $attreocr &&
+               ( my @eocrv = grep { my $l = $_; $l =~ s/:.*//;
+                   ($reading=~ m/^$l$/) ? $_ : undef} @{$attreocr});
     my $eour = $attreour && grep($reading =~ m/^$_$/, @{$attreour});
 
     # check if threshold is given
@@ -3875,15 +3893,26 @@ readingsBulkUpdate($$$@)
     if( $eocr
         && $eocrv[0] =~ m/.*:(.*)/ ) {
       my $threshold = $1;
+      my $ov = $value;
 
-      $value =~ s/[^\d\.\-]//g; # We expect only numbers here.
-      my $last_value = $hash->{".attreocr-threshold$reading"};
-      if( !defined($last_value) ) {
-        $hash->{".attreocr-threshold$reading"} = $value;
-      } elsif( abs($value-$last_value) < $threshold ) {
-        $eocr = 0;
+      $value =~ s/[^\d\.\-eE]//g; # We expect only numbers here.
+      my $isNum = looks_like_number($value);
+      if(!$isNum) {   # Forum #41083
+        $value = $ov;
+        $value =~ s/[^\d\.\-]//g;
+        $isNum = looks_like_number($value);
+      }
+      if($isNum) {
+        my $last_value = $hash->{".attreocr-threshold$reading"};
+        if( !defined($last_value) ) {
+          $hash->{".attreocr-threshold$reading"} = $value;
+        } elsif( abs($value-$last_value) < $threshold ) {
+          $eocr = 0;
+        } else {
+          $hash->{".attreocr-threshold$reading"} = $value;
+        }
       } else {
-        $hash->{".attreocr-threshold$reading"} = $value;
+        $value = $ov;
       }
     }
 

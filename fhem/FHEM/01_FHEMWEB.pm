@@ -1,4 +1,4 @@
-#lt#############################################
+##############################################
 # $Id$
 package main;
 
@@ -140,6 +140,7 @@ FHEMWEB_Initialize($)
     allowfrom
     basicAuth
     basicAuthMsg
+    closeConn:1,0
     column
     defaultRoom
     editConfig:1,0
@@ -158,6 +159,7 @@ FHEMWEB_Initialize($)
     plotmode:gnuplot,gnuplot-scroll,SVG
     plotEmbed:0,1
     plotsize
+    plotWeekStartDay:0,1,2,3,4,5,6
     nrAxis
     redirectCmds:0,1
     refresh
@@ -318,7 +320,6 @@ FW_Read($$)
     }
   }
 
-
   if(!$hash->{HDR}) {
     return if($hash->{BUF} !~ m/^(.*?)(\n\n|\r\n\r\n)(.*)$/s);
     $hash->{HDR} = $1;
@@ -402,7 +403,7 @@ FW_Read($$)
   $hash->{LASTACCESS} = $now;
 
   $arg = "" if(!defined($arg));
-  Log3 $FW_wname, 4, "HTTP $name GET $arg";
+  Log3 $FW_wname, 4, "$name $method $arg; BUFLEN:".length($hash->{BUF});
   $FW_ME = "/" . AttrVal($FW_wname, "webname", "fhem");
   my $pf = AttrVal($FW_wname, "plotfork", undef);
   if($pf) {   # 0 disables
@@ -455,27 +456,35 @@ FW_Read($$)
 
   my $length = length($FW_RET);
   my $expires = ($cacheable?
-                        ("Expires: ".localtime($now+900)." GMT\r\n") : "");
+                ("Expires: ".FmtDateTimeRFC1123($now+900)."\r\n") : "");
   Log3 $FW_wname, 4,
-        "$$:$name: $arg / RL:$length / $FW_RETTYPE / $compressed / $expires";
+        "name: $arg / RL:$length / $FW_RETTYPE / $compressed / $expires";
   if( ! addToWritebuffer($hash,
            "HTTP/1.1 200 OK\r\n" .
            "Content-Length: $length\r\n" .
            $expires . $compressed . $FW_headercors .
            "Content-Type: $FW_RETTYPE\r\n\r\n" .
            $FW_RET, "FW_closeConn") ){
-    Log3 $name, 4, "Closing connection $name due to full buffer in FW_Read";
+    Log3 $name, 4, "Closing connection $name due to full buffer in FW_Read"
+      if(!$hash->{isChild});
     TcpServer_Close( $hash );
+    FW_closeConn($hash);
     delete($defs{$name});
-  }
-
-  FW_closeConn($hash);
+  } 
 }
 
 sub
 FW_closeConn($)
 {
   my ($hash) = @_;
+  if(!$hash->{inform} && !$hash->{BUF}) { # Forum #41125
+    my $cc = AttrVal($hash->{SNAME}, "closeConn",
+                                        $FW_userAgent=~m/(iPhone|iPad|iPod)/);
+    if(!$FW_httpheader{Connection} || $cc) {
+      TcpServer_Close($hash);
+      delete($defs{$hash->{NAME}});
+    }
+  }
   POSIX::exit(0) if($hash->{isChild});
   FW_Read($hash, 1) if($hash->{BUF});
 }
@@ -708,10 +717,12 @@ FW_answerCall($)
 
   # Enable WebApps
   if($FW_tp || $FW_ss) {
-    my $icon = $FW_ME."/images/default/fhemicon_ios.png";
+    my $icon = FW_iconPath("fhemicon_ios.png");
+    $icon = $FW_ME."/images/".($icon ? $icon : "default/fhemicon_ios.png");
     if($FW_ss) {
-       FW_pO '<meta name="viewport" '.
-                   'content="initial-scale=1.0,user-scalable=1"/>';
+       my $stf = $FW_userAgent =~ m/iPad|iPhone|iPod/ ? ",shrink-to-fit=no" :"";
+       FW_pO "<meta name='viewport' ".
+                        "content='initial-scale=1.0,user-scalable=1$stf'/>";
     } elsif($FW_tp) {
       FW_pO '<meta name="viewport" content="width=768"/>';
     }
@@ -1573,9 +1584,13 @@ FW_returnFileAsStream($$$$$)
     $if_none_match =~ s/"(.*)"/$1/ if($if_none_match);
     $etag = (stat($path))[9]; #mtime
     if(defined($etag) && defined($if_none_match) && $etag eq $if_none_match) {
+      my $now = time();
+      my $rsp = "Date: ".FmtDateTimeRFC1123($now)."\r\n".
+                "ETag: $etag\r\n".
+                "Expires: ".FmtDateTimeRFC1123($now+900)."\r\n";
+      Log3 $FW_wname, 4, "$FW_chash->{NAME} => 304 Not Modified";
       TcpServer_WriteBlocking($FW_chash,"HTTP/1.1 304 Not Modified\r\n".
-                    $FW_headercors . "\r\n");
-      FW_closeConn($FW_chash);
+                    $rsp . $FW_headercors . "\r\n");
       return -1;
     }
   }
@@ -2555,7 +2570,8 @@ FW_devState($$@)
       }
       $link .= "&room=$room";
     }
-    $txt = "<a href=\"$FW_ME$FW_subdir?$link$rf$FW_CSRF\">$txt</a>";
+    $txt = "<a href=\"$FW_ME$FW_subdir?$link$rf$FW_CSRF\">$txt</a>"
+       if($link !~ m/ noFhemwebLink$/);
   }
 
   my $style = AttrVal($d, "devStateStyle", "");
@@ -2870,8 +2886,8 @@ FW_widgetOverride($$)
     <a name="endPlotToday"></a>
     <li>endPlotToday<br>
         If this FHEMWEB attribute is set to 1, then week and month plots will
-        end today. Else the current week (starting at Sunday) or the current
-        month will be shown.<br>
+        end today. Else the current week or the current month will be shown.
+        <br>
         </li><br>
 
     <a name="endPlotNow"></a>
@@ -2911,6 +2927,11 @@ FW_widgetOverride($$)
         makes the plotfork attribute meaningless.<br>
     </li><br>
 
+    <a name="plotWeekStartDay"></a>
+    <li>plotWeekStartDay<br>
+        Start the week-zoom of the SVG plots with this day.
+        0 is Sunday, 1 is Monday, etc.<br>
+    </li><br>
 
     <a name="basicAuth"></a>
     <li>basicAuth, basicAuthMsg<br>
@@ -3195,8 +3216,11 @@ FW_widgetOverride($$)
         Note: if the image is referencing an SVG icon, then you can use the
         @colorname suffix to color the image. E.g.:<br>
         <ul>
-        attr Fax devStateIcon on:control_building_empty@red off:control_building_filled:278727
+        attr Fax devStateIcon on:control_building_empty@red
+                              off:control_building_filled:278727
         </ul>
+        If the cmd is noFhemwebLink, then no HTML-link will be generated, i.e.
+        nothing will happen when clicking on the icon or text.
 
         </ul>
         Second form:<br>
@@ -3372,6 +3396,13 @@ FW_widgetOverride($$)
        Space in the room and group name has to be written as %20 for this
        attribute.
        </li>
+
+     <a name="closeConn"></a>
+     <li>closeConn<br>
+       If set, a TCP Connection will only serve one HTTP request. Seems to
+       solve problems on iOS9 for WebApp startup.
+       </li><br>
+
 
      <a name="CssFiles"></a>
      <li>CssFiles<br>
@@ -3588,6 +3619,11 @@ FW_widgetOverride($$)
         wirkungslos macht.
     </li><br>
 
+    <a name="plotWeekStartDay"></a>
+    <li>plotWeekStartDay<br>
+        Starte das Plot in der Wochen-Ansicht mit diesem Tag.
+        0 ist Sonntag, 1 ist Montag, usw.
+    </li><br>
 
     <a name="basicAuth"></a>
     <li>basicAuth, basicAuthMsg<br>
@@ -3873,7 +3909,8 @@ FW_widgetOverride($$)
           attr Fax devStateIcon on:control_building_empty@red
           off:control_building_filled:278727
         </ul>
-
+        Falls cmd noFhemwebLink ist, dann wird kein HTML-Link generiert, d.h.
+        es passiert nichts, wenn man auf das Icon/Text klickt.
         </ul>
         Zweite Variante:<br>
         <ul>
@@ -4077,6 +4114,12 @@ FW_widgetOverride($$)
         der Gruppen auch dann verwenden, wenn man nur eine Spalte hat.
         Leerzeichen im Raum- und Gruppennamen sind f&uuml;r dieses Attribut als
         %20 zu schreiben.
+        </li><br>
+
+     <a name="closeConn"></a>
+     <li>closeConn<br>
+        Falls gesetzt, wird pro TCP Verbindung nur ein HTTP Request
+        durchgef&uuml;hrt. F&uuml;r iOS9 WebApp startups scheint es zu helfen.
         </li><br>
 
      <a name="CssFiles"></a>
