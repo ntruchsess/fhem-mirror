@@ -84,12 +84,12 @@ BEGIN {
 
 my %static_types = (
   S_DOOR                  => { receives => [], sends => [V_TRIPPED,V_ARMED] }, # Door and window sensors
-  S_MOTION                => { receives => [], sends => [V_TRIPPED,V_ARMED] }, # MotionSensor
+  S_MOTION                => { receives => [], sends => [V_TRIPPED] }, # MotionSensor
   S_SMOKE                 => { receives => [], sends => [V_TRIPPED,V_ARMED] }, # Smoke sensor
   S_BINARY                => { receives => [V_STATUS,V_WATT], sends => [V_STATUS,V_WATT] }, # Binary device (on/off), Alias for S_LIGHT
   S_DIMMER                => { receives => [V_STATUS,V_PERCENTAGE,V_WATT], sends => [V_STATUS,V_PERCENTAGE,V_WATT] }, # Dimmable device of some kind
   S_COVER                 => { receives => [V_UP,V_DOWN,V_STOP,V_PERCENTAGE], sends => [V_PERCENTAGE] }, # Window covers or shades
-  S_TEMP                  => { receives => [], sends => [V_TEMP,V_ID] }, # Temperature sensor
+  S_TEMP                  => { receives => [], sends => [V_TEMP] }, # Temperature sensor
   S_HUM                   => { receives => [], sends => [V_HUM] }, # Humidity sensor
   S_BARO                  => { receives => [], sends => [V_PRESSURE,V_FORECAST] }, # Barometer sensor (Pressure)
   S_WIND                  => { receives => [], sends => [V_WIND,V_GUST] }, # Wind sensor
@@ -99,7 +99,7 @@ my %static_types = (
   S_POWER                 => { receives => [], sends => [V_WATT,V_KWH] }, # Power measuring device, like power meters
   S_HEATER                => { receives => [], sends => [V_HVAC_SETPOINT_HEAT,V_HVAC_FLOW_STATE,V_TEMP] }, # Heater device
   S_DISTANCE              => { receives => [], sends => [V_DISTANCE,V_UNIT_PREFIX] }, # Distance sensor
-  S_LIGHT_LEVEL           => { receives => [], sends => [V_LIGHT_LEVEL,V_LEVEL] }, # Light sensor
+  S_LIGHT_LEVEL           => { receives => [], sends => [V_LIGHT_LEVEL] }, # Light sensor
   S_ARDUINO_NODE          => { receives => [], sends => [] }, # Arduino node device
   S_ARDUINO_REPEATER_NODE => { receives => [], sends => [] }, # Arduino repeating node device
   S_LOCK                  => { receives => [V_LOCK_STATUS], sends => [V_LOCK_STATUS] }, # Lock device
