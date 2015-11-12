@@ -6,6 +6,7 @@ use strict;
 use warnings;
 use IO::Socket::INET;
 use MIME::Base64;
+use Digest::MD5;
 use vars qw($SSL_ERROR);
 
 my %ext2MIMEType= qw{
@@ -67,32 +68,23 @@ HttpUtils_Close($)
   delete($hash->{hu_sslAdded});
   delete($hash->{hu_filecount});
   delete($hash->{hu_blocking});
+  delete($hash->{directReadFn});
+  delete($hash->{directWriteFn});
 }
 
 sub
-HttpUtils_ConnErr($)
+HttpUtils_Err($$)
 {
-  my ($hash) = @_;
+  my ($hash, $errtxt) = @_;
   $hash = $hash->{hash};
-  if(defined($hash->{FD})) {
-    delete($hash->{FD});
-    delete($selectlist{$hash});
-    $hash->{conn}->close() if($hash->{conn});
-    $hash->{callback}($hash, "connect to $hash->{addr} timed out", "");
-  }
+  return if(!defined($hash->{FD})); # Already closed
+  HttpUtils_Close($hash);
+  $hash->{callback}($hash, "$errtxt to $hash->{addr} timed out", "");
 }
 
-sub
-HttpUtils_ReadErr($)
-{
-  my ($hash) = @_;
-  $hash = $hash->{hash};
-  if(defined($hash->{FD})) {
-    delete($hash->{FD});
-    delete($selectlist{$hash});
-    $hash->{callback}($hash, "read from $hash->{addr} timed out", "");
-  }
-}
+sub HttpUtils_ConnErr($) { my ($hash) = @_; HttpUtils_Err($hash, "connect to");}
+sub HttpUtils_ReadErr($) { my ($hash) = @_; HttpUtils_Err($hash, "read from"); }
+sub HttpUtils_WriteErr($){ my ($hash) = @_; HttpUtils_Err($hash, "write to"); }
 
 sub
 HttpUtils_File($)
@@ -140,7 +132,7 @@ HttpUtils_Connect($)
   }
   $hash->{path} = '/' unless defined($hash->{path});
   $hash->{addr} = "$hash->{protocol}://$host:$port";
-  $hash->{auth} = encode_base64("$user:$pwd","") if($authstring);
+  $hash->{auth} = "$user:$pwd" if($authstring);
 
   return HttpUtils_Connect2($hash) if($hash->{conn} && $hash->{keepalive});
 
@@ -248,6 +240,13 @@ HttpUtils_Connect2($)
     }
   }
 
+  if(defined($hash->{header})) {
+    if( ref($hash->{header}) eq 'HASH' ) {
+      $hash->{header} = join("\r\n",
+        map(($_.': '.$hash->{header}{$_}), keys %{$hash->{header}}));
+    }
+  }
+
   $hash->{host} =~ s/:.*//;
   my $method = $hash->{method};
   $method = ($data ? "POST" : "GET") if( !$method );
@@ -260,7 +259,11 @@ HttpUtils_Connect2($)
   $hdr .= "Connection: keep-alive\r\n" if($hash->{keepalive});
   $hdr .= "Connection: Close\r\n"
                               if($httpVersion ne "1.0" && !$hash->{keepalive});
-  $hdr .= "Authorization: Basic $hash->{auth}\r\n" if(defined($hash->{auth}));
+
+  $hdr .= "Authorization: Basic ".encode_base64($hash->{auth}, "")."\r\n"
+              if(defined($hash->{auth}) && 
+                 !($hash->{header} &&
+                   $hash->{header} =~ /^Authorization:\s*Digest/mi));
   $hdr .= $hash->{header}."\r\n" if(defined($hash->{header}));
   if(defined($data)) {
     $hdr .= "Content-Length: ".length($data)."\r\n";
@@ -268,13 +271,10 @@ HttpUtils_Connect2($)
                 if ($hdr !~ "Content-Type:");
   }
   $hdr .= "\r\n";
-  syswrite $hash->{conn}, $hdr;
-  syswrite $hash->{conn}, $data if(defined($data));
 
   my $s = $hash->{shutdown};
   $s =(defined($hash->{noshutdown}) && $hash->{noshutdown}==0) if(!defined($s));
   $s = 0 if($hash->{protocol} eq "https");
-  shutdown($hash->{conn}, 1) if($s);
 
   if($hash->{callback}) { # Nonblocking read
     $hash->{FD} = $hash->{conn}->fileno();
@@ -292,14 +292,39 @@ HttpUtils_Connect2($)
         RemoveInternalTimer(\%timerHash);
         my ($err, $ret, $redirect) = HttpUtils_ParseAnswer($hash, $hash->{buf});
         $hash->{callback}($hash, $err, $ret) if(!$redirect);
-        return;
+      }
+    };
+
+    $data = $hdr.(defined($data) ? $data:"");
+    $hash->{directWriteFn} = sub($) { # Nonblocking write
+      my $ret = syswrite $hash->{conn}, $data;
+      if($ret <= 0) {
+        my $err = $!;
+        RemoveInternalTimer(\%timerHash);
+        HttpUtils_Close($hash);
+        return $hash->{callback}($hash, "write error: $err", undef)
+      }
+      $data = substr($data,$ret);
+      if(length($data) == 0) {
+        shutdown($hash->{conn}, 1) if($s);
+        delete($hash->{directWriteFn});
+        RemoveInternalTimer(\%timerHash);
+        InternalTimer(gettimeofday()+$hash->{timeout},
+                      "HttpUtils_ReadErr", \%timerHash, 0);
       }
     };
     $selectlist{$hash} = $hash;
     InternalTimer(gettimeofday()+$hash->{timeout},
-                  "HttpUtils_ReadErr", \%timerHash, 0);
+                  "HttpUtils_WriteErr", \%timerHash, 0);
     return undef;
+
+  } else {
+    syswrite $hash->{conn}, $hdr;
+    syswrite $hash->{conn}, $data if(defined($data));
+    shutdown($hash->{conn}, 1) if($s);
+
   }
+
 
   return undef;
 }
@@ -308,12 +333,62 @@ sub
 HttpUtils_DataComplete($)
 {
   my ($ret) = @_;
-  return 0 if($ret !~ m/^(.*?)\r\n\r\n(.*)$/s);
+  return 0 if($ret !~ m/^(.*?)\r?\n\r?\n(.*)$/s);
   my $hdr = $1;
   my $data = $2;
   return 0 if($hdr !~ m/Content-Length:\s*(\d+)/si);
   return 0 if(length($data) < $1);
   return 1;
+}
+
+sub
+HttpUtils_DigestHeader($$)
+{
+  my ($hash, $header) = @_;
+  my %digdata;
+ 
+  while($header =~ /(\w+)="?([^"]+?)"?(?:,\s+|$)/gc) {
+    $digdata{$1} = $2;
+  } 
+ 
+  my ($ha1, $ha2, $response);
+  my ($user,$passwd) = split(/:/, $hash->{auth}, 2);
+
+  if(exists($digdata{qop})) {
+    $digdata{nc} = "00000001";
+    $digdata{cnonce} = md5_hex(rand.time);
+  }
+  $digdata{uri} = $hash->{path};
+  $digdata{username} = $user;
+
+  if(exists($digdata{algorithm}) && $digdata{algorithm} eq "MD5-sess") {
+    $ha1 = md5_hex(md5_hex($user.":".$digdata{realm}.":".$passwd).
+                  ":".$digdata{nonce}.":".$digdata{cnonce});
+  } else {
+    $ha1 = md5_hex($user.":".$digdata{realm}.":".$passwd);
+  }
+ 
+  # forcing qop=auth as qop=auth-int is not implemented
+  $digdata{qop} = "auth" if($digdata{qop});
+  my $method = $hash->{method};
+  $method = ($hash->{data} ? "POST" : "GET") if( !$method );
+  $ha2 = md5_hex($method.":".$hash->{path});
+
+  if(exists($digdata{qop}) && $digdata{qop} =~ /(auth-int|auth)/) {
+    $digdata{response} =  md5_hex($ha1.":".
+                                  $digdata{nonce}.":".
+                                  $digdata{nc}.":".
+                                  $digdata{cnonce}.":".
+                                  $digdata{qop}.":".
+                                  $ha2);
+  } else {
+    $digdata{response} = md5_hex($ha1.":".$digdata{nonce}.":".$ha2)
+  }
+ 
+  return "Authorization: Digest ".
+         join(", ", map(($_.'='.($_ ne "nc" ? '"' :'').
+                         $digdata{$_}.($_ ne "nc" ? '"' :'')), keys(%digdata)));
+
 }
 
 sub
@@ -344,7 +419,7 @@ HttpUtils_ParseAnswer($$)
   $hash->{hu_filecount} = 0 if(!$hash->{hu_filecount});
   $hash->{hu_filecount}++;
 
-  $ret=~ s/(.*?)\r\n\r\n//s; # Not greedy: switch off the header.
+  $ret=~ s/(.*?)\r?\n\r?\n//s; # Not greedy: separate the header (F:#43482)
   return ("", $ret) if(!defined($1));
 
   $hash->{httpheader} = $1;
@@ -362,6 +437,29 @@ HttpUtils_ParseAnswer($$)
   }
   Log3 $hash,$hash->{loglevel}, "$hash->{displayurl}: HTTP response code $code";
   $hash->{code} = $code;
+
+  # if servers requests digest authentication
+  if($code==401 && defined($hash->{auth}) &&
+    !($hash->{header} && $hash->{header} =~ /^Authorization:\s*Digest/mi) &&
+    $hash->{httpheader} =~ /^WWW-Authenticate:\s*Digest\s*(.+?)\s*$/mi) {
+   
+    $hash->{header} .= "\r\n".
+                      HttpUtils_DigestHeader($hash, $1) if($hash->{header});
+    $hash->{header} = HttpUtils_DigestHeader($hash, $1) if(!$hash->{header});
+ 
+    # Request the URL with the Digest response
+    if($hash->{callback}) {
+      HttpUtils_NonblockingGet($hash);
+      return ("", "", 1);
+    } else {
+      return HttpUtils_BlockingGet($hash);
+    }
+   
+  } elsif($code==401 && defined($hash->{auth})) {
+   return ("$hash->{displayurl}: wrong authentication", "")
+
+  }
+  
   if(($code==301 || $code==302 || $code==303) 
 	&& !$hash->{ignoreredirects}) { # redirect
     if(++$hash->{redirects} > 5) {
@@ -382,7 +480,29 @@ HttpUtils_ParseAnswer($$)
       }
     }
   }
-  
+
+  if( $hash->{httpheader} =~ m/^Transfer-Encoding: Chunked/mi ) {
+    my $data;
+    my $header;
+    my ($size, $offset) = (length($ret), 0);
+    while( $offset < $size ) {
+      my $next = index($ret, "\r\n", $offset);
+      last if( $next == -1 );
+      if( substr($ret,$offset,$next-$offset) =~ m/([\da-f]+)/i ) {
+        my $len = hex($1);
+        $offset = $next + 2;
+        $data .= substr($ret,$offset,$len);
+        $offset += $len + 2;
+        next if( $len > 0 );
+      }
+
+    $hash->{httpheader} .= substr($ret,$offset);
+
+    }
+
+    $ret = $data;
+  }
+
   # Debug
   Log3 $hash, $hash->{loglevel},
        "HttpUtils $hash->{displayurl}: Got data, length: ".  length($ret);
@@ -393,6 +513,7 @@ HttpUtils_ParseAnswer($$)
       Log3 $hash, $hash->{loglevel}, "  $_";
     }
   }
+
   return ("", $ret);
 }
 
@@ -400,7 +521,7 @@ HttpUtils_ParseAnswer($$)
 #  mandatory:
 #    url, callback
 #  optional(default):
-#    hideurl(0),timeout(4),data(""),loglevel(4),header(""),
+#    hideurl(0),timeout(4),data(""),loglevel(4),header("" or HASH),
 #    noshutdown(1),shutdown(0),httpversion("1.0"),ignoreredirects(0)
 #    method($data ? "POST" : "GET"),keepalive(0),sslargs({})
 # Example:

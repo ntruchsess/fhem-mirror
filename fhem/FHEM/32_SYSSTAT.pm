@@ -42,7 +42,7 @@ SYSSTAT_Initialize($)
   $hash->{GetFn}    = "SYSSTAT_Get";
   $hash->{AttrFn}   = "SYSSTAT_Attr";
   $hash->{AttrList} = "disable:1 disabledForIntervals raspberrycpufreq:1 raspberrytemperature:0,1,2 synologytemperature:0,1,2 stat:1 uptime:1,2 ssh_user ";
-  $hash->{AttrList} .= " snmp:1 mibs" if( $SYSSTAT_hasSNMP );
+  $hash->{AttrList} .= " snmp:1 mibs:textField-long snmpVersion:1,2 snmpCommunity" if( $SYSSTAT_hasSNMP );
   $hash->{AttrList} .= " filesystems showpercent";
   $hash->{AttrList} .= " useregex:1" if( $SYSSTAT_hasSysStatistics );
   $hash->{AttrList} .= " $readingFnAttributes";
@@ -130,9 +130,9 @@ SYSSTAT_InitSNMP($)
 
   my ( $session, $error ) = Net::SNMP->session(
            -hostname  => $host,
-           -community => $community,
+           -community => AttrVal($name,"snmpCommunity","public"),
            -port      => 161,
-           -version   => 1
+           -version   => AttrVal($name,"snmpVersion",1),
                         );
   if( $error ) {
     Log3 $name, 2, "$name: $error";
@@ -207,18 +207,27 @@ SYSSTAT_Attr($$$)
   $attrVal = "1" if($attrName eq "showpercent");
   $attrVal = "1" if($attrName eq "raspberrycpufreq");
 
+  my $hash = $defs{$name};
   if( $attrName eq "filesystems") {
-    my $hash = $defs{$name};
     my @filesystems = split(",",$attrVal);
     @{$hash->{filesystems}} = @filesystems;
+
   } elsif( $attrName eq "ssh_user") {
     $attr{$name}{$attrName} = $attrVal;
-    my $hash = $defs{$name};
     SYSSTAT_InitSys( $hash ) if( $SYSSTAT_hasSysStatistics );
+
+  } elsif( $attrName eq "snmpVersion" && $SYSSTAT_hasSNMP ) {
+    $hash->{$attrName} = $attrVal;
+    SYSSTAT_InitSNMP( $hash );
+
+  } elsif( $attrName eq "snmpCommunity" && $SYSSTAT_hasSNMP ) {
+    $hash->{$attrName} = $attrVal;
+    SYSSTAT_InitSNMP( $hash );
+
   } elsif ($attrName eq "snmp" && $SYSSTAT_hasSNMP ) {
-    my $hash = $defs{$name};
     if( $cmd eq "set" && $attrVal ne "0" ) {
       $hash->{USE_SNMP} = $attrVal;
+      SYSSTAT_InitSNMP( $hash );
     } else {
       delete $hash->{USE_SNMP};
     }
@@ -356,15 +365,21 @@ SYSSTAT_GetUpdate($)
   if( $hash->{USE_SNMP} && defined($hash->{session}) ) {
     if( my $mibs = AttrVal($name, "mibs", undef) ) {
       my @snmpoids;
-      foreach my $entry (split(' ,', $mibs)) {
+      foreach my $entry (split(/[ ,\n]/, $mibs)) {
+        next if( !$entry );
         my($mib,undef) = split(':', $entry );
+        next if( !$mib );
+
         push @snmpoids, $mib;
       }
 
       my $response = SYSSTAT_readOIDs($hash,\@snmpoids);
 
-      foreach my $entry (split(' ,', $mibs)) {
+      foreach my $entry (split(/[ ,\n]/, $mibs)) {
+        next if( !$entry );
         my($mib,$reading) = split(':', $entry );
+        next if( !$mib );
+        next if( !$reading );
 
         my $result = $response->{$mib};
         readingsBulkUpdate($hash,$reading,$result);
@@ -476,7 +491,7 @@ SYSSTAT_readOIDs($$)
 
   if( ref($snmpoids) eq "ARRAY" ) {
     $response = $hash->{session}->get_request( @{$snmpoids} );
-    Log3 $name, 4, "$name: got empty result from snmp query" if( !$response );
+    Log3 $name, 4, "$name: got empty result from snmp query ".$hash->{session}->error() if( !$response );
   } else {
     $response = $hash->{session}->get_next_request($snmpoids);
 
@@ -489,7 +504,8 @@ SYSSTAT_readOIDs($$)
       @nextid   = keys %$response;
     }
 
-    $response = $hash->{session}->get_request( @snmpoids )
+    $response = $hash->{session}->get_request( @snmpoids );
+    #Log3 $name, 4, "$name: got empty result from snmp query ".$hash->{session}->error() if( !$response );
   }
 
   return $response;
@@ -829,6 +845,8 @@ SYSSTAT_getStat($)
       If set the entries of the filesystems list are treated as regex.</li>
     <li>ssh_user<br>
       The username for ssh remote access.</li>
+    <li>snmpVersion</li>
+    <li>snmpCommunity</li>
     <li><a href="#readingFnAttributes">readingFnAttributes</a></li>
   </ul>
 </ul>
@@ -957,6 +975,8 @@ SYSSTAT_getStat($)
       Wenn Wert gesetzt, werden die Eintr&auml;ge der Dateisysteme als regex behandelt.</li>
     <li>ssh_user<br>
       Der Username f&uuml;r den ssh Zugang auf dem entfernten Rechner.</li>
+    <li>snmpVersion</li>
+    <li>snmpCommunity</li>
     <li><a href="#readingFnAttributes">readingFnAttributes</a></li>
   </ul>
 </ul>

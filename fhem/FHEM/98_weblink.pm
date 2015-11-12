@@ -72,7 +72,7 @@ weblink_FwDetail($@)
 {
   my ($d, $text, $nobr)= @_;
   return "" if(AttrVal($d, "group", "") || AttrVal($d, "nodetaillink", ""));
-  my $alias= AttrVal($d, "alias", $d);
+  my $alias = AttrVal($d, "alias", $d);
 
   my $ret = ($nobr ? "" : "<br>");
   $ret .= "$text " if($text);
@@ -96,7 +96,8 @@ weblink_FwFn($$$$)
     $ret = $link;
 
   } elsif($wltype eq "link") {
-    $ret = "<a href=\"$link\" $attr>$d</a>"; # no FW_pH, open extra browser
+    my $alias = AttrVal($d, "alias", $d);
+    $ret = "<a href=\"$link\" $attr>$alias</a>"; # no FW_pH, open extra browser
 
   } elsif($wltype eq "image") {
     $ret = "<img src=\"$link\" $attr><br>" . 
@@ -178,6 +179,24 @@ weblink_FwFn($$$$)
 
   <a name="weblinkattr"></a>
   <b>Attributes</b>
+  <ul>
+    <a name="htmlattr"></a>
+    <li>htmlattr<br>
+      HTML attributes to be used for link, image and iframe type of links.
+      E.g.:<br>
+      <ul>
+        <code>
+        define yw weblink wl_im1 iframe http://weather.yahooapis.com/forecastrss?w=650272&u=c<br>
+        attr yw weblink htmlattr width="480" height="560"<br>
+        </code>
+      </ul></li>
+
+    <a name="nodetaillink"></a>
+    <li>nodetaillink<br>
+      Show no detail link for the types image and iframe.
+      </li>
+  </ul>
+
   <br>
 
 </ul>

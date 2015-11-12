@@ -1,4 +1,4 @@
-# $Id: 73_km200.pm 0053 2015-07-15 15:00:00Z Matthias_Deeke $
+# $Id: 73_km200.pm 0055 2015-10-11 10:45:00Z Matthias_Deeke $
 ########################################################################################################################
 #
 #     73_km200.pm
@@ -212,6 +212,8 @@
 #		0053    15.07.2015	Sailor				km200_ParseHttpResponseInit		Static Service deleted
 #		0053    15.07.2015	Sailor				km200_GetStatService			Deleted
 #		0053    15.07.2015	Sailor				km200_ParseHttpResponseStat		Deleted
+#		0054    09.10.2015	Sailor				km200_ParseHttpResponseInit		Adding a timer to restart Initialisation process if first contact failed.
+#		0055    09.10.2015	Sailor				km200_ParseHttpResponseInit		Setting state accordingly if connection is failed
 ########################################################################################################################
 
 
@@ -280,7 +282,7 @@ sub km200_Define($$)
 	my $url						= $a[2];
 	my $km200_gateway_password	= $a[3];
 	my $km200_private_password	= $a[4];
-	my $ModuleVersion           = "0053";
+	my $ModuleVersion           = "0055";
 
 	$hash->{NAME}				= $name;
 	$hash->{STATE}              = "define";
@@ -469,10 +471,7 @@ sub km200_Define($$)
 	{
 		$Km200Info = $hash->{temp}{TransferValue};
 		$hash->{temp}{TransferValue} = "";
-	}
 
-	if ($Km200Info eq "ERROR") 
-	{
 		## Communication with Gateway WRONG !! ##
 		$hash->{STATE}="Error - No Communication";
 		return ($name .": km200 - ERROR - The communication between fhem and the Buderus KM200 failed! \n". 
@@ -489,7 +488,7 @@ sub km200_Define($$)
 	####END####### Check whether communication to the physical unit is possible ################################END#####
 
 	###START###### Initiate the timer for first time polling of  values from KM200 but wait 10s ###############START####
-	InternalTimer(gettimeofday()+10, "km200_GetInitService", $hash, 0);
+	InternalTimer(gettimeofday()+10, "km200_GetInitService", $hash, 5);
 	Log3 $name, 5, $name. " : km200 - Internal timer for Initialisation of services started for the first time.";
 	####END####### Initiate the timer for first time polling of  values from KM200 but wait 60s ################END#####
 	
@@ -2078,16 +2077,21 @@ sub km200_ParseHttpResponseInit($)
 	my $type;
     my $json ->{type} = "";
 	
-	
-	### Log entries for debugging purposes
-	Log3 $name, 5, $name. " : km200_ParseHttpResponseInit: Try to parse     : " .$Service;
-	### Log entries for debugging purposes
-
-	
 	if($err ne "") 
 	{
-		Log3 $name, 2, $name . " : ERROR: Service: ".$Service. ": No proper Communication with Gateway: " .$err;
+		### Create Log entry
+		Log3 $name, 2, $name . " : km200_ParseHttpResponseInit - ERROR - Service: ".$Service. ": No proper Communication with Gateway: " .$err;
 		if ($hash->{CONSOLEMESSAGE} == true) {print("km200_ParseHttpResponseInit ERROR: $err\n");}
+				
+		### Set status of km200 fhem module
+		$hash->{STATE} = "ERROR - Initial Connection failed... Try to re-connect in 10s";
+		
+		### Start the timer for polling again but wait 10s
+		InternalTimer(gettimeofday()+10, "km200_GetInitService", $hash, 0);
+		
+		### Create Log entry
+		Log3 $name, 2, $name . " : km200_ParseHttpResponseInit - ERROR - Timer restarted to try again in 10s";
+		
 		return "ERROR";	
 	}
 

@@ -59,12 +59,13 @@
       <a href="#JsonList2">JsonList2</a> &nbsp;
       <a href="#list">list</a> &nbsp;
       <a href="#modify">modify</a> &nbsp;
+      <a href="#MSG">msg</a> &nbsp;
       <a href="#notice">notice</a> &nbsp;
       <a href="#quit">quit</a> &nbsp;
       <a href="#reload">reload</a> &nbsp;
       <a href="#rename">rename</a> &nbsp;
-      <a href="#restore">restore</a> &nbsp;
       <a href="#rereadcfg">rereadcfg</a> &nbsp;
+      <a href="#restore">restore</a> &nbsp;
       <a href="#save">save</a> &nbsp;
       <a href="#set">set</a> &nbsp;
       <a href="#setdefaultattr">setdefaultattr</a> &nbsp;
@@ -76,7 +77,7 @@
       <a href="#update">update</a> &nbsp;
       <a href="#usb">usb</a> &nbsp;
       <a href="#version">version</a> &nbsp;
-      <a href="#xmllist">xmllist</a> &nbsp;
+      <a href="#XmlList">xmllist</a> &nbsp;
 
   </ul>
 
@@ -113,12 +114,14 @@
     <a href="#HCS">HCS</a> &nbsp;
     <a href="#HTTPSRV">HTTPSRV</a> &nbsp;
     <a href="#Heating_Control">Heating_Control</a> &nbsp;
+    <a href="#HMinfo">HMinfo</a> &nbsp;
     <a href="#holiday">holiday</a> &nbsp;
     <a href="#HourCounter">HourCounter</a> &nbsp;    
     <a href="#InfoPanel">InfoPanel</a> &nbsp;    
     <a href="#LightScene">LightScene</a> &nbsp;
     <a href="#logProxy">logProxy</a> &nbsp;
     <a href="#mailcheck">mailcheck</a> &nbsp;
+    <a href="#msgConfig">msgConfig</a> &nbsp;
     <a href="#notify">notify</a> &nbsp;
     <a href="#PRESENCE">PRESENCE</a> &nbsp;
     <a href="#PachLog">PachLog</a> &nbsp;
@@ -1139,9 +1142,23 @@ The following local attributes are used by a wider range of devices:
         Issue the on command for the device, and create an at definition with
         &lt;timedet&gt; (in the form HH:MM[:SS]) to set it off. This definition
         is visible, and its name is deviceName+"_till". To cancel the scheduled
-        off, delete the at definition.</li>
+        off, delete the at definition. Note: on-till is not active, if the
+        specified time is after the current time, in order to make things like
+        <ul><code>
+          define morningLight at *06:00 set Lamp on-till {sunrise()}
+        </code></ul>
+        easy.</li>
+    <li>on-till-overnight &lt;timedet&gt<br>
+        Like on-till, but wont compare the current time with the timespec, so
+        following will work:
+        <ul><code>
+          define nightLight at *{sunset()} set Lamp on-till-overnight 01:00
+        </code></ul>
+        </li>
     <li>off-till &lt;timedet&gt<br>
         see on-till above.</li>
+    <li>off-till-overnight &lt;timedet&gt<br>
+        see on-till-overnight above.</li>
     <li>blink &lt;number&gt; &lt;blink-period&gt;<br>
         set the device on for &lt;blink-period&gt; then off for
         &lt;blink-period&gt; and repeat this &lt;number&gt; times.

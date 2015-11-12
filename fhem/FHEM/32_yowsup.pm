@@ -87,6 +87,7 @@ yowsup_Notify($$)
   return if($dev->{NAME} ne "global");
   return if(!grep(m/^INITIALIZED|REREADCFG$/, @{$dev->{CHANGED}}));
 
+  yowsup_Disconnect($hash);
   yowsup_Connect($hash);
 }
 
@@ -207,9 +208,9 @@ yowsup_Disconnect($)
     delete $hash->{PID};
   }
 
-  close($hash->{CD}) if($hash->{CD});
+  close($hash->{FH}) if($hash->{FH});
+  delete($hash->{FH});
   delete($hash->{FD});
-  delete($hash->{CD});
   delete($selectlist{$name});
 
   $hash->{STATE} = "Disconnected";
@@ -293,7 +294,11 @@ yowsup_Set($$@)
       my $number = shift(@args);
       $number =~ s/\./-/;
 
-      return yowsup_Write( $hash, "/message send $number '". join( ' ', @args ) ."'" );
+      if( $number =~ m/,/ ) {
+        return yowsup_Write( $hash, "/message broadcast $number '". join( ' ', @args ) ."'" );
+      } else {
+        return yowsup_Write( $hash, "/message send $number '". join( ' ', @args ) ."'" );
+      }
 
       return undef;
 

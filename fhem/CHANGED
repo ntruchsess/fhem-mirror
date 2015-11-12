@@ -1,5 +1,85 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on it.
+  - feature: 98_help: replace anchor links in help output with a working
+                      link to local commandref or fhem.de
+  - bugfix:  70_XBMC: reworked RPC ID generation
+  - feature: 70_XBMC: added openchannelid to switch TV channels
+  - bugfix:  74_AMAD: Bessere Variante zur HTTP Headeranalyse, Code aufgeräumt
+  - bugfix:  74_AMAD: AMADCommBridge communication problem with automagic 1.29
+  - feature: fhem_codemirror: Added DOIF autocomplete-keywords. Added feature
+                              to autocomplete on any keypress.
+  - change:  ATTENTION: Removed deprecated module 75_MSG.pm. Users will need to
+             manually change their device definitions to MSGFile or MSGMail
+             respectively.
+  - feature: Introduce FHEM message routing by new command 'msg'
+  - bugfix:  98_Text2Speech: Google fixed, svox-pico added
+  - bugfix:  00_SIGNALduino: Updated Firmware (3.8.1-HF1) 
+             fixed send raw
+  - updated: 74_AMAD: New Mijor Release 0.8.1
+  - bugfix:  74_AMAD: fix call statusRequest then screen off is set
+                      fix change room then device modify
+  - feature: 74_AMAD: insert first code parts of voice input
+  - change:  55_GDS.pm new version released, see forum „Announcements“ 
+  - change:  fhem_codemirror.js: Enabled indentWithTabs by default
+                                 Enabled autoCloseBrackets by default
+                                 Disabled smartIndent by default
+  - bugfix:  74_AMAD: wrong flowset xml file on lib/
+  - updated: 74_AMAD: New Major Release 0.8.0
+                      !!! IMPORTANT: please forget to update the Flowset !!!
+  - feature: 74_AMAD: AMADCommBridge (AMADCommunication Device)
+                      toggle between to BT Devices, clear Notificationbar
+                      (Automagic,All), play Notify Soundfile (WallClock),
+                      check for a activ task on the tablet/phone
+  - bugfix:  74_AMAD:  improved error handling
+  - bugfix:  70_PIONEERAVR: fixed the decoding for the reading "display".
+  - feature: 93_DbLog: Added support for longpoll SVG.
+  - feature: contrib/98_openweathermap.pm - add support for stationByZip.
+             e.g. 76133,de will find weather data for Karlsruhe,Germany
+  - bugfix:  38_CO20: fixed error messages on timeout
+  - feature: codemirror modules now loaded by default: search.js, comment.js
+                 dialog.js, autorefresh.js, searchcursor.js, dialog.css
+             codemirror search & replace is now activated by default.
+                 to use this feature now you must only load in fhemweb
+                 attribute 'JavaScripts' the codemirror/fhem_codemirror.js file
+             new extraKeys for 'TAB', 'Shift+Tab', 'STRG+Q', 'STRG+UP',
+                 and 'STRG+DOWN' are added.
+             codemirror default parameters are now:
+                 indentUnit:4, indentWithTabs:false, autoCloseBrackets:false,
+                 matchBrackets:true, autofocus:true, theme:"blackboard",
+                 lineNumbers:true, autoRefresh:true
+               this can be overwritten with fhemweb attribute 'codemirrorParam'
+  - updated: codemirror version to 5.8 
+             the default codemirror javascript files are now minified
+  - feature: 70_XBMC: -added disable attribute
+                      -added reading tvshowid
+  - feature: new module 00_SIGNALduino.pm and 90_SIGNALduino_un: added 
+             SIGNALduino module and firmware
+  - feature: new module 14_Hideki.pm: added module for sensors with hideki 
+             protocol
+  - feature: new module 14_SD_WS07.pm: added module for sensor devices with 
+             protocol id7
+  - feature: 32_yowsup.pm: allow comma separated receiver list on master send
+  - bugfix:  YAMAHA_AVR: fixing not working remoteControl commands for
+             several models
+  - feature: PRESENCE: support for Solaris ping (mode: lan-ping)
+  - feature: HUEbridge: added support for HUE scenes
+                          (get: scenes; set: savescene, modifyscene, scene)
+                        new unified syntax for multiple lights
+                          in group and scene commands
+                        don't query status after set: use bridge response instead
+                        added queryAfterSet attribute
+  - feature: HUEDevice: added support for HUE scenes (set: savescene, scene)
+                        new unified syntax for multiple lights in lights command
+  - feature: LightScene: support HUE scenes
+                         added asyncDelay attribute
+  - bugfix:  10_IT: Fix wrong V3 dimm/off code
+  - feature: 73_km200: Improving error message in state
+  - feature: SYSMON: FormatString for SYSMON_ShowValues.
+  - feature: 36_JeeLink: added timeout attribute (by HCS)
+  - change: 14_CUL_TCM: implement new sensor types. Fix some wrong 
+                        interpretations. Add additional readings.
+  - feature: on/off-till-overnight (SetExtensions.pm)
+  - bugfix:  73_km200: Bugfix for freeze in "Sounding"
   - change:  93_DbLog: changed min/max val 999999 to system specific (~0 >> 1)
   - feature: HUEbridge: added get touchlink
                         added get whitelist, set deletewhitelist
@@ -15,7 +95,8 @@
   - change:  93_DbLog: removed string length limitation for SQLITE.
   - bugfix:  93_DbLog: fixed ploteditor bug when DbLogType=History.
   - feature: 93_DbLog: added new setter 'reduceLog' to clean up database.
-  - feature: new Modules 36_EleroStick.pm and 36_EleroDrive.pm for Elero shutters
+  - feature: new Modules 36_EleroStick.pm and 36_EleroDrive.pm for Elero
+             shutters
   - change:  55_InfoPanel.pm: support ReadingsVal in ticker #35228
   - bugfix:  31_MilightDevice.pm: improved previousState, fixed log errors
   - bugfix:  30_MilightBridge.pm: fixed ping definition
@@ -36,9 +117,9 @@
   - bugfix:  00_MAXLAN: set time on cube if it has none (by Tom_S)
   - bugfix:  14_CUL_MAX: work together with a-culfw
   - bugfix:  70_PushNotifier: bugfix regex deviceID
-  - feature: new Module 74_AMAD to request Information and control Android Devices
-             in cooperation with AutomagicApp on the Device (Forum #39773)
-             (by M. Oldenburg)
+  - feature: new Module 74_AMAD to request Information and control Android
+             Devices in cooperation with AutomagicApp on the Device (Forum
+             #39773) (by M. Oldenburg)
   - bugfix:  70_PushNotifier.pm: regex error handling
   - bugfix:  31_MilightDevice.pm: fixed bug that lead to crash on lost bridge
              connection, added module name prefix to round function

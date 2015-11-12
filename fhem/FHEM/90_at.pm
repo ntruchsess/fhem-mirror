@@ -4,6 +4,7 @@ package main;
 
 use strict;
 use warnings;
+use POSIX;
 use Time::HiRes qw(gettimeofday);
 
 #####################################
@@ -35,7 +36,7 @@ at_SecondsTillTomorrow($)  # 86400, if tomorrow is no DST change
   if(!$at_stt{$dayHour}) {
     my @l1 = localtime($t);
     my @l2 = localtime($t+86400);
-    $at_stt{$dayHour} = 86400+($l1[2]-$l2[2])*3600;
+    $at_stt{$dayHour} = 86400+($l1[8]-$l2[8])*3600;
   }
 
   return $at_stt{$dayHour};
@@ -74,14 +75,20 @@ at_Define($$)
 
   my $ot = $data{AT_TRIGGERTIME} ? $data{AT_TRIGGERTIME} : gettimeofday();
   $ot = int($ot) if(!$rel);     # No way to specify subseconds
-  my @lt = localtime($ot);
   my $nt = $ot;
 
-  $nt -= ($lt[2]*3600+$lt[1]*60+$lt[0])         # Midnight for absolute time
-                        if($rel ne "+");
-  $nt += ($hr*3600+$min*60+$sec); # Plus relative time
-  $nt += at_SecondsTillTomorrow($nt) if($ot >= $nt);  # Do it tomorrow...
-  @lt = localtime($nt);
+  if($rel eq "+") {
+    $nt += ($hr*3600+$min*60+$sec); # Relative time
+
+  } else {
+    my @lt = localtime($ot);
+    ($lt[2], $lt[1], $lt[0]) = ($hr+0, $min+0, $sec+0);
+    $nt = mktime(@lt[0..6]);
+    $nt += at_SecondsTillTomorrow($nt) if($ot >= $nt);  # Do it tomorrow...
+
+  }
+
+  my @lt = localtime($nt);
   my $ntm = sprintf("%02d:%02d:%02d", $lt[2], $lt[1], $lt[0]);
   if($rep) {    # Setting the number of repetitions
     $cnt =~ s/[{}]//g;
@@ -130,15 +137,15 @@ at_Exec($)
 
   return if($hash->{DELETED});           # Just deleted
   my $name = $hash->{NAME};
-  Log3 $name, 5, "exec at command $name";
 
   my $skip = AttrVal($name, "skip_next", undef);
   delete $attr{$name}{skip_next} if($skip);
 
-  my $command = SemicolonEscape($hash->{COMMAND});
-  my $ret = AnalyzeCommandChain(undef, $command)
-        if(!$skip && !IsDisabled($name));
-  Log3 $name, 3, "$name: $ret" if($ret);
+  if(!$skip && !IsDisabled($name)) {
+    Log3 $name, 5, "exec at command $name";
+    my $ret = AnalyzeCommandChain(undef, SemicolonEscape($hash->{COMMAND}));
+    Log3 $name, 3, "$name: $ret" if($ret);
+  }
 
   return if($hash->{DELETED});           # Deleted in the Command
 
@@ -379,9 +386,9 @@ EOF
       executed <i>repeatedly</i>.<br>
       The optional <code>{N}</code> after the * indicates,that the command
       should be repeated <i>N-times</i> only.<br>
-      &lt;timedet&gt; is either HH:MM, HH:MM:SS or {perlfunc()}, where perlfunc
-      must return a HH:MM or HH:MM:SS date. Note: {perlfunc()} may not contain
-      any spaces or tabs.
+      &lt;timedet&gt; is either HH:MM, HH:MM:SS, seconds since 1970 or
+      {perlfunc()}. perlfunc must return a string in timedet format.
+      Note: {perlfunc()} may not contain any spaces or tabs.
     </ul>
     <br>
 
@@ -540,9 +547,9 @@ EOF
       Das optionale <code>{N}</code> nach dem * bedeutet, dass der Befehl genau
       <i>N-mal</i> wiederholt werden soll.<br>
 
-      &lt;timedet&gt; ist entweder HH:MM, HH:MM:SS oder {perlfunc()}, wobei
-      perlfunc HH:MM or HH:MM:SS zur&uuml;ckgeben muss. Hinweis: {perlfunc()}
-      darf keine Leerzeichen enthalten.
+      &lt;timedet&gt; ist entweder HH:MM, HH:MM:SS, Sekunden seit 1970 oder
+      {perlfunc()}.  perlfunc muss ein String in timedet Format zurueckliefern.
+      Achtung: {perlfunc()} darf keine Leerzeichen enthalten.
 
     </ul>
     <br>

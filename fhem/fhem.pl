@@ -114,7 +114,7 @@ sub getAllGets($);
 sub getAllSets($);
 sub getUniqueId();
 sub latin1ToUtf8($);
-sub myrename($$);
+sub myrename($$$);
 sub notifyRegexpChanged($$);
 sub readingsBeginUpdate($);
 sub readingsBulkUpdate($$$@);
@@ -223,7 +223,7 @@ use vars qw(@structChangeHist); # Contains the last 10 structural changes
 use vars qw($cmdFromAnalyze);   # used by the warnings-sub
 use vars qw($featurelevel); 
 
-my $AttrList = "verbose:0,1,2,3,4,5 room group comment alias ".
+my $AttrList = "verbose:0,1,2,3,4,5 room group comment:textField-long alias ".
                 "eventMap userReadings";
 my $currcfgfile="";             # current config/include file
 my $currlogfile;                # logfile, without wildcards
@@ -255,6 +255,7 @@ my @globalAttrList = qw(
   apiversion
   archivecmd
   archivedir
+  archiveCompress
   autoload_undefined_devices:1,0
   autosave:1,0
   backup_before_update
@@ -661,7 +662,16 @@ while (1) {
       } elsif(defined($hash->{$wbName})) {
         my $wb = $hash->{$wbName};
         alarm($hash->{ALARMTIMEOUT}) if($hash->{ALARMTIMEOUT});
-        my $ret = syswrite($hash->{CD}, $wb);
+
+        my $ret;
+        eval { $ret = syswrite($hash->{CD}, $wb); };
+        if($@) {
+          Log 4, "Syswrite: $@, deleting $hash->{NAME}";
+          TcpServer_Close($hash);
+          CommandDelete(undef, $hash->{NAME});
+          next;
+        }
+
         my $werr = int($!);
         alarm(0) if($hash->{ALARMTIMEOUT});
 
@@ -742,6 +752,7 @@ IsDisabled($)
   return 1 if($attr{$devname}{disable});
   return 3 if($defs{$devname} && $defs{$devname}{STATE} &&
               $defs{$devname}{STATE} eq "inactive");
+  return 3 if(ReadingsVal($devname, "state", "") eq "inactive");
 
   my $dfi = $attr{$devname}{disabledForIntervals};
   if(defined($dfi)) {
@@ -2492,6 +2503,7 @@ CommandSetstate($$)
       my ($sname, $sval) = split(" ", $nameval, 2);
       (undef, $sval) = ReplaceEventMap($sdev, [$sdev, $sval], 0)
                                 if($attr{$sdev}{eventMap});
+      $sval = "" if(!defined($sval));
       my $ret = CallFn($sdev, "StateFn", $d, $tim, $sname, $sval);
       if($ret) {
         push @rets, $ret;
@@ -2654,10 +2666,10 @@ CommandVersion($$)
       push @ret, grep(/\$Id. [^\$\n\r].+\$/, <FH>);
     }
   }
-  @ret = map {/\$Id. (\S+) (.+?)\$/ ? sprintf("%-".$max."s %s",$1,$2) : $_}
+  @ret = map {/\$Id. (\S+) (\d+) (.+?)\$/ ? sprintf("%-".$max."s %5d %s",$1,$2,$3) : $_}
         @ret; 
   
-  return sprintf("%-".$max."s %s","File","Rev  Last Change\n\n").
+  return sprintf("%-".$max."s %s","File","Rev   Last Change\n\n").
          join("\n", grep((defined($param) ? ($_ =~ /$param/) : 1), @ret));
 }
 
@@ -2733,8 +2745,8 @@ RemoveInternalTimer($)
 
 #####################################
 sub
-stacktrace() {
-  
+stacktrace()
+{
   my $i = 1;
   my $max_depth = 50;
   
@@ -2896,29 +2908,32 @@ EvalSpecials($%)
 }
 
 #####################################
-# Parse a timespec: Either HH:MM:SS or HH:MM or { perfunc() }
+# Parse a timespec: HH:MM:SS, HH:MM, sec-since-1970 or { perfunc() }
 sub
 GetTimeSpec($)
 {
   my ($tspec) = @_;
   my ($hr, $min, $sec, $fn);
 
-  if($tspec =~ m/^([0-9]+):([0-5][0-9]):([0-5][0-9])$/) {
+  if($tspec =~ m/^([0-9]+):([0-5][0-9]):([0-5][0-9])$/) { # HH:MM:SS
     ($hr, $min, $sec) = ($1, $2, $3);
-  } elsif($tspec =~ m/^([0-9]+):([0-5][0-9])$/) {
+
+  } elsif($tspec =~ m/^([0-9]+):([0-5][0-9])$/) {         # HH:MM
     ($hr, $min, $sec) = ($1, $2, 0);
-  } elsif($tspec =~ m/^{(.*)}$/) {
+
+  } elsif($tspec =~ m/^([0-9]{10})$/) {                   # seconds-since-1970
+    my @a = localtime($1);
+    ($hr, $min, $sec) = ($a[2],$a[1],$a[0]);
+
+  } elsif($tspec =~ m/^{(.*)}$/) {                        # {function}
     $fn = $1;
     $tspec = AnalyzeCommand(undef, "{$fn}");
-    if(!$@ && $tspec =~ m/^([0-9]+):([0-5][0-9]):([0-5][0-9])$/) {
-      ($hr, $min, $sec) = ($1, $2, $3);
-    } elsif(!$@ && $tspec =~ m/^([0-9]+):([0-5][0-9])$/) {
-      ($hr, $min, $sec) = ($1, $2, 0);
-    } else {
-      $tspec = "<empty string>" if(!$tspec);
-      return ("the at function \"$fn\" must return a timespec and not $tspec.",
-                undef, undef, undef, undef);
-    }
+    $tspec = "<empty string>" if(!$tspec);
+    my ($err, $fn2);
+    ($err, $hr, $min, $sec, $fn2) = GetTimeSpec($tspec);
+    return ("the function \"$fn\" must return a timespec and not $tspec.",
+                undef, undef, undef, undef) if($err);
+
   } else {
     return ("Wrong timespec $tspec: either HH:MM:SS or {perlcode}",
                 undef, undef, undef, undef);
@@ -3112,10 +3127,20 @@ doGlobalDef($)
 #####################################
 # rename does not work over Filesystems: lets copy it
 sub
-myrename($$)
+myrename($$$)
 {
-  my ($from, $to) = @_;
+  my ($name, $from, $to) = @_;
 
+  my $ca = AttrVal($name, "archiveCompress", 0);
+  if($ca) {
+    eval { require Compress::Zlib; };
+    if($@) {
+      $ca = 0;
+      Log 1, $@;
+    }
+  }
+  $to .= ".gz" if($ca);
+ 
   if(!open(F, $from)) {
     Log(1, "Rename: Cannot open $from: $!");
     return;
@@ -3124,8 +3149,18 @@ myrename($$)
     Log(1, "Rename: Cannot open $to: $!");
     return;
   }
-  while(my $l = <F>) {
-    print T $l;
+
+  if($ca) {
+    my $d = Compress::Zlib::deflateInit(-WindowBits=>31);
+    my $buf;
+    while(sysread(F,$buf,32768) > 0) {
+      syswrite(T, $d->deflate($buf));
+    }
+    syswrite(T, $d->flush());
+  } else {
+    while(my $l = <F>) {
+      print T $l;
+    }
   }
   close(F);
   close(T);
@@ -3137,13 +3172,14 @@ myrename($$)
 sub
 HandleArchiving($;$)
 {
-  my ($log,$diff) = @_;
+  my ($log,$flogInitial) = @_;
   my $ln = $log->{NAME};
   return if(!$attr{$ln});
 
   # If there is a command, call that
   my $cmd = $attr{$ln}{archivecmd};
   if($cmd) {
+    return if($flogInitial); # Forum #41245
     $cmd =~ s/%/$log->{currentlogfile}/g;
     Log 2, "Archive: calling $cmd";
     system($cmd);
@@ -3170,11 +3206,11 @@ HandleArchiving($;$)
   closedir(DH);
 
   my $max = int(@files)-$nra;
-  $max -= $diff if($diff);
+  $max-- if($flogInitial);
   for(my $i = 0; $i < $max; $i++) {
     if($ard) {
       Log 2, "Moving $files[$i] to $ard";
-      myrename("$dir/$files[$i]", "$ard/$files[$i]");
+      myrename($ln, "$dir/$files[$i]", "$ard/$files[$i]");
     } else {
       Log 2, "Deleting $files[$i]";
       unlink("$dir/$files[$i]");
@@ -3230,6 +3266,7 @@ Dispatch($$$)
               no strict "refs"; $readingsUpdateDelayTrigger = 1;
               @found = &{$modules{$mname}{ParseFn}}($hash,$dmsg);
               use strict "refs"; $readingsUpdateDelayTrigger = 0;
+              last if(defined($found[0]));
             } else {
               Log 0, "ERROR: Cannot autoload $mname";
             }
@@ -3412,7 +3449,7 @@ ReplaceEventMap($$$)
   return @{$str} if(!$dir && (!$em || int(@{$str}) < 2 ||
                     !defined($str->[1]) || $str->[1] eq "?"));
 
-  return ReplaceEventMap2($dev, $str, $dir, $em) if($em =~ m/^{.*}$/);
+  return ReplaceEventMap2($dev, $str, $dir, $em) if($em =~ m/^{.*}$/s);
   my @emList = attrSplit($em);
 
   if(!defined $defs{$dev}{".eventMapCmd"}) {

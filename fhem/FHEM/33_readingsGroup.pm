@@ -180,7 +180,7 @@ readingsGroup_updateDevices($;$)
         next if( $regex && $regex =~ m/^\?(.*)/ );
 
         my $name = $2;
-        if( $name =~ m/^{(.*)}$/ ) {
+        if( $name =~ m/^{(.*)}$/s ) {
           my $DEVICE = $device->[0];
           $name = eval $name;
         }
@@ -267,7 +267,7 @@ lookup($$$$$$$$$)
   my($mapping,$name,$alias,$reading,$value,$room,$group,$row,$default) = @_;
 
   if( $mapping ) {
-    if( !ref($mapping) && $mapping =~ m/^{.*}$/) {
+    if( !ref($mapping) && $mapping =~ m/^{.*}$/s) {
       my $DEVICE = $name;
       my $READING = $reading;
       my $VALUE = $value;
@@ -293,7 +293,7 @@ lookup($$$$$$$$$)
 
     return $default if( !defined($default) );
 
-    if( !ref($default) && $default =~ m/^{.*}$/) {
+    if( !ref($default) && $default =~ m/^{.*}$/s) {
       my $DEVICE = $name;
       my $READING = $reading;
       my $VALUE = $value;
@@ -331,7 +331,7 @@ lookup2($$$$;$$)
 
   return "" if( !$lookup );
 
-  if( !ref($lookup) && $lookup =~ m/^{.*}$/) {
+  if( !ref($lookup) && $lookup =~ m/^{.*}$/s) {
     my $DEVICE = $name;
     my $READING = $reading;
     my $VALUE = $value;
@@ -361,7 +361,7 @@ lookup2($$$$;$$)
 
   return undef if( !defined($lookup) );
 
-  if( !ref($lookup) && $lookup =~ m/^{.*}$/) {
+  if( !ref($lookup) && $lookup =~ m/^{.*}$/s) {
     my $DEVICE = $name;
     my $READING = $reading;
     my $VALUE = $value;
@@ -643,6 +643,7 @@ readingsGroup_2html($;$)
   my($hash,$extPage) = @_;
   $hash = $defs{$hash} if( ref($hash) ne 'HASH' );
   return undef if( !$hash );
+  return undef if( !$init_done );
 
   #if( $hash->{fhem}->{cached} && $hash->{fhem}->{lastDefChange} && $hash->{fhem}->{lastDefChange} == $lastDefChange ) {
   #  return $hash->{fhem}->{cached};
@@ -695,7 +696,7 @@ readingsGroup_2html($;$)
   my $separator = AttrVal( $d, "separator", ":" );
 
   my $style = AttrVal( $d, "style", "" );
-  if( $style =~ m/^{.*}$/ ) {
+  if( $style =~ m/^{.*}$/s ) {
     my $s = eval $style;
     $style = $s if( $s );
   }
@@ -730,9 +731,8 @@ readingsGroup_2html($;$)
   $ret .= "<tr><td><table $style id='readingsGroup-$d' groupId=\"$group\" class=\"block wide readingsGroup\">";
   $ret .= "<tr><td colspan=\"99\"><div style=\"color:#ff8888;text-align:center\">updates disabled</div></tr>" if( $disable > 0 );
 
-  my $item = 0;
   foreach my $device (@{$devices}) {
-    $item++;
+    my $item = 0;
     my $h = $defs{$device->[0]};
     my $regex = $device->[1];
     if( !$h && $device->[0] =~ m/^<.*>$/ ) {
@@ -759,6 +759,7 @@ readingsGroup_2html($;$)
              && defined($list[++$i]) ) {
         $regex .= ",". $list[$i];
       }
+      $item++;
       my $h = $h;
       my $type;
       my $force_show = 0;
@@ -906,7 +907,7 @@ readingsGroup_2html($;$)
         }
 
         my $informid = "";
-        $informid = "informId=\"$d-item:$item\"" if( $readings );
+        $informid = "informId=\"$d-item:$cell_row:$item\"" if( $readings );
         $ret .= "<td $value_columns><div $cell_style $name_style $informid>$txt</div></td>";
         $first = 0;
         ++$cell_column;
@@ -916,7 +917,7 @@ readingsGroup_2html($;$)
           $regex = $1;
           my $force_device = $2;
           $name = $3;
-          if( $name =~ m/^{(.*)}$/ ) {
+          if( $name =~ m/^{(.*)}$/s ) {
             my $DEVICE = $device->[0];
             $name = eval $name;
           }
@@ -1163,9 +1164,10 @@ readingsGroup_Notify($$)
       $value = "" if( !defined($value) );
       my $show_state = !AttrVal( $name, "nostate", "0" );
 
-      my $item = 0;
+      my $cell_row = 0;
       foreach my $device (@{$devices}) {
-        $item++;
+        my $item = 0;
+        ++$cell_row;
         my $h = $defs{@{$device}[0]};
         next if( !$h );
         next if( $dev->{NAME} ne $h->{NAME} );
@@ -1174,7 +1176,7 @@ readingsGroup_Notify($$)
         my @list = (undef);
         @list = split(",",$regex) if( $regex );
         for( my $i = 0; $i <= $#list; ++$i ) {
-        my $regex = $list[$i];
+          my $regex = $list[$i];
           while ($regex
                  && ( ($regex =~ m/^</ && $regex !~ m/>$/)            #handle , in <...>
                       || ($regex =~ m/@\{/ && $regex !~ m/\}$/)       #handle , in reading@{...}
@@ -1182,6 +1184,7 @@ readingsGroup_Notify($$)
                  && defined($list[++$i]) ) {
             $regex .= ",". $list[$i];
           }
+          ++$item;
           next if( $reading eq "state" && !$show_state && (!defined($regex) || $regex ne "state") );
           my $modifier = "";
           if( $regex && $regex =~ m/^([+?!\$]*)(.*)/ ) {
@@ -1224,7 +1227,7 @@ readingsGroup_Notify($$)
                 ($txt,undef) = readingsGroup_makeLink($txt,undef,$cmd);
               }
 
-              DoTrigger( $name, "item:$item: $txt" );
+              DoTrigger( $name, "item:$cell_row:$item: $txt" );
             }
 
             next;
@@ -1421,7 +1424,7 @@ readingsGroup_Set($@)
 
         my $v = join(" ", @a);
         my $set_fn = AttrVal( $hash->{NAME}, "setFn", "" );
-        if( $set_fn =~ m/^{.*}$/ ) {
+        if( $set_fn =~ m/^{.*}$/s ) {
           my $CMD = $cmd;
           my $ARGS = $param ." ". join(" ", @a);
 
@@ -1480,7 +1483,7 @@ readingsGroup_Attr($$$;$)
 
     if( $cmd eq "set" ) {
       my $attrVal = $attrVal;
-      if( $attrVal =~ m/^{.*}$/ && $attrVal =~ m/=>/ && $attrVal !~ m/\$/ ) {
+      if( $attrVal =~ m/^{.*}$/s && $attrVal =~ m/=>/ && $attrVal !~ m/\$/ ) {
         my $av = eval $attrVal;
         if( $@ ) {
           Log3 $hash->{NAME}, 3, $hash->{NAME} .": ". $@;
@@ -1626,7 +1629,8 @@ readingsGroup_Attr($$$;$)
     <b>Attributes</b>
     <ul>
       <li>alwaysTrigger<br>
-        1 -> alwaysTrigger update events. even if not visible.</li><br>
+        1 -> alwaysTrigger update events. even if not visible.<br>
+        2 -> trigger events for calculated values.</li><br>
       <li>disable<br>
         1 -> disable notify processing and longpoll updates. Notice: this also disables rename and delete handling.<br>
         2 -> also disable html table creation<br>
@@ -1723,14 +1727,14 @@ readingsGroup_Attr($$$;$)
         hidden -> default state is hidden but can be expanded<br>
         hideable -> default state is visible but can be hidden<br><br>
         </ul>
-        if set to collapsed or collapsible will recognise the specials &lt;-&gt;,&lt;+&gt; and &lt;+-&gt; as the first elements of
+        if set to collapsed or collapsible readingsGroup will recognise the specials &lt;-&gt;,&lt;+&gt; and &lt;+-&gt; as the first elements of
         a line to add a + or - symbol to this line. clicking on the + or - symbol will toggle between expanded and collapsed state. if a readingsGroup is expanded then all others in the same group will be collapsed.
         <ul>
         - -> line will be visible in expanded state<br>
         + -> line will be visible in collapsed state<br>
         +- -> line will be visible in both states<br>
         <br>
-        collapsed-> default state is collapsed but can be expanded<br>
+        collapsed -> default state is collapsed but can be expanded<br>
         collapsible -> default state is visible but can be collapsed </li>
         </ul>
     </ul><br>

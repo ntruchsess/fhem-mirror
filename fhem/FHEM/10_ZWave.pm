@@ -8,6 +8,7 @@ use warnings;
 use SetExtensions;
 use Compress::Zlib;
 use Time::HiRes qw( gettimeofday );
+use HttpUtils;
 
 sub ZWave_Cmd($$@);
 sub ZWave_Get($@);
@@ -15,9 +16,12 @@ sub ZWave_Parse($$@);
 sub ZWave_Set($@);
 sub ZWave_SetClasses($$$$);
 sub ZWave_addToSendStack($$);
+sub ZWave_secStart($);
+sub ZWave_secEnd($);
 
 use vars qw(%zw_func_id);
 use vars qw(%zw_type6);
+use vars qw($FW_ME $FW_tp $FW_ss);
 
 my %zwave_id2class;
 my %zwave_class = (
@@ -168,7 +172,7 @@ my %zwave_class = (
     get   => { setpoint => "02" },
     parse => { "064303(..)(..)(....)" => 'sprintf("setpointTemp:%0.1f %s %s", '.
                  'hex($3)/(10**int(hex($2)/32)), '.
-                 'hex($2)&8 ? "F":"C", $1==1 ? "heating":"cooling")' } },
+                 'hex($2)&8 ? "F":"C", hex($1)==1 ? "heating":"cooling")' } },
   THERMOSTAT_FAN_MODE      => { id => '44' },
   THERMOSTAT_FAN_STATE     => { id => '45' },
   CLIMATE_CONTROL_SCHEDULE => { id => '46',
@@ -321,7 +325,8 @@ my %zwave_class = (
                associationRequestAll => 'ZWave_associationRequest($hash,"")' },
     get   => { association          => "02%02x",
                associationGroups    => "05" },
-    parse => { "..8503(..)(..)..(.*)" => '"assocGroup_$1:Max $2 Nodes $3"',
+    parse => { "..8503(..)(..)..(.*)" =>
+          'sprintf("assocGroup_%d:Max %d Nodes %d", hex($1), hex($2), hex($3))',
                "..8506(..)"           => '"assocGroups:".hex($1)' },
     init  => { ORDER=>10, CMD=> '"set $NAME associationAdd 1 $CTRLID"' } },
   VERSION                  => { id => '86',
@@ -376,7 +381,7 @@ my %zwave_class = (
     get   => { "secSupported" => 'ZWave_sec($hash, "02")' ,
                "secNonce"     => 'ZWave_sec($hash, "40")'},
     parse => { "..9803(.*)" => 'ZWave_secSupported($hash, $1)',
-               "..9805(.*)" => 'ZWave_secureInit($hash, $1)', # secScheme
+               "..9805(.*)" => 'ZWave_secInit($hash, $1)', # secScheme
                "..9807"     => 'ZWave_secNetWorkKeyVerify($hash)',
                "..9840"     => 'ZWave_secNonceRequestReceived($hash)',
                "..9880(.*)" => 'ZWave_secNonceReceived($hash, $1)',
@@ -394,6 +399,14 @@ my %zwave_class = (
   SENSOR_CONFIGURATION     => { id => '9e' },
   MARK                     => { id => 'ef' },
   NON_INTEROPERABLE        => { id => 'f0' },
+);
+
+my %zwave_quietCmds = (
+  secScheme=>1,
+  sendNonce=>1,
+  secEncap=>1,
+
+  secNonce=>1 
 );
 
 my %zwave_cmdArgs = (
@@ -432,6 +445,8 @@ use vars qw(%zwave_deviceSpecial);
 
 my $zwave_cryptRijndael = 0;
 my $zwave_lastHashSent;
+my %zwave_pepperLink;
+my %zwave_pepperImg;
 
 sub
 ZWave_Initialize($)
@@ -445,7 +460,7 @@ ZWave_Initialize($)
   $hash->{ParseFn}   = "ZWave_Parse";
   $hash->{AttrList}  = "IODev do_not_notify:1,0 noExplorerFrames:1,0 ".
     "ignore:1,0 dummy:1,0 showtime:1,0 classes vclasses ".
-    "secure_classes $readingFnAttributes";
+    "secure_classes WNMI_delay $readingFnAttributes";
   map { $zwave_id2class{lc($zwave_class{$_}{id})} = $_ } keys %zwave_class;
 
   $hash->{FW_detailFn} = "ZWave_fhemwebFn";
@@ -456,6 +471,29 @@ ZWave_Initialize($)
   } else {
     $zwave_cryptRijndael = 1;
   }
+
+  ################
+  # Read in the pepper translation table
+  my $fn = $attr{global}{modpath}."/FHEM/lib/zwave_pepperlinks.csv.gz";
+  my $gz = gzopen($fn, "rb");
+  if($gz) {
+    my $line;
+    while($gz->gzreadline($line)) {
+      chomp($line);
+      my @a = split(",",$line);
+      $zwave_pepperLink{$a[0]} = $a[1];
+      $zwave_pepperImg{$a[0]} = $a[2];
+    }
+    $gz->gzclose();
+  } else {
+    Log 3, "Can't open $fn: $!";
+  }
+
+  # Create cache directory
+  $fn = $attr{global}{modpath}."/www/deviceimages";
+  if(! -d $fn) { mkdir($fn) || Log 3, "Can't create $fn"; }
+  $fn .= "/zwave";
+  if(! -d $fn) { mkdir($fn) || Log 3, "Can't create $fn"; }
 }
 
 
@@ -574,7 +612,7 @@ ZWave_Cmd($$@)
   # Collect the commands from the distinct classes
   my %cmdList;
   my $classes = AttrVal($name, "classes", "");
-  my $cfgReq = ($type eq "set" && $cmd =~ m/^config/ && @a&&$a[0] eq "request");
+  my $cfgReq = ($type eq "set" && $cmd =~ m/^config/ && @a && $a[0] eq "request");
   shift(@a) if($cfgReq);
   foreach my $cl (split(" ", $classes)) {
     my $ptr = ZWave_getHash($hash, $cl, $cfgReq ? "get" : $type);
@@ -586,6 +624,10 @@ ZWave_Cmd($$@)
         $cmdList{$k}{id}  = $zwave_class{$cl}{id};
       }
     }
+  }
+
+  if ($cfgReq) {
+    $type="get";
   }
 
   my $id = $hash->{nodeIdHex};
@@ -613,13 +655,13 @@ ZWave_Cmd($$@)
 
   if(!$cmdList{$cmd}) {
     my @list;
-    foreach my $cmd (sort keys %cmdList) {
-      if($zwave_cmdArgs{$type}{$cmd}) {
-        push @list, "$cmd:$zwave_cmdArgs{$type}{$cmd}";
-      } elsif($cmdList{$cmd}{fmt} !~ m/%/) {
-        push @list, "$cmd:noArg";
+    foreach my $lcmd (sort keys %cmdList) {
+      if($zwave_cmdArgs{$type}{$lcmd}) {
+        push @list, "$lcmd:$zwave_cmdArgs{$type}{$lcmd}";
+      } elsif($cmdList{$lcmd}{fmt} !~ m/%/) {
+        push @list, "$lcmd:noArg";
       } else {
-        push @list, $cmd;
+        push @list, $lcmd;
       }
     }
     my $list = join(" ",@list);
@@ -668,10 +710,10 @@ ZWave_Cmd($$@)
   }
 
   if($cmd =~ m/^config/ && $cmd ne "configRequestAll") {
-    my ($err, $cmd) =
+    my ($err, $lcmd) =
         ZWave_configCheckParam($hash, $cfgReq, $type, $cmd, $cmdFmt, @a);
     return $err if($err);
-    $cmdFmt = $cmd;
+    $cmdFmt = $lcmd;
   } else {
     $cmdFmt = sprintf($cmdFmt, @a) if($nArg);
     my ($err, $ncmd) = eval($cmdFmt) if($cmdFmt !~ m/^\d/);
@@ -680,7 +722,8 @@ ZWave_Cmd($$@)
     return "" if($ncmd && $ncmd eq "EMPTY"); # e.g. configRequestAll
   }
 
-  Log3 $name, 2, "ZWave $type $name $cmd ".join(" ", @a);
+  Log3 $name, $zwave_quietCmds{$cmd} ? 4 : 2,
+       "ZWave $type $name $cmd ".join(" ", @a);
 
   my ($baseClasses, $baseHash) = ($classes, $hash);
   if($id =~ m/(..)(..)/) {  # Multi-Channel, encapsulate
@@ -712,11 +755,12 @@ ZWave_Cmd($$@)
     my $payload=$3;
 
     #check message here for needed encryption (SECURITY)
-    if (ZWave_isSecureClass($hash, $cc_cmd)) {
-      my $interceptedMSG = $cc_cmd . $payload;
+    if(ZWave_secIsSecureClass($hash, $cc_cmd)) {
+      ZWave_secStart($hash);
       # message stored in reading, will be processed when nonce arrives
-      ZWave_putSecMsg($hash, $interceptedMSG);
-      return ZWave_Get($hash, $name, "secNonce");
+      my $cmd2 = "$type $name $cmd ".join(" ", @a);
+      ZWave_secPutMsg($hash, $cc_cmd . $payload, $cmd2);
+      return ZWave_Cmd("get", $hash, $name, "secNonce");
     }
   }
 
@@ -739,18 +783,35 @@ ZWave_Cmd($$@)
     $data = "$cmd $id $data" if($re);
 
     $val = ($data ? ZWave_Parse($iohash, $data, $type) : "no data returned");
+    ZWave_processSendStack($hash, 1) if($data && $cmd eq "neighborList");
 
   } else {
-    $cmd .= " ".join(" ", @a) if(@a);
+    if(!$zwave_quietCmds{$cmd}) {
+      $cmd .= " ".join(" ", @a) if(@a);
+      readingsSingleUpdate($hash, "state", $cmd, 1);
+    }
 
   }
 
-  readingsSingleUpdate($hash, "state", $cmd, 1) if($type eq "set");
   return $val;
 }
 
-sub ZWave_Set($@) { return ZWave_Cmd("set", shift, @_); }
-sub ZWave_Get($@) { return ZWave_Cmd("get", shift, @_); }
+sub
+ZWave_SCmd($$@)
+{
+  my ($type, $hash, @a) = @_;
+  if($hash->{secInProgress} && !(@a < 2 || $a[1] eq "?")) {
+    my %h = ( T => $type, A => \@a );
+    push @{$hash->{secStack}}, \%h;
+    return ($type eq "get" ?
+            "Secure operation in progress, executing in background" : "");
+  }
+  return ZWave_Cmd($type, $hash, @a);
+}
+
+
+sub ZWave_Set($@) { return ZWave_SCmd("set", shift, @_); }
+sub ZWave_Get($@) { return ZWave_SCmd("get", shift, @_); }
 
 # returns supported Parameters by hrvStatus
 sub
@@ -858,7 +919,6 @@ Zwave_meterGet($)
     return("argument must be one of: 0 to 6","");
   } else {
     $scale = $scale << 3;
-    #~ Log 1, "cmd" .sprintf('01%02x', $scale);
     return("",sprintf('01%02x', $scale));
   };
 
@@ -1452,6 +1512,7 @@ ZWave_configParseModel($)
       my $value = $1 if($line =~ m/value="([^"]*)"/i);
       my ($item, $shortened) = ZWave_cleanString($label, $value);
       $hash{$cmdName}{Item}{$item} = $value;
+      $hash{$cmdName}{type} = "list";   # Forum #42604
       $hash{$cmdName}{Help} .= "Full text for $item is $label<br>"
         if($shortened);
     }
@@ -1726,7 +1787,7 @@ ZWave_configRequestAll($)
   #use Data::Dumper;
   #Log 1, Dumper $mc;
   foreach my $c (sort keys %{$mc->{get}}) {
-    my $r = ZWave_Cmd("set", $hash, $hash->{NAME}, $c, "request");
+    my $r = ZWave_Set($hash, $hash->{NAME}, $c, "request");
     Log 1, "$c: $r" if($r);
   }
   return ("","EMPTY");
@@ -1748,7 +1809,7 @@ ZWave_associationRequest($$)
   $grp = $1 if($data =~ m/..8503(..)/);
   return if($grp >= $nGrp);
   $zwave_parseHook{"$hash->{nodeIdHex}:..85"} = \&ZWave_associationRequest;
-  ZWave_Cmd("set", $hash, $hash->{NAME}, "associationRequest", $grp+1);
+  ZWave_Set($hash, $hash->{NAME}, "associationRequest", $grp+1);
 }
 
 
@@ -1814,9 +1875,8 @@ ZWave_sensorbinaryV2Parse($$)
 ##############################################
 #  SECURITY (start)
 ##############################################
-
 sub
-ZWave_secureInit(@)
+ZWave_secInit(@)
 {
   my ($hash, $param) = @_;
   my $iodev = $hash->{IODev};
@@ -1831,10 +1891,10 @@ ZWave_secureInit(@)
   my $stTxt = ($status > int(@stTxt) ? "ERR" : $stTxt[$status-1]);
 
   if($status == 1) {
-    ZWave_Set($hash, $name, "secScheme");
+    ZWave_Cmd("set", $hash, $name, "secScheme");
     return ""; # not evaluated
   } elsif($status == 2) {
-    ZWave_Get($hash, $name, "secNonce");
+    ZWave_Cmd("get", $hash, $name, "secNonce");
     return undef;
   } else {
     Log3 $name, 5, "$name: secureInit called with invalid status";
@@ -1843,7 +1903,30 @@ ZWave_secureInit(@)
 }
 
 sub
-ZWave_isSecureClass($$)
+ZWave_secStart($)
+{
+  my ($hash) = @_;
+  return if($hash->{secInProgress});
+  $hash->{secInProgress} = 1;
+  my @empty;
+  $hash->{secStack} = \@empty;
+}
+
+sub
+ZWave_secEnd($)
+{
+  my ($hash) = @_;
+  return if(!$hash->{secInProgress});
+  my $secStack = $hash->{secStack};
+  delete $hash->{secInProgress};
+  delete $hash->{secStack};
+  foreach my $cmd (@{$secStack}) {
+    ZWave_SCmd($cmd->{T}, $hash, @{$cmd->{A}});
+  }
+}
+
+sub
+ZWave_secIsSecureClass($$)
 {
   my ($hash, $cc_cmd) = @_;
   my $name = $hash->{NAME};
@@ -1853,9 +1936,9 @@ ZWave_isSecureClass($$)
     my $cc_name = $zwave_id2class{lc($cc)};
     my $sec_classes = AttrVal($name, "secure_classes", "");
 
-    if ($sec_classes =~ m/$cc_name/) {
+    if (($sec_classes =~ m/$cc_name/) && ($cc_name ne 'SECURITY')){
       Log3 $name, 5, "$name: $cc_name is a secured class!";
-      return (1);
+      return 1;
     }
 
     # some SECURITY commands need to be encrypted allways
@@ -1864,7 +1947,7 @@ ZWave_isSecureClass($$)
           $cmd eq '06' || # NetworkKeySet
           $cmd eq '08' ){ # SchemeInherit
         Log3 $name, 5, "$name: Security commands will be encrypted!";
-        return (1);
+        return 1;
         }
     }
     # these SECURITY commands should not be encrypted
@@ -1872,7 +1955,7 @@ ZWave_isSecureClass($$)
     # MessageEncap = 0x81 is already encrypted
     # MessageEncapNonceGet = 0xc1 is already encrypted
   }
-  return (0);
+  return 0;
 }
 
 
@@ -1902,7 +1985,48 @@ ZWave_secSupported($$)
         $zwave_id2class{lc($sec_classId)} : "UNKNOWN_".lc($sec_classId);
     }
     $attr{$name}{secure_classes} = join(" ", @sec_classes)
-      if (@sec_classes && !$attr{$name}{secure_classes});
+      if (@sec_classes);
+  }
+
+  # Add new secure_classes to classes if not already present
+  # Needed for classes that are only supported with SECURITY
+
+  if ($attr{$name}{secure_classes} && $attr{$name}{classes}) {
+    my $classes        = $attr{$name}{classes};
+    my $secure_classes = $attr{$name}{secure_classes};
+    my $c1;
+    my $c2;
+    my $s1;
+    my $s2;
+    my $classname;
+
+    if ($classes =~ m/(.*)(MARK)(.*)/) {
+      ($c1, $c2) = ($1, $2 . $3);
+    } else {
+      ($c1, $c2) = ($classes, "");
+    }
+
+    if ($secure_classes =~ m/(.*)(MARK)(.*)/) {
+      ($s1, $s2) = ($1, $2 . $3);
+    } else {
+      ($s1, $s2) = ($secure_classes, "");
+    }
+
+    foreach $classname (split(" ", $s1)) {
+      if ($c1 !~ m/$classname/) {
+        $c1 = join (" ", $c1, $classname);
+      }
+    }
+
+    foreach $classname (split(" ", $s2)) {
+      if ($c2 !~ m/$classname/) {
+        $c2 = join (" ", $c2, $classname);
+      }
+    }
+
+    $classes = join (" ", $c1, $c2);
+    $classes =~ s/ +/ /gs;
+    $attr{$name}{classes} = $classes;
   }
 
   if ($iodev->{secInitName} && $hash->{secStatus}) {
@@ -1924,7 +2048,6 @@ ZWave_secNonceReceived($$)
   {
     return;
   }
-  setReadingsVal($hash, "received_nonce", $r_nonce_hex, TimeNow());
 
   # If a nonce is received during secure_Include, send the networkkey...
   if ($hash->{secStatus} && ($hash->{secStatus} == 2)) {
@@ -1932,7 +2055,7 @@ ZWave_secNonceReceived($$)
     my $mynonce_hex = substr (ZWave_secCreateNonce($hash), 2, 16);
     my $cryptedNetworkKeyMsg = ZWave_secNetworkkeySet($r_nonce_hex,
       $mynonce_hex, $key_hex, $hash->{nodeIdHex});
-    ZWave_Set($hash, $name, ("secEncap", $cryptedNetworkKeyMsg));
+    ZWave_Cmd("set", $hash, $name, ("secEncap", $cryptedNetworkKeyMsg));
     $hash->{secStatus}++;
     readingsSingleUpdate($hash, "SECURITY", 'INITIALIZING (Networkkey sent)',0);
     Log3 $name, 5, "$name: SECURITY initializing, networkkey sent";
@@ -1943,7 +2066,12 @@ ZWave_secNonceReceived($$)
   }
 
   # if nonce is received, we should have stored a message for encryption
-  my $secMsg = ZWave_getSecMsg($hash);
+  my $getSecMsg = ZWave_secGetMsg($hash);
+  my @secArr = split / /, $getSecMsg, 4;
+  my $secMsg = $secArr[0];
+  my $type   = $secArr[1];
+  my $cmd    = $secArr[3];
+
   if (!$secMsg) {
     Log3 $name, 1, "$name: Error, nonce reveived but no stored command for ".
       "encryption found";
@@ -1951,45 +2079,33 @@ ZWave_secNonceReceived($$)
   }
 
   my $enc = ZWave_secEncrypt($hash, $r_nonce_hex, $secMsg);
-  ZWave_Set($hash, $name, ("secEncap", $enc));
+  ZWave_Cmd("set", $hash, $name, ("secEncap", $enc));
+  if ($type eq "set" && $cmd && $cmd !~ m/^config.*request$/) {
+    readingsSingleUpdate($hash, "state", $cmd, 1);
+    Log3 $name, 5, "$name: type=$type, cmd=$cmd ($getSecMsg)";
+    ZWave_secEnd($hash) if ($type eq "set");
+  }
 
   return undef;
 }
 
 
 sub
-ZWave_putSecMsg_old ($$)
+ZWave_secPutMsg ($$$)
 {
-  my ($hash, $s) = @_;
-  my $name = $hash->{NAME};
-  my $secMsg = ReadingsVal($name, "secMsg", undef);
-  if ($secMsg) {
-    my @secMsg = split (' ', $secMsg);
-    push(@secMsg, $s);
-    $secMsg = join(" ",@secMsg);
-  } else {
-    $secMsg = $s;
-  }
-  setReadingsVal($hash, "secMsg", $secMsg, TimeNow());
-  Log3 $name, 3, "$name SECURITY: $s stored for encryption";
-}
-
-sub
-ZWave_putSecMsg ($$)
-{
-  my ($hash, $s) = @_;
+  my ($hash, $s, $cmd) = @_;
   my $name = $hash->{NAME};
 
   if (!$hash->{secMsg}) {
     my @arr = ();
     $hash->{secMsg} = \@arr;
   }
-  push @{$hash->{secMsg}}, $s;
-  Log3 $name, 3, "$name SECURITY: $s stored for encryption";
+  push @{$hash->{secMsg}}, $s . " ". $cmd;
+  Log3 $name, 5, "$name SECURITY: $s stored for encryption";
 }
 
 sub
-ZWave_getSecMsg ($)
+ZWave_secGetMsg ($)
 {
   my ($hash) = @_;
   my $name = $hash->{NAME};
@@ -1998,7 +2114,7 @@ ZWave_getSecMsg ($)
   if ($secMsg && @{$secMsg}) {
     my $ret = shift(@{$secMsg});
     if ($ret) {
-      Log3 $name, 3, "$name SECURITY: $ret retrieved for encryption";
+      Log3 $name, 5, "$name SECURITY: $ret retrieved for encryption";
       return $ret;
     }
   }
@@ -2013,7 +2129,8 @@ ZWave_secNonceRequestReceived ($)
   if (!ZWave_secIsEnabled($hash)) {
     return;
   }
-  return ZWave_Set($hash, $hash->{NAME}, "sendNonce");
+  ZWave_secStart($hash);
+  return ZWave_Cmd("set", $hash, $hash->{NAME}, "sendNonce");
 }
 
 sub
@@ -2040,7 +2157,7 @@ ZWave_secCreateNonce($)
 {
   my ($hash) = @_;
   if (ZWave_secIsEnabled($hash)) {
-    my $nonce = ZWave_getNonce();
+    my $nonce = ZWave_secGetNonce();
     setReadingsVal($hash, "send_nonce", $nonce, TimeNow());
     return ("",'80'.$nonce);
   } else {
@@ -2049,7 +2166,7 @@ ZWave_secCreateNonce($)
 }
 
 sub
-ZWave_getNonce()
+ZWave_secGetNonce()
 {
   my $nonce='';
   for (my $i = 0; $i <8; $i++) {
@@ -2071,8 +2188,8 @@ ZWave_secNetWorkKeyVerify ($)
 
   #Log3 $iodev, 4, "$name: NetworkKeyVerify received, SECURITY is enabled";
   readingsSingleUpdate($hash, "SECURITY", 'ENABLED', 0);
-  Log3 $name, 2, "$name: SECURITY enabled, networkkey was verified";
-  ZWave_Get($hash, $name, ("secSupported"));
+  Log3 $name, 3, "$name: SECURITY enabled, networkkey was verified";
+  ZWave_Cmd("get", $hash, $name, ("secSupported"));
 }
 
 sub
@@ -2100,7 +2217,7 @@ ZWave_secEncrypt($$$)
   my $init_enc_key     = pack 'H*', 'a' x 32;
   my $init_auth_key    = pack 'H*', '5' x 32;
 
-  my $s_nonce_hex = ZWave_getNonce();
+  my $s_nonce_hex = ZWave_secGetNonce();
   my $iv = pack 'H*', $s_nonce_hex . $r_nonce_hex;
   my $key = pack 'H*', AttrVal($iodev->{NAME}, "networkKey", "");
   my $enc_key  = ZWave_secEncryptECB($key, $init_enc_key);
@@ -2144,10 +2261,11 @@ ZWave_secDecrypt($$$)
   my $s_nonce_hex = ReadingsVal($name, "send_nonce", undef);
   if (!$s_nonce_hex) {
     Log3 $name, 1, "$name: Error, no send_nonce to decrypt message available";
+    ZWave_secEnd($hash);
     return "";
   }
 
-  readingsSingleUpdate($hash, "send_nonce", undef, 0);
+  delete $hash->{READINGS}{send_nonce};
 
   # encrypted message format:
   # data=  bcb328fe5d924a402b2901fc2699cc3bcacd30e0
@@ -2157,7 +2275,7 @@ ZWave_secDecrypt($$$)
   # 2699cc3bcacd30e0 = 8 byte authentification code
   if ($data !~ m/^(................)(.*)(..)(................)$/) {
     Log3 $name, 1, "$name: Error, wrong format of encrypted msg";
-    #return (undef, undef);
+    ZWave_secEnd($hash);
     return "";
   }
   my ($r_nonce_hex, $msg_hex, $s_nonce_id_hex, $auth_code_hex) = ($1, $2, $3, $4);
@@ -2214,6 +2332,7 @@ ZWave_secDecrypt($$$)
 
       Log3 $name, 5, "$name: secDecrypt: parsing $decryptedCmd";
       ZWave_Parse($iodev, $decryptedCmd, undef);
+      ZWave_secEnd($hash);
     }
   } else {
     Log3 $name, 1, "$name: secDecrypt: Authentification code not verified, "
@@ -2224,7 +2343,7 @@ ZWave_secDecrypt($$$)
   }
 
   if ($newnonce == 1) {
-    ZWave_Set($hash, $hash->{NAME}, "sendNonce");
+    ZWave_Cmd("set", $hash, $hash->{NAME}, "sendNonce");
   }
 
   return "";
@@ -2400,13 +2519,14 @@ ZWave_wakeupTimer($$)
 {
   my ($hash, $direct) = @_;
   my $now = gettimeofday();
+  my $wnmi_delay = AttrVal($hash->{NAME}, "WNMI_delay", 2);
 
   if(!$hash->{wakeupAlive}) {
     $hash->{wakeupAlive} = 1;
     $hash->{lastMsgSent} = $now;
     InternalTimer($now+0.1, "ZWave_wakeupTimer", $hash, 0);
 
-  } elsif(!$direct && $now - $hash->{lastMsgSent} > 2) {
+  } elsif(!$direct && $now - $hash->{lastMsgSent} > $wnmi_delay) {
     if(!$hash->{SendStack}) {
       my $nodeId = $hash->{nodeIdHex};
       my $cmdEf  = (AttrVal($hash->{NAME},"noExplorerFrames",0)==0 ? "25":"05");
@@ -2616,8 +2736,10 @@ ZWave_Parse($$@)
       my $dh = $modules{ZWave}{defptr}{"$homeId $1"};
       return "" if(!$dh);
 
+      ZWave_wakeupTimer($dh, 1) if(ZWave_isWakeUp($dh));
+
       if($iodev->{addSecure}) {
-        readingsSingleUpdate($dh, "SECURITY", 
+        readingsSingleUpdate($dh, "SECURITY",
                                 "INITIALIZING (starting secure inclusion)", 0);
         my $classes = AttrVal($dh->{NAME}, "classes", "");
         if($classes =~ m/SECURITY/) {
@@ -2626,7 +2748,7 @@ ZWave_Parse($$@)
             if($key) {
               $iodev->{secInitName} = $dh->{NAME};
               Log3 $ioName, 2, "ZWAVE Starting secure init";
-              return ZWave_secureInit($dh);
+              return ZWave_secInit($dh);
             } else {
               Log3 $ioName,1,"No secure inclusion as $ioName has no networkKey";
               readingsSingleUpdate($dh, "SECURITY",
@@ -2647,7 +2769,7 @@ ZWave_Parse($$@)
             "SECURITY disabled, device does not support SECURITY command class";
         }
       }
-      ZWave_wakeupTimer($dh, 1) if(ZWave_isWakeUp($dh));
+
       return ZWave_execInits($dh, 0);
     }
 
@@ -2759,7 +2881,16 @@ ZWave_Parse($$@)
 
 
   if(!$hash) {
-    Log3 $ioName, 1, "ZWave: unknown message $msg, please report";
+    if(!$baseHash) {
+      Log3 $ioName, 1, "ZWave: unknown message $msg, please report";
+      return;
+    }
+    # autocreate the device when pressing the remote button (Forum #43261)
+    $id=hex($id); $baseId=hex($baseId); $ep=hex($ep);
+    my $nn = "ZWave_Node_$baseId".($ep eq "0" ? "" : ".$ep");
+    my $ret = "UNDEFINED $nn ZWave $homeId $id";
+    Log3 $ioName, 3, "$ret, please define it";
+    DoTrigger("global", $ret);
     return "";
   }
 
@@ -2869,12 +3000,40 @@ ZWave_fhemwebFn($$$$)
 {
   my ($FW_wname, $d, $room, $pageHash) = @_; # pageHash is set for summaryFn.
 
+  my $pl = ""; # Pepper link and image
+  my $model = ReadingsVal($d, "modelId", "");
+  if($model) {
+    my $link = $zwave_pepperLink{$model};
+    $pl .= "<div class='detLink ZWPepper'>";
+    $pl .= "<a target='_blank' href='http://www.pepper1.net/zwavedb/device/".
+               "$link'>Details in pepper1.net</a>" if($link);
+    $pl .= "</div>";
+
+    my $img = $zwave_pepperImg{$model};
+    if($img && !$FW_ss) {
+      $pl .= "<div class='img ZWPepper'".($FW_tp?"":" style='float:right'").">";
+      $pl .= "<img style='max-width:96;max-height:96px;' ".
+                        "src='$FW_ME/deviceimages/zwave/$img'>";
+      $pl .= "</div>";
+      my $fn = $attr{global}{modpath}."/www/deviceimages/zwave/$img";
+      if(!-f $fn) {      # Cache the picture
+        my $data = GetFileFromURL("http://fhem.de/deviceimages/zwave/$img");
+        if($data && open(FH,">$fn")) {
+          print FH $data;
+          close(FH)
+        }
+      }
+    }
+  }
+
   return
-  '<div id="ZWHelp" class="makeTable help"></div>'.
+  "<div id='ZWHelp' class='makeTable help'></div>$pl".
   '<script type="text/javascript">'.
-   "var d='$d';" . <<'JSEND'
+   "var d='$d', FW_tp='$FW_tp';" . <<'JSEND'
     $(document).ready(function() {
       $("div#ZWHelp").insertBefore("div.makeTable.wide:first"); // Move
+      $("div.detLink.ZWPepper").insertAfter("div.detLink.devSpecHelp");
+      if(FW_tp) $("div.img.ZWPepper").appendTo("div#menu");
       $("select.set,select.get").each(function(){
         $(this).get(0).setValueFn = function(val) {
           $("div#ZWHelp").html(val);
@@ -3480,6 +3639,13 @@ s2Hex($)
   <b>Attributes</b>
   <ul>
     <li><a href="#IODev">IODev</a></li>
+    <li><a name="WNMI_delay">WNMI_delay</a>
+      This attribute set the time delay between the last message sent to an
+      WakeUp device and the sending of the WNMI Message
+      (WakeUpNoMoreInformation) that will set the device to sleep mode.  Value
+      is in seconds, subseconds my be specified. Values outside of 0.2-5.0 are
+      probably harmful.
+      </li>
     <li><a href="#do_not_notify">do_not_notify</a></li>
     <li><a href="#ignore">ignore</a></li>
     <li><a href="#dummy">dummy</a></li>

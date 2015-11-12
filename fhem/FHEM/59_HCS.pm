@@ -56,7 +56,6 @@ my %defaults = (
   "ecoTemperatureOn"       => 16.0,
   "ecoTemperatureOff"      => 17.0,
   "eventOnChangeReading"   => "state,devicestate,eco,overdrive",
-  "loglevel"               => 3,
   "mode"                   => "thermostat",
   "thermostatThresholdOn"  => 0.5,
   "thermostatThresholdOff" => 0.5,
@@ -75,13 +74,28 @@ HCS_Initialize($$)
   $hash->{GetFn}    = "HCS_Get";
   $hash->{SetFn}    = "HCS_Set";
   $hash->{NotifyFn} = "HCS_Notify";
-  $hash->{AttrList} = "deviceCmdOn deviceCmdOff exclude ecoTemperatureOn ecoTemperatureOff ".
-                      "interval idleperiod mode:thermostat,valve ".
-                      "sensor sensorThresholdOn sensorThresholdOff sensorReading ".
-                      "thermostatThresholdOn thermostatThresholdOff ".
-                      "valveThresholdOn valveThresholdOff ".
-                      "do_not_notify:1,0 event-on-update-reading event-on-change-reading ".
-                      "loglevel:0,1,2,3,4,5,6 disable:0,1";
+  no warnings 'qw';
+  my @attrList = qw(
+    deviceCmdOff
+    deviceCmdOn
+    disable:0,1
+    ecoTemperatureOff
+    ecoTemperatureOn
+    exclude
+    idleperiod
+    interval
+    mode:thermostat,valve
+    sensor
+    sensorReading
+    sensorThresholdOff
+    sensorThresholdOn
+    thermostatThresholdOff
+    thermostatThresholdOn
+    valveThresholdOff
+    valveThresholdOn
+  );
+  use warnings 'qw';
+  $hash->{AttrList} = join(" ", @attrList) ." ". $readingFnAttributes;
 }
 
 #####################################
@@ -165,7 +179,7 @@ HCS_DoInit($) {
   $attr{$name}{idleperiod}        = AttrVal($name,"idleperiod",$defaults{idleperiod});
   $attr{$name}{mode}              = AttrVal($name,"mode",$defaults{mode});
   if($attr{$name}{mode} ne "thermostat" && $attr{$name}{mode} ne "valve") {
-    Log 1, "$type $name unknown attribute mode '".$attr{$name}{mode}."'. Please use 'thermostat' or 'valve'.";
+    Log3 $name, 1, "$type $name unknown attribute mode '".$attr{$name}{mode}."'. Please use 'thermostat' or 'valve'.";
     return undef;
   }
   $attr{$name}{thermostatThresholdOn}   = AttrVal($name,"thermostatThresholdOn",$defaults{thermostatThresholdOn});
@@ -269,7 +283,7 @@ HCS_Set($@) {
         if(!$ecoTempOn);
       $str = "missing attribute 'ecoTemperatureOff'. Please define this attribute first."
         if(!$ecoTempOff);
-      Log 1, "$type $name $str";
+      Log3 $name, 1, "$type $name $str";
       return $str;
     }
 
@@ -277,7 +291,7 @@ HCS_Set($@) {
     if($ecoModeNew ne $ecoModeOld) {
       readingsSingleUpdate($hash, "eco",$ecoModeNew,1);
       $str = "eco mode changed from $ecoModeOld to $ecoModeNew";
-      Log 1, "$type $name $str";
+      Log3 $name, 1, "$type $name $str";
       return $str;
     } else {
       return "eco mode '$ecoModeNew' already set.";
@@ -295,7 +309,7 @@ HCS_Set($@) {
     $timer = gettimeofday()+($intervalNew*60);
     InternalTimer($timer, "HCS_checkState", $hash, 0);
     $hash->{NEXTCHECK} = FmtTime($timer);
-    Log 1, "$type $name interval changed from $intervalOld to $intervalNew";
+    Log3 $name, 1, "$type $name interval changed from $intervalOld to $intervalNew";
 
   } elsif($arg eq "mode") {
     return "argument is missing, choose one of thermostat valve"
@@ -310,7 +324,7 @@ HCS_Set($@) {
       $attr{$name}{mode} = "thermostat" if(lc($a[2]) eq "thermostat");
       $attr{$name}{mode} = "valve"      if(lc($a[2]) eq "valve");
       $str = "mode changed from $modeOld to $modeNew";
-      Log 1, "$type $name $str";
+      Log3 $name, 1, "$type $name $str";
     } else {
       return "mode '$modeNew' already set.";
     }
@@ -318,12 +332,12 @@ HCS_Set($@) {
   } elsif($arg eq "on") {
     RemoveInternalTimer($hash);
     HCS_checkState($hash);
-    Log 1, "$type $name monitoring of devices started";
+    Log3 $name, 1, "$type $name monitoring of devices started";
   } elsif($arg eq "off") {
     RemoveInternalTimer($hash);
     $hash->{NEXTCHECK} = "offline";
     readingsSingleUpdate($hash, "state", "off",1);
-    Log 1, "$type $name monitoring of devices interrupted";
+    Log3 $name, 1, "$type $name monitoring of devices interrupted";
   }
 
 }
@@ -334,7 +348,6 @@ HCS_setState($$) {
   my ($hash,$heatDemand) = @_;
   my $name = $hash->{NAME};
   my $type = $hash->{TYPE};
-  my $ll   = AttrVal($name,"loglevel",$defaults{loglevel});
   my $device         = ReadingsVal($name,"device","");
   my $deviceState    = Value($device);
   my $deviceCmdOn    = AttrVal($name,"deviceCmdOn",$defaults{deviceCmdOn});
@@ -391,10 +404,10 @@ HCS_setState($$) {
   readingsBeginUpdate($hash);
   if(!$defs{$device}) {
     $state = "error";
-    Log 1, "$type $name device '$device' does not exists.";
+    Log3 $name, 1, "$type $name device '$device' does not exists.";
   } else {
     if($idle == 1 && $cmd eq $deviceCmdOn && $stateDevice ne $deviceCmdOn) {
-      Log $ll, "$type $name device $device locked for $wait min.";
+      Log3 $name, 3, "$type $name device $device locked for $wait min.";
     } else {
 
       if(!$eventOnChange ||
@@ -403,7 +416,7 @@ HCS_setState($$) {
           ($cmd ne $stateDevice || $deviceState ne $stateDevice)) {
         my $cmdret = CommandSet(undef,"$device $cmd");
         if($cmdret) {
-          Log 1, "$type $name An error occurred while switching device '$device': $cmdret";
+          Log3 $name, 1, "$type $name An error occurred while switching device '$device': $cmdret";
         } else {
           readingsBulkUpdate($hash, "devicestate", $cmd);
           if($cmd eq $deviceCmdOn) {
@@ -467,6 +480,8 @@ HCS_getValues($$) {
     $devs{$d}{tempMeasured} = ReadingsVal($d,"measured-temp","n/a")      if($t =~ m/(FHT|CUL_HM)/);
     $devs{$d}{tempMeasured} = ReadingsVal($d,"temperature","n/a")        if($t =~ m/(MAX)/);
 
+    $devs{$d}{tempDesired}  = ($t =~ m/(FHT)/) ? 5.5 : 4.5               if($devs{$d}{tempDesired} eq "off");
+    $devs{$d}{tempDesired}  = 30.5                                       if($devs{$d}{tempDesired} eq "on");
 
     $devs{$d}{type}         = $t;
     $hash->{helper}{device}{$d}{excluded} = $devs{$d}{excluded};
@@ -530,7 +545,6 @@ HCS_getValues($$) {
   my $sumTotal    = 0;
   my $sumUnknown  = 0;
 
-  my $ll   = AttrVal($name,"loglevel",$defaults{loglevel});
   my $mode = AttrVal($name,"mode",$defaults{mode});
 
   readingsBeginUpdate($hash);
@@ -551,7 +565,7 @@ HCS_getValues($$) {
       $devState = "ignored";
       $hash->{helper}{device}{$d}{demand} = 0;
       readingsBulkUpdate($hash,$d,$devState);
-      Log $ll+1, "$type $name $d: $devState";
+      Log3 $name, 4, "$type $name $d: $devState";
       $sumIgnored++;
       next;
     }
@@ -560,7 +574,7 @@ HCS_getValues($$) {
       $devState = "excluded";
       $hash->{helper}{device}{$d}{demand} = 0;
       readingsBulkUpdate($hash,$d,$devState);
-      Log $ll+1, "$type $name $d: $devState";
+      Log3 $name, 4, "$type $name $d: $devState";
       $sumExcluded++;
       next;
     }
@@ -569,7 +583,7 @@ HCS_getValues($$) {
       $devState = "unknown";
       $hash->{helper}{device}{$d}{demand} = 0;
       readingsBulkUpdate($hash,$d,$devState);
-      Log $ll+1, "$type $name $d: $devState";
+      Log3 $name, 4, "$type $name $d: $devState";
       $sumUnknown++;
       next;
     }
@@ -655,7 +669,7 @@ HCS_getValues($$) {
       $str = sprintf("desired: %4.1f measured: %4.1f delta: %s valve: %${lv}d%% state: %s",$td,$tm,$delta,$valve,$devState);
     }
 
-    Log $ll+1, "$type $name $d: $str";
+    Log3 $name, 4, "$type $name $d: $str";
     readingsBulkUpdate($hash,$d,$devState);
 
   }
@@ -674,9 +688,9 @@ HCS_getValues($$) {
   my $ecoState   = ReadingsVal($name,"eco","off");
 
   if($ecoState eq "on" && (!$ecoTempOn || !$ecoTempOff)) {
-    Log 1, "$type $name missing attribute 'ecoTemperatureOn'. Please define this attribute first."
+    Log3 $name, 1, "$type $name missing attribute 'ecoTemperatureOn'. Please define this attribute first."
       if(!$ecoTempOn);
-    Log 1, "$type $name missing attribute 'ecoTemperatureOff'. Please define this attribute first."
+    Log3 $name, 1, "$type $name missing attribute 'ecoTemperatureOff'. Please define this attribute first."
       if(!$ecoTempOff);
   } elsif($ecoState eq "on") {
     foreach my $d (sort keys %{$hash->{helper}{device}}) {
@@ -702,19 +716,19 @@ HCS_getValues($$) {
   if(!$sensor) {
     delete $hash->{READINGS}{sensor}    if($hash->{READINGS}{sensor});
   } else {
-    Log 1, "$type $name Device $sensor not defined. Please add this device first!"
+    Log3 $name, 1, "$type $name Device $sensor not defined. Please add this device first!"
       if(!defined($defs{$sensor}));
-    Log 1, "$type $name missing attribute 'sensorReading'. Please define this attribute first."
+    Log3 $name, 1, "$type $name missing attribute 'sensorReading'. Please define this attribute first."
       if(!$sReading);
-    Log 1, "$type $name missing attribute 'sensorThresholdOn'. Please define this attibute first."
+    Log3 $name, 1, "$type $name missing attribute 'sensorThresholdOn'. Please define this attibute first."
       if(!$sTresholdOn);
-    Log 1, "$type $name missing attribute 'sensorThresholdOff'. Please define this attribute first."
+    Log3 $name, 1, "$type $name missing attribute 'sensorThresholdOff'. Please define this attribute first."
       if(!$sTresholdOff);
 
     if($defs{$sensor} && $sReading && $sTresholdOn && $sTresholdOff) {
       my $tValue = ReadingsVal($sensor,$sReading,"n/a");
       if($tValue eq "n/a" || $tValue !~ m/^.*\d+.*$/) {
-        Log 1, "$type $name Device $sensor has no valid value.";
+        Log3 $name, 1, "$type $name Device $sensor has no valid value.";
       } else {
         $tValue =~ s/(\s|°|[A-Z]|[a-z])+//g;
         $heatDemand = 4 if($tValue >= $sTresholdOff);
@@ -727,7 +741,7 @@ HCS_getValues($$) {
   }
   my $str = sprintf("Found %d Device(s): %d FHT, %d HM-CC-TC, %d MAX, demand: %d, idle: %d, ignored: %d, excluded: %d, unknown: %d",
                     $sumTotal,$sumFHT,$sumHMCCTC, $sumMAX, $sumDemand,$sumIdle,$sumIgnored,$sumExcluded,$sumUnknown);
-  Log $ll, "$type $name $str, eco: $eco overdrive: $overdrive";
+  Log3 $name, 3, "$type $name $str, eco: $eco overdrive: $overdrive";
 
   return $heatDemand;
 
@@ -942,10 +956,10 @@ HCS_getValues($$) {
         default value: <code>state,devicestate,eco,overdrive</code>
     </li>
     <li><a href="#event-on-update-reading"><code>event-on-update-reading</code></a></li>
-    <li><a href="#loglevel"><code>loglevel</code></a><br>
-        loglevel 3 (or lower) shows a complete statistic of scanned devices (FHT or HM-CC-TC).<br>
-        loglevel 4 shows a short summary of scanned devices.<br>
-        loglevel 5 suppressed the above messages.
+    <li><a href="#verbose"><code>verbose</code></a><br>
+        verbose 4 (or lower) shows a complete statistic of scanned devices (FHT or HM-CC-TC).<br>
+        verbose 3 shows a short summary of scanned devices.<br>
+        verbose 2 suppressed the above messages.
     </li>
   </ul>
   <br>

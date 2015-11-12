@@ -22,6 +22,7 @@ use vars qw(%FW_pos);     # scroll position
 use vars qw(%FW_webArgs); # all arguments specified in the GET
 
 sub FileLog_seekTo($$$$$);
+sub FileLog_dailySwitch($);
 
 #####################################
 sub
@@ -38,7 +39,8 @@ FileLog_Initialize($)
   $hash->{AttrFn}   = "FileLog_Attr";
   # logtype is used by the frontend
   $hash->{AttrList} = "disable:0,1 disabledForIntervals logtype reformatFn ".
-                      "nrarchive archivedir archivecmd addStateEvent:0,1";
+                      "nrarchive archivedir archivecmd addStateEvent:0,1 ".
+                      "archiveCompress";
 
   $hash->{FW_summaryFn}     = "FileLog_fhemwebFn";
   $hash->{FW_detailFn}      = "FileLog_fhemwebFn";
@@ -49,8 +51,22 @@ FileLog_Initialize($)
   
   InternalTimer(time()+0.1, sub() {      # Forum #39792
     map { HandleArchiving($defs{$_},1) } devspec2array("TYPE=FileLog");
+    FileLog_dailySwitch($hash);          # Forum #42415
   }, $hash, 0);
 }
+
+sub
+FileLog_dailySwitch($)
+{
+  my ($hash) = @_;
+  map { FileLog_Switch($defs{$_}) } devspec2array("TYPE=FileLog");
+
+  my $t = time();
+  my $off = fhemTzOffset($t);
+  $t = 86400*(int(($t+$off)/86400)+1)+1-$off; # tomorrow, 1s after midnight
+  InternalTimer($t, "FileLog_dailySwitch", $hash, 0);
+}
+
 
 
 #####################################
@@ -545,6 +561,7 @@ FileLog_Get($@)
   }
 
   my $reformatFn = AttrVal($name, "reformatFn", "");
+  my $tempread;
 
   if($inf eq "-") {
     # In case now is after midnight, before the first event is logged.
@@ -558,10 +575,36 @@ FileLog_Get($@)
       if($from =~ m/^(....)-(..)-(..)/) {
         $linf = $hash->{logfile};
         my ($Y,$m,$d) = ($1,$2,$3);
-        $linf =~ s/%Y/$Y/g;
-        $linf =~ s/%m/$m/g;
-        $linf =~ s/%d/$d/g;
-        $linf =~ s/%L/$attr{global}{logdir}/g if($attr{global}{logdir});
+        sub expandFileWildcards($$$$) {
+            my $f=shift;
+            my ($Y,$m,$d)=@_;
+            $f =~ s/%Y/$Y/g;
+            $f =~ s/%m/$m/g;
+            $f =~ s/%d/$d/g;
+            $f =~ s/%L/$attr{global}{logdir}/g if($attr{global}{logdir});
+            return($f);
+        };
+        $linf=expandFileWildcards($linf,$Y,$m,$d);
+        if($to =~ m/^(....)-(..)-(..)/) {
+          my $linf_to = $hash->{logfile};
+          my ($Y,$m,$d) = ($1,$2,$3);
+          $linf_to=expandFileWildcards($linf_to,$Y,$m,$d);
+          if($linf ne $linf_to){  # use to log files
+            $tempread=$linf_to.".transit.temp.log";
+            if(open(my $temp,'>',$tempread)){
+              if(open(my $i,'<',$linf)){
+                print $temp join("",<$i>);
+                close($i);
+              }
+              if(open(my $i,'<',$linf_to)){
+                print $temp join("",<$i>);
+                close($i);
+              }
+              $linf=$tempread;
+              close($temp);
+            }
+          }
+        }
         $linf = $hash->{currentlogfile} if($linf =~ m/%/ || ! -f $linf);
       } else {
         $linf = $hash->{currentlogfile};
@@ -781,6 +824,7 @@ RESCAN:
   }
 
   $ifh->close() if($ifh);
+  unlink($tempread) if($tempread);
 
   my $ret = "";
   for(my $i = 0; $i < int(@a); $i++) {
@@ -1188,12 +1232,18 @@ FileLog_regexpFn($$)
         shell command (no enclosing " is needed), and each % in the command
         will be replaced with the name of the old logfile.<br>
 
-        If this attribute is not set, but nrarchive and/or archivecmd are set,
-        then nrarchive old logfiles are kept along the current one while older
-        ones are moved to archivedir (or deleted if archivedir is not set).
-        <br>
+        If this attribute is not set, but nrarchive is set, then nrarchive old
+        logfiles are kept along the current one while older ones are moved to
+        archivedir (or deleted if archivedir is not set).  <br>
+
         Note: setting these attributes for the global instance will effect the
         <a href="#logfile">FHEM logfile</a> only.
+        </li><br>
+
+    <a name="archiveCompress"></a>
+    <li>archiveCompress<br>
+        If nrarchive, archivedir and archiveCompress is set, then the files
+        in the archivedir will be compressed.
         </li><br>
 
     <li><a href="#disable">disable</a></li>
@@ -1472,17 +1522,21 @@ FileLog_regexpFn($$)
         shell-Kommando ( eine Einbettung in " ist nicht notwendig), und jedes %
         in diesem Befehl wird durch den Namen des alten Logfiles ersetzt.<br>
 
-        Wenn dieses Attribut nicht gesetzt wird, aber daf&uuml;r nrarchive
-        und/oder archivecmd, werden nrarchive viele Logfiles im aktuellen
-        Verzeichnis gelassen, und &auml;ltere Dateien in das Archivverzeichnis
-        (archivedir) verschoben (oder gel&ouml;scht, falls kein archivedir
-        gesetzt wurde).<br>
+        Wenn dieses Attribut nicht gesetzt wird, aber daf&uuml;r nrarchive,
+        werden nrarchive viele Logfiles im aktuellen Verzeichnis gelassen, und
+        &auml;ltere Dateien in das Archivverzeichnis (archivedir) verschoben
+        (oder gel&ouml;scht, falls kein archivedir gesetzt wurde).<br>
 		
         Hinweis: Werden diese Attribute als global instance gesetzt, hat das
         auschlie&szlig;lich auf das <a href="#logfile">FHEM logfile</a>
-        Auswirkungen.
+        Auswirkungen.  </li><br>
 
+    <a name="archiveCompress"></a>
+    <li>archiveCompress<br>
+        Falls nrarchive, archivedir und archiveCompress gesetzt ist, dann
+        werden die Dateien im archivedir komprimiert abgelegt.
         </li><br>
+
 
     <li><a href="#disable">disable</a></li>
     <li><a href="#addStateEvent">addStateEvent</a></li>
