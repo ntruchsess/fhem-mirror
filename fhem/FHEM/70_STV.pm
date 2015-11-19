@@ -333,13 +333,14 @@ sub STV_55000($$$)
         }
         else {
           foreach my $argnum (0 .. $#ARGV) {
+		    sleep(1) if ($argnum > 0);
             # Send remote key(s)
             #Log4 $name, 4, "[STV] sending ".uc($ARGV[$argnum]);
             my $key = "KEY_" . uc($ARGV[$argnum]);
             my $messagepart3 = chr(0x00) . chr(0x00) . chr(0x00) . chr(length(encode_base64($key, ""))) . chr(0x00) . encode_base64($key, "");
             my $part3 = chr(0x00) . chr(length($tvappstring)) . chr(0x00) . $tvappstring . chr(length($messagepart3)) . chr(0x00) . $messagepart3;
             print $sock $part3;
-            sleep(1);
+        #    sleep(1);
         #        select(undef, undef, undef, 0.5);
           }
         }

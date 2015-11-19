@@ -70,6 +70,7 @@ FHEM/14_Hideki.pm            Sidey/Ralf9          http://forum.fhem.de Sonstige 
 FHEM/12_HMS.pm               rudolfkoenig         http://forum.fhem.de SlowRF
 FHEM/13_KS300.pm             rudolfkoenig         http://forum.fhem.de SlowRF
 FHEM/14_CUL_MAX.pm           mgehre               http://forum.fhem.de MAX
+FHEM/14_CUL_REDIRECT.pm      dancer0705/bjoernh   http://forum.fhem.de Sonstiges
 FHEM/14_CUL_TCM97001.pm      dancer0705/bjoernh   http://forum.fhem.de Sonstiges
 FHEM/14_CUL_TX.pm            rudolfkoenig         http://forum.fhem.de SlowRF
 FHEM/14_CUL_WS.pm            rudolfkoenig         http://forum.fhem.de SlowRF
@@ -125,6 +126,8 @@ FHEM/31_ENECSYSINV.pm        akw                  http://forum.fhem.de Sonstige 
 FHEM/31_LightScene.pm        justme1968           http://forum.fhem.de Automatisierung
 FHEM/32_SYSSTAT.pm           justme1968           http://forum.fhem.de Unterstuetzende Dienste
 FHEM/32_mailcheck.pm         justme1968           http://forum.fhem.de Automatisierung
+FHEM/32_TechemHKV.pm         herrmannj            http://forum.fhem.de Heizungssteuerung/Raumklima
+FHEM/32_TechemWZ.pm          herrmannj            http://forum.fhem.de Sonstiges
 FHEM/32_yowsup.pm            justme1968           http://forum.fhem.de Unterstuetzende Dienste
 FHEM/32_withings.pm          markus-m             http://forum.fhem.de Sonstiges
 FHEM/33_readingsGroup.pm     justme1968           http://forum.fhem.de Frontends
@@ -157,7 +160,12 @@ FHEM/42_SMARTMON.pm          hexenmeister         http://forum.fhem.de Unterstue
 FHEM/42_SYSMON.pm            hexenmeister         http://forum.fhem.de Unterstuetzende Dienste
 FHEM/43_RFXX10REC.pm         wherzig              http://forum.fhem.de RFXTRX
 FHEM/44_TEK603.pm            eisler               http://forum.fhem.de Sonstige Systeme
+FHEM/45_Plugwise.pm          icinger              http://forum.fhem.de Sonstige Systeme
 FHEM/45_TRX.pm               wherzig              http://forum.fhem.de RFXTRX
+FHEM/46_PW_Circle.pm         icinger              http://forum.fhem.de Sonstige Systeme
+FHEM/46_PW_Scan.pm           icinger              http://forum.fhem.de Sonstige Systeme
+FHEM/46_PW_Sense.pm          icinger              http://forum.fhem.de Sonstige Systeme
+FHEM/46_PW_Switch.pm         icinger              http://forum.fhem.de Sonstige Systeme
 FHEM/46_TRX_ELSE.pm          wherzig              http://forum.fhem.de RFXTRX
 FHEM/46_TRX_LIGHT.pm         wherzig              http://forum.fhem.de RFXTRX
 FHEM/46_TRX_SECURITY.pm      wherzig              http://forum.fhem.de RFXTRX
