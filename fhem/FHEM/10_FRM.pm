@@ -69,6 +69,10 @@ sub FRM_Initialize($) {
 
 	$hash->{I2CWrtFn} = "FRM_I2C_Write";
 
+	$hash->{IOOpenFn}  = "FRM_Serial_Open";
+	$hash->{IOWriteFn} = "FRM_Serial_Write";
+	$hash->{IOCloseFn} = "FRM_Serial_Close";
+
 	# Consumer
 	$hash->{DefFn}    = "FRM_Define";
 	$hash->{UndefFn}  = "FRM_Undef";
@@ -140,7 +144,7 @@ sub FRM_Start {
 	if($isServer) {
 		my $ret = TcpServer_Open($hash, $dev, $global);
 		if (!$ret) {
-			$hash->{STATE}="listening";
+			readingsSingleUpdate($hash, 'state', "listening", 1);
 		}
 		return $ret;
 	}
@@ -221,15 +225,15 @@ sub FRM_Get($@) {
       } else {
         return "not connected to FirmataDevice";
       }
-    };
-    $cmd eq "version" and do {
-      if (FRM_is_firmata_connected($hash)) {
-        return $hash->{FirmataDevice}->{metadata}->{firmware_version};
-      } else {
-        return "not connected to FirmataDevice";
-      }
-    };
-  }
+		};
+		$cmd eq "version" and do {
+  		if (FRM_is_firmata_connected($hash)) {
+  		  return $hash->{FirmataDevice}->{metadata}->{firmware_version};
+  		} else {
+  		  return "not connected to FirmataDevice";
+		  }
+		};
+	}
 }
 
 #####################################
@@ -285,7 +289,7 @@ sub FRM_Tcp_Connection_Close($) {
 	if ($hash->{SNAME}) {
 		my $shash = $main::defs{$hash->{SNAME}};
 		if (defined $shash) {
-			$shash->{STATE}="listening";
+			readingsSingleUpdate($shash, 'state', "listening", 1);
 			delete $shash->{SocketDevice} if (defined $shash->{SocketDevice});
 		}
 	}
@@ -374,17 +378,37 @@ sub FRM_DoInit($) {
 	}
 	$device->observe_string(\&FRM_string_observer,$shash);
 	
-	my $found; # we cannot call $device->probe() here, as it doesn't select bevore read, so it would likely cause IODev to close the connection on the first attempt to read from empty stream
+	my $found; # we cannot call $device->probe() here, as it doesn't select before read, so it would likely cause IODev to close the connection on the first attempt to read from empty stream
 	my $endTicks = time+5;
 	my $queryTicks = time+2;
 	$device->system_reset();
+	delete $main::defs{$name}{firmware};
+	delete $main::defs{$name}{firmware_version};
+	delete $main::defs{$name}{protocol_version};
+	delete $main::defs{$name}{input_pins};
+	delete $main::defs{$name}{input_pins};
+	delete $main::defs{$name}{output_pins};
+	delete $main::defs{$name}{analog_pins};
+	delete $main::defs{$name}{pwm_pins};
+	delete $main::defs{$name}{servo_pins};
+	delete $main::defs{$name}{i2c_pins};
+	delete $main::defs{$name}{onewire_pins};
+	delete $main::defs{$name}{encoder_pins};
+	delete $main::defs{$name}{stepper_pins};
+	delete $main::defs{$name}{serial_pins};
+	delete $main::defs{$name}{analog_resolutions};
+	delete $main::defs{$name}{pwm_resolutions};
+	delete $main::defs{$name}{servo_resolutions};
+	delete $main::defs{$name}{encoder_resolutions};
+	delete $main::defs{$name}{stepper_resolutions};
+	delete $main::defs{$name}{serial_resolutions};
 	do {
 		FRM_poll($shash);
 		if ($device->{metadata}{firmware} && $device->{metadata}{firmware_version}) {
-			$device->{protocol}->{protocol_version} = $device->{metadata}{firmware_version};
 			$main::defs{$name}{firmware} = $device->{metadata}{firmware};
 			$main::defs{$name}{firmware_version} = $device->{metadata}{firmware_version};
-			Log3 $name,3,"Firmata Firmware Version: ".$device->{metadata}{firmware}." ".$device->{metadata}{firmware_version};
+			$main::defs{$name}{protocol_version} = $device->{protocol}->get_max_supported_protocol_version($device->{metadata}{protocol_version});
+			Log3 $name,3,"Firmata Firmware Version: ".$device->{metadata}{firmware}." ".$device->{metadata}{firmware_version}." (using Protocol Version: ".$main::defs{$name}{protocol_version}.")";
 			$device->analog_mapping_query();
 			$device->capability_query();
 			do {
@@ -408,6 +432,8 @@ sub FRM_DoInit($) {
 					$main::defs{$name}{encoder_pins} = join(",", sort{$a<=>$b}(@$encoderpins)) if (defined $encoderpins and scalar @$encoderpins);
 					my $stepperpins = $device->{metadata}{stepper_pins};
 					$main::defs{$name}{stepper_pins} = join(",", sort{$a<=>$b}(@$stepperpins)) if (defined $stepperpins and scalar @$stepperpins);
+					my $serialpins = $device->{metadata}{serial_pins};
+					$main::defs{$name}{serial_pins} = join(",", sort{$a<=>$b}(@$serialpins)) if (defined $serialpins and scalar @$serialpins);
 					if (defined $device->{metadata}{analog_resolutions}) {
 						my @analog_resolutions;
 						foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{analog_resolutions}})) {
@@ -443,6 +469,13 @@ sub FRM_DoInit($) {
 						}
 						$main::defs{$name}{stepper_resolutions} = join(",",@stepper_resolutions) if (scalar @stepper_resolutions);
 					}
+					if (defined $device->{metadata}{serial_resolutions}) {
+						my @serial_resolutions;
+						foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{serial_resolutions}})) {
+							push @serial_resolutions,$pin.":".$device->{metadata}{serial_resolutions}{$pin};
+						}
+						$main::defs{$name}{serial_resolutions} = join(",",@serial_resolutions) if (scalar @serial_resolutions);
+					}
 					$found = 1;
 				} else {
 					select (undef,undef,undef,0.01);
@@ -452,8 +485,9 @@ sub FRM_DoInit($) {
 		} else {
 			select (undef,undef,undef,0.01);
 			if (time > $queryTicks) {
-				Log3 $name,3,"querying Firmata Firmware Version";
+				Log3 $name,3,"querying Firmata Versions";
 				$device->firmware_version_query();
+				$device->protocol_version_query();
 				$queryTicks++;
 			}
 		}
@@ -461,14 +495,27 @@ sub FRM_DoInit($) {
 	if ($found) {
 		FRM_apply_attribute($shash,"sampling-interval");
 		FRM_apply_attribute($shash,"i2c-config");
+		FRM_serial_setup($shash);
 		FRM_forall_clients($shash,\&FRM_Init_Client,undef);
-		$shash->{STATE}="Initialized";
+		readingsSingleUpdate($shash, 'state', "Initialized", 1);
 		return undef;
 	}
-	Log3 $name,3,"no response from Firmata, closing DevIO";
-	DevIo_Disconnected($shash);
-	delete $shash->{FirmataDevice};
-	delete $shash->{SocketDevice};
+	if (defined $shash->{SERVERSOCKET}) {
+		Log3 $name, 3, "no response from Firmata, closing connection";
+		foreach my $e ( sort keys %main::defs ) {
+			if ( defined( my $dev = $main::defs{$e} )) {
+				if ( defined( $dev->{SNAME} ) && ( $dev->{SNAME} eq $shash->{NAME} )) {
+					FRM_Tcp_Connection_Close($dev);
+				}
+			}
+		}
+		FRM_FirmataDevice_Close($shash);
+	} else {
+		Log3 $name, 3, "no response from Firmata, closing DevIo";
+		DevIo_Disconnected($shash);
+		delete $shash->{FirmataDevice};
+		delete $shash->{SocketDevice};
+	}
 	return "FirmataDevice not responding";
 }
 
@@ -514,7 +561,7 @@ FRM_Init_Pin_Client($$$) {
 	};
 	if ($@) {
 		$@ =~ /^(.*)( at.*FHEM.*)$/;
-		$hash->{STATE} = "error initializing: ".$1;
+		readingsSingleUpdate($hash, 'state', "error initializing: pin $pin", 1);
 		return $1;
 	}
 	return undef;
@@ -526,7 +573,7 @@ FRM_Client_Define($$)
   my ($hash, $def) = @_;
   my @a = split("[ \t][ \t]*", $def);
 
-  $hash->{STATE}="defined";
+  readingsSingleUpdate($hash, 'state', "defined", 1);
   
   if ($main::init_done) {
     eval {
@@ -564,7 +611,7 @@ FRM_Client_Unassign($)
 {
   my ($dev) = @_;
   delete $dev->{IODev} if defined $dev->{IODev};
-  $dev->{STATE}="defined";  
+  readingsSingleUpdate($dev, 'state', "defined", 1);
 }
 
 sub
@@ -680,7 +727,7 @@ sub FRM_I2C_Write
     my $firmata = $hash->{FirmataDevice};
     COMMANDHANDLER: {
       $package->{direction} eq "i2cwrite" and do {
-        if (defined $package->{reg}) {
+        if (defined $package->{reg}) {          
           $firmata->i2c_write($package->{i2caddress},$package->{reg},split(" ",$package->{data}));
         } else {
           $firmata->i2c_write($package->{i2caddress},split(" ",$package->{data}));
@@ -738,38 +785,70 @@ sub FRM_string_observer
 	readingsSingleUpdate($hash,"error",$string,1);
 }
 
+sub FRM_serial_observer
+{
+	my ($data,$hash) = @_;
+	#Log3 $hash->{NAME},5,"onSerialMessage port: '".$data->{port}."' data: [".(join(',',@{$data->{data}}))."]";
+	FRM_forall_clients($hash,\&FRM_serial_update_device,$data);
+}
+
+sub FRM_serial_update_device
+{
+	my ($hash,$data) = @_;
+	
+	if (defined $hash->{IODevPort} and $hash->{IODevPort} eq $data->{port}) {
+		my $buf = pack("C*", @{$data->{data}});
+		#Log3 $hash->{NAME},5,"FRM_serial_update_device port: " . length($buf) . " bytes on serial port " . $data->{port} . " " . $buf . " for " . $hash->{NAME};
+		$hash->{IODevRxBuffer} = "" if (!defined($hash->{IODevRxBuffer}));
+		$hash->{IODevRxBuffer} = $hash->{IODevRxBuffer} . $buf;
+		CallFn($hash->{NAME}, "ReadFn", $hash);
+	}
+}
+
+sub FRM_serial_setup
+{
+	my ($hash) = @_;
+
+	foreach my $port ( keys %{$hash->{SERIAL}} ) {
+		my $chash = $defs{$hash->{SERIAL}{$port}};
+		if (defined($chash)) {
+			FRM_Serial_Setup($chash);
+		}
+	}
+}
+
 sub FRM_poll
 {
-  my ($hash) = @_;
-  if (defined $hash->{SocketDevice} and defined $hash->{SocketDevice}->{FD}) {
-    my ($rout, $rin) = ('', '');
-      vec($rin, $hash->{SocketDevice}->{FD}, 1) = 1;
-      my $nfound = select($rout=$rin, undef, undef, 0.1);
-      my $mfound = vec($rout, $hash->{SocketDevice}->{FD}, 1);
-    if($mfound && FRM_is_firmata_connected($hash)) {
-      $hash->{FirmataDevice}->poll();
-    }
-    return $mfound;
-  } elsif (defined $hash->{FD}) {
-    my ($rout, $rin) = ('', '');
-    vec($rin, $hash->{FD}, 1) = 1;
-    my $nfound = select($rout=$rin, undef, undef, 0.1);
-    my $mfound = vec($rout, $hash->{FD}, 1);
-    if($mfound && FRM_is_firmata_connected($hash)) {
-      $hash->{FirmataDevice}->poll();
-    }
-    return $mfound;
-  } else {
-    # This is relevant for windows/USB only
-    my $po = $hash->{USBDev};
-    my ($BlockingFlags, $InBytes, $OutBytes, $ErrorFlags);
-    if($po) {
-      ($BlockingFlags, $InBytes, $OutBytes, $ErrorFlags) = $po->status;
-    }
-    if ($InBytes && $InBytes>0 && FRM_is_firmata_connected($hash)) {
-      $hash->{FirmataDevice}->poll();
-    }
-  }
+	my ($hash) = @_;
+	if (defined $hash->{SocketDevice} and defined $hash->{SocketDevice}->{FD}) {
+		my ($rout, $rin) = ('', '');
+    	vec($rin, $hash->{SocketDevice}->{FD}, 1) = 1;
+    	my $nfound = select($rout=$rin, undef, undef, 0.1);
+    	my $mfound = vec($rout, $hash->{SocketDevice}->{FD}, 1); 
+		if($mfound && FRM_is_firmata_connected($hash)) {
+			$hash->{FirmataDevice}->poll();
+		}
+		return $mfound;
+	} elsif (defined $hash->{FD}) {
+		my ($rout, $rin) = ('', '');
+    	vec($rin, $hash->{FD}, 1) = 1;
+    	my $nfound = select($rout=$rin, undef, undef, 0.1);
+    	my $mfound = vec($rout, $hash->{FD}, 1); 
+		if($mfound && FRM_is_firmata_connected($hash)) {
+			$hash->{FirmataDevice}->poll();
+		}
+		return $mfound;
+	} else {
+		# This is relevant for windows/USB only
+  		my $po = $hash->{USBDev};
+  		my ($BlockingFlags, $InBytes, $OutBytes, $ErrorFlags);
+  		if($po) {
+  			($BlockingFlags, $InBytes, $OutBytes, $ErrorFlags) = $po->status;
+  		}
+  		if ($InBytes && $InBytes>0 && FRM_is_firmata_connected($hash)) {
+			$hash->{FirmataDevice}->poll();
+  		}
+	}
 }
 
 ######### following is code to be called from OWX: ##########
@@ -792,7 +871,7 @@ FRM_OWX_Init($$)
 		}
 	};
 	return GP_Catch($@) if ($@);
-	$hash->{STATE}="Initialized";
+	ReadingsSingleUpdate($hash, 'state', "Initialized", 1);
 	InternalTimer(gettimeofday()+10, "OWX_Discover", $hash,0);
 	return undef;
 }
@@ -1027,6 +1106,110 @@ sub FRM_OWX_Discover ($) {
 	return $ret;
 }
 
+######### following is code to be called from DevIo: ##########
+
+sub FRM_Serial_Open {
+  my ($hash) = @_;
+
+  if (!defined $hash->{IODevPort} || !defined $hash->{IODevParameters}) {
+    Log3 $hash->{NAME},3,"$hash->{IODev}{NAME} Serial_Open: serial port or baudrate not defined by $hash->{NAME}";
+    return 0;
+  }
+  
+  $hash->{IODev}{SERIAL}{$hash->{IODevPort}} = $hash->{NAME};
+
+  Log3 $hash->{NAME},5,"$hash->{IODev}{NAME} Serial_Open: serial port $hash->{IODevPort} registered for $hash->{NAME}";
+
+  return FRM_Serial_Setup($hash);
+}
+
+sub FRM_Serial_Setup {
+  my ($hash) = @_;
+  
+  if (FRM_is_firmata_connected($hash->{IODev})) {
+    my $firmata  = FRM_Client_FirmataDevice($hash);
+    if (!defined $firmata ) {
+      Log3 $hash->{NAME},3,"$hash->{IODev}{NAME} Serial_Setup: no Firmata device available";
+      return 0;
+    }
+    
+    # get serial pins
+    my $port = $hash->{IODevPort};
+    my $rxPinType = 2*$port;
+    my $txPinType = $rxPinType + 1;
+    my $rxPin = undef;
+    my $txPin = undef;
+    foreach my $pin ( keys %{$firmata->{metadata}{serial_resolutions}} ) {
+      if ($firmata->{metadata}{serial_resolutions}{$pin} == $rxPinType) {
+        $rxPin = $pin;
+      }
+      if ($firmata->{metadata}{serial_resolutions}{$pin} == $txPinType) {
+        $txPin = $pin;
+      }
+    }
+    if (!defined $rxPin || !defined $txPin) {
+      Log3 $hash->{NAME},3,"$hash->{IODev}{NAME} Serial_Setup: serial pins of port $port not available on Arduino";
+      my $data = { port => $port, data => [ "" ] };
+      FRM_serial_observer($data, $hash->{IODev}); # send empty buffer to signal EOF
+      return 0;
+    }
+    $hash->{PIN_RX} = $rxPin;
+    $hash->{PIN_TX} = $txPin;
+    
+    # configure port by claiming pins, setting baud rate and start reading
+    if ($hash->{IODevParameters} =~ m/(\d+)(,([78])(,([NEO])(,([012]))?)?)?/) {
+      my $baudrate = $1;
+      $firmata->serial_config($port, $baudrate);
+      $firmata->observe_serial($port, \&FRM_serial_observer, $hash->{IODev});
+      $firmata->serial_read($port, 0); # continuously read and send all available bytes 
+      Log3 $hash->{NAME},5,"$hash->{IODev}{NAME} Serial_Setup: serial port $hash->{IODevPort} opened with $baudrate baud for $hash->{NAME}";
+    } else {
+      Log3 $hash->{NAME},3,"$hash->{IODev}{NAME} Serial_Setup: invalid baudrate definition $hash->{IODevParameters} for port $port by $hash->{NAME}";
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+sub FRM_Serial_Write {
+  my ($hash, $msg) = @_;
+
+  my $firmata = FRM_Client_FirmataDevice($hash);
+  my $port    = $hash->{IODevPort};
+  return 0 unless ( defined $firmata and defined $port );
+
+  if (FRM_is_firmata_connected($hash->{IODev}) && defined($msg)) {
+    my @data = unpack("C*", $msg);
+    #my $size = scalar(@data);
+    #Log3 $hash->{NAME},3,"$hash->{IODev}{NAME} Serial_Write: $size bytes on serial port $hash->{IODevPort} $msg by $hash->{NAME}";
+    $firmata->serial_write($port, @data);
+    return length($msg);
+  } else {
+    return 0;
+  }
+}
+
+sub FRM_Serial_Close {
+  my ($hash) = @_;
+
+  my $port = $hash->{IODevPort};
+  return 0 unless ( defined $port );
+
+  if (FRM_is_firmata_connected($hash->{IODev})) {
+    my $firmata = FRM_Client_FirmataDevice($hash);
+    $firmata->serial_stopreading($port);
+  }
+  
+  delete $hash->{PIN_RX};
+  delete $hash->{PIN_TX};
+  delete $hash->{IODev}{SERIAL}{$hash->{IODevPort}};
+  
+  #Log3 $hash->{NAME},5,"$hash->{IODev}{NAME} Serial_Close: serial port $hash->{IODevPort} unregistered for $hash->{NAME}";
+  
+  return 1;
+}
+
 1;
 
 =pod
@@ -1045,6 +1228,17 @@ sub FRM_OWX_Discover ($) {
       - set STATE to listening and delete SocketDevice (to present same
         idle state as FRM_Start)
     o help updated
+    
+  22.12.2015 jensb
+    o modified sub FRM_DoInit:
+      - clear internal readings (device may have changed)
+    o added serial pin support  
+    
+  05.01.2016 jensb
+    o modified FRM_DoInit:
+      - do not disconnect DevIo in TCP mode to stay reconnectable
+    o use readingsSingleUpdate on state instead of directly changing STATE
+    
 =cut
 
 =pod
@@ -1172,7 +1366,27 @@ sub FRM_OWX_Discover ($) {
       Configure the interval Firmata reports analog data to FRM (in milliseconds, max. 65535). <br>
       See: <a href="http://www.firmata.org/wiki/Protocol#Sampling_Interval">Firmata Protocol details about Sampling Interval</a></br>
       </li>
-    </ul>
+  </ul>
+  <br><br>
+
+  <a name="FRMnotes"></a>
+  <b>Notes</b><br>
+  <ul>
+      <li>Serial Ports<br>
+        A hardware serial port of an Arduino can be used by all modules using DevIo for physical device, file or network stream access
+        by changing the device descriptor to<br>
+        <br>
+        FHEM:DEVIO:&lt;FRM device name&gt;:&lt;serial port&gt;@&lt;baud rate&gt;<br>
+        with &lt;serial port&gt; = (int)&lt;serial resolution&gt; : 2<br>
+        <br>
+        To use a port both the RX and TX pins of this port must be available via Firmata, even if one of the pins will not be used. 
+        Arduinos with only one hardware serial port cannot be used, because port 0 is reserved for the Arduino host communication even 
+        when using a LAN module.
+        <br>
+        In Firmata 2.8 the serial options (data bits, parity, stop bits) cannot be configured but may be compiled into the 
+        Firmata Firmware (see SerialFirmata.cpp ((HardwareSerial*)serialPort)->begin(baud, options); )".
+      </li>
+  </ul>
   </ul>
 <br>
 
