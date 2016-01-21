@@ -1,7 +1,7 @@
 ####################################################################################################
 # $Id$
 #
-#  59_PROPLANTA.pm
+#  59_PROPLANTA.pm 
 #
 #  (c) 2014 Torsten Poitzsch < torsten . poitzsch at gmx . de >
 #  
@@ -55,7 +55,7 @@ my $curReadingType = 0;
   #   6 = Time Col 3
   #   7 = alternative text of image Col 2-5 (weather state)
   #   8 = MinMaxNummer Col 3
-  #   9 = Date Col 2-5
+  #   9 = Date Col 2-5 / bold
   #   10 = alternative text of Col 3 (Wind direction)
   my @knownNoneIDs = ( ["Temperatur", "temperature", 1] 
       ,["relative Feuchte", "humidity", 1]
@@ -150,8 +150,8 @@ my $curReadingType = 0;
      ,"Nord-Nordwest" => 248
   );
   
-sub 
-get_wday($)
+##############################################
+sub get_wday($)
 {
    my ($date) = @_;
    my @wday_txt = qw(So Mo Di Mi Do Fr Sa);
@@ -160,6 +160,7 @@ get_wday($)
    return $wday_txt [$th[6]];
 }
 
+##############################################
 # here HTML::text/start/end are overridden
 sub text
 {
@@ -168,8 +169,7 @@ sub text
    my $readingName;
    # Wait 1ms to reduce CPU load and hence blocking of FHEM by it (workaround until a better solution is available)
    usleep (1000);
-   if ( $curTag =~ $lookupTag )
-   {
+   if ( $curTag =~ $lookupTag ) {
       $curTextPos++;
 
       $text =~ s/^\s+//;    # trim string
@@ -186,8 +186,7 @@ sub text
       $text =~ s/&#57;/9/g;  # replace 9
       
    # Tag-Type 0 = Check for readings without tag-ID (current readings)
-      if ($curReadingType == 0)
-      {
+      if ($curReadingType == 0) {
          if ($startDay == 0 && $curCol == 1 && $curTextPos == 1)
          {
             foreach my $r (@knownNoneIDs) 
@@ -202,8 +201,7 @@ sub text
          }
       }
    # Tag-Type 1 = Number Col 3
-      elsif ($curReadingType == 1) 
-      {
+      elsif ($curReadingType == 1) {
          if ( $curCol == 3 )
          {
             $readingName = $curReadingName;
@@ -217,8 +215,7 @@ sub text
          }
       }
    # Tag-Type 2 = Number Col 2-5
-      elsif ($curReadingType == 2) 
-      {
+      elsif ($curReadingType == 2) {
          if ( 1 < $curCol && $curCol <= 5 )
          {
             $readingName = "fc".($startDay+$curCol-2)."_".$curReadingName;
@@ -231,8 +228,7 @@ sub text
          }
       }
    # Tag-Type 3 = Number Col 2|4|6|8
-      elsif ($curReadingType == 3) 
-      {
+      elsif ($curReadingType == 3) {
          if ( 2 <= $curCol && $curCol <= 5 )
          {
             if ( $curTextPos % 2 == 1 ) 
@@ -244,8 +240,7 @@ sub text
          }
       }
    # Tag-Type 4 = Intensity-Text Col 2-5
-      elsif ($curReadingType == 4) 
-      {
+      elsif ($curReadingType == 4) {
          if ( 2 <= $curCol && $curCol <= 5 )
          {
             $readingName = "fc".($startDay+$curCol-2)."_".$curReadingName;
@@ -254,8 +249,7 @@ sub text
          }
       }
    # Tag-Type 5 = Time Col 2-5
-      elsif ($curReadingType == 5) 
-      {
+      elsif ($curReadingType == 5) {
          if ( 2 <= $curCol && $curCol <= 5 )
          {
             $readingName = "fc".($startDay+$curCol-2)."_".$curReadingName;
@@ -268,8 +262,7 @@ sub text
          }
       }
    # Tag-Type 6 = Time Col 3
-      elsif ($curReadingType == 6) 
-      {
+      elsif ($curReadingType == 6) {
          if ( $curCol == 3 )
          {
             $readingName = $curReadingName;
@@ -282,8 +275,7 @@ sub text
          }
       }
    # Tag-Type 8 = MinMaxNumber Col 3
-      elsif ($curReadingType == 8) 
-      {
+      elsif ($curReadingType == 8) {
          if ( $curCol == 3 )
          {
             $readingName = $curReadingName;
@@ -300,10 +292,8 @@ sub text
          }
       }
    # Tag-Type 9 = Date Col 2-5
-      elsif ($curReadingType == 9) 
-      {
-         if ( 1 < $curCol && $curCol <= 5 )
-         {
+      elsif ($curReadingType == 9 && $curTag eq "b") {
+         if ( 1 < $curCol && $curCol <= 5 ) {
             $readingName = "fc".($startDay+$curCol-2)."_".$curReadingName;
             push( @texte, $readingName."|".$text ); 
          }
@@ -311,21 +301,18 @@ sub text
    }
 }
 
+##############################################
 sub start
 {
    my ( $self, $tagname, $attr, $attrseq, $origtext ) = @_;
    $curTag = $tagname;
-   if ( $tagname eq "tr" )
-   {
+   if ( $tagname eq "tr" ) {
       $curReadingType = 0;
       $curCol = 0;
       $curTextPos = 0;
-      if ( defined( $attr->{id} ) ) 
-      {
-         foreach my $r (@knownIDs) 
-         { 
-            if ( $$r[0] eq $attr->{id} ) 
-            {
+      if ( defined( $attr->{id} ) ) {
+         foreach my $r (@knownIDs) { 
+            if ( $$r[0] eq $attr->{id} ) {
                $curReadingName = $$r[1];
                $curReadingType = $$r[2];
                last;
@@ -333,16 +320,13 @@ sub start
          }
       }
    }
-   elsif ($tagname eq "td") 
-   {
+   elsif ($tagname eq "td") {
       $curCol++;
       $curTextPos = 0;
    }
-   #wetterstate and icon
-   elsif ($tagname eq "img" && $curReadingType == 7) 
-   {
-      if ( 2 <= $curCol && $curCol <= 5 )
-      {
+   #wetterstate and icon - process immediately
+   elsif ($tagname eq "img" && $curReadingType == 7) {
+      if ( 2 <= $curCol && $curCol <= 5 ) {
        # process alternative text
          $readingName = "fc".($startDay+$curCol-2)."_".$curReadingName;
          $text = $attr->{alt};
@@ -356,9 +340,8 @@ sub start
          push( @texte, $readingName."Icon" . "|" . $attr->{src} ); 
       }
    }
-   #wind direction
-   elsif ($tagname eq "img" && $curReadingType == 10 && $curCol == 3 )
-   {
+   #wind direction - process immediately
+   elsif ($tagname eq "img" && $curReadingType == 10 && $curCol == 3 ) {
     # process alternative text
       $readingName = $curReadingName;
       $text = $attr->{alt};
@@ -374,13 +357,13 @@ sub start
    }
 }
 
+##############################################
 sub end
 {
    my ( $self, $tagname, $attr, $attrseq, $origtext ) = @_;
    $curTag = "";
 
-   if ( $tagname eq "tr" ) 
-   {       
+   if ( $tagname eq "tr" ) {       
       $curReadingType = 0 
    };
 }
@@ -405,14 +388,14 @@ use vars qw($readingFnAttributes);
 use vars qw(%defs);
 my $MODUL          = "PROPLANTA";
 
-   my %url_template_1 =( "de" => "http://www.proplanta.de/Wetter/LOKALERORT-Wetter.html"
-   , "at" => "http://www.proplanta.de/Agrarwetter-Oesterreich/LOKALERORT/"
-   , "ch" => "http://www.proplanta.de/Agrarwetter-Schweiz/LOKALERORT/"
-   , "fr" => "http://www.proplanta.de/Agrarwetter-Frankreich/LOKALERORT/"
-   , "it" => "http://www.proplanta.de/Agrarwetter-Italien/LOKALERORT/"
-   );
+   # my %url_template_1 =( "de" => "http://www.proplanta.de/Wetter/LOKALERORT-Wetter.html"
+   # , "at" => "http://www.proplanta.de/Agrarwetter-Oesterreich/LOKALERORT/"
+   # , "ch" => "http://www.proplanta.de/Agrarwetter-Schweiz/LOKALERORT/"
+   # , "fr" => "http://www.proplanta.de/Agrarwetter-Frankreich/LOKALERORT.html"
+   # , "it" => "http://www.proplanta.de/Agrarwetter-Italien/LOKALERORT.html"
+   # );
 
-   my %url_template_2 = ( "de" => "http://www.proplanta.de/Wetter/profi-wetter.php?SITEID=60&PLZ=LOKALERORT&STADT=LOKALERORT&WETTERaufrufen=stadt&Wtp=&SUCHE=Wetter&wT="
+   my %url_template = ( "de" => "http://www.proplanta.de/Wetter/profi-wetter.php?SITEID=60&PLZ=LOKALERORT&STADT=LOKALERORT&WETTERaufrufen=stadt&Wtp=&SUCHE=Wetter&wT="
    , "at" => "http://www.proplanta.de/Wetter-Oesterreich/profi-wetter-at.php?SITEID=70&PLZ=LOKALERORT&STADT=LOKALERORT&WETTERaufrufen=stadt&Wtp=&SUCHE=Wetter&wT="
    , "ch" => "http://www.proplanta.de/Wetter-Schweiz/profi-wetter-ch.php?SITEID=80&PLZ=LOKALERORT&STADT=LOKALERORT&WETTERaufrufen=stadt&Wtp=&SUCHE=Wetter&wT="
    , "fr" => "http://www.proplanta.de/Wetter-Frankreich/profi-wetter-fr.php?SITEID=50&PLZ=LOKALERORT&STADT=LOKALERORT&WETTERaufrufen=stadt&Wtp=&SUCHE=Wetter-Frankreich&wT="
@@ -459,23 +442,23 @@ sub PROPLANTA_Define($$)
 
    if ( $lang ne "")
    { # {my $test="http://www.proplanta.de/Wetter/LOKALERORT-Wetter.html";; $test =~ s/LOKALERORT/München/g;; return $test;;}
-      return "Wrong country code '$lang': use " . join(" | ",  keys( %url_template_1 ) ) unless defined( $url_template_1{$lang} );
-      my $URL = $url_template_1{$lang};
-      my $ort= $a[2];
+      return "Wrong country code '$lang': use " . join(" | ",  keys( %url_template ) ) unless defined( $url_template{$lang} );
+      my $URL = $url_template{$lang};
+      my $ort_encode= $a[2];
 # change Umlaute from UTF8 in Percent-encode 
-      $ort =~ s/Ä|Ã„/%C4/g;
-      $ort =~ s/Ö|Ã–/%D6/g;
-      $ort =~ s/Ü|Ãœ/%DC/g;
-      $ort =~ s/ß|ÃŸ/%DF/g;
-      $ort =~ s/ä|Ã¤/%E4/g;
-      $ort =~ s/ö|Ã¶/%F6/g;
-      $ort =~ s/ü|Ã¼/%FC/g;
+      $ort_encode =~ s/Ä|Ã„/%C4/g;
+      $ort_encode =~ s/Ö|Ã–/%D6/g;
+      $ort_encode =~ s/Ü|Ãœ/%DC/g;
+      $ort_encode =~ s/ß|ÃŸ/%DF/g;
+      $ort_encode =~ s/ä|Ã¤/%E4/g;
+      $ort_encode =~ s/ö|Ã¶/%F6/g;
+      $ort_encode =~ s/ü|Ã¼/%FC/g;
       
-      $URL =~ s/LOKALERORT/$ort/g;
+      $URL =~ s/LOKALERORT/$ort_encode/g;
       $hash->{URL} = $URL;
-      $URL = $url_template_2{$lang};
-      $URL =~ s/LOKALERORT/$ort/g;
-      $hash->{URL2} = $URL;
+      # $URL = $url_template_2{$lang};
+      # $URL =~ s/LOKALERORT/$ort/g;
+      # $hash->{URL2} = $URL;
    }
 
    $hash->{STATE}          = "Initializing";
@@ -621,6 +604,7 @@ sub PROPLANTA_Run($)
    my ($name) = @_;
    my $ptext=$name;
    my $URL;
+   my $response;
    return unless ( defined($name) );
    
    my $hash = $defs{$name};
@@ -628,60 +612,49 @@ sub PROPLANTA_Run($)
    my $readingStartTime = time();
     
    my $fcDays = AttrVal( $name, 'forecastDays', 14 );
+   my $parser = MyProplantaParser->new;
+
+  # get date from Attribut URL only
    my $attrURL = AttrVal( $name, 'URL', "" );
-   if ($attrURL eq "")
-   {
-      $URL = $hash->{URL};
-   }
-   else
-   {
-      $URL = $attrURL;
-   }
+   if ($attrURL ne "") {
 
-   # acquire the html-page
-   my $response = PROPLANTA_HtmlAcquire($hash,$URL); 
+      $response = PROPLANTA_HtmlAcquire($hash,$attrURL); 
    
-   if ($response =~ /^Error\|/)
-   {
-      $ptext .= "|".$response;
+      if ($response =~ /^Error\|/)  {
+         $ptext .= "|".$response;
+      }
+      else {
+         PROPLANTA_Log $hash, 4, "Start HTML parsing of captured page";
+
+         $parser->report_tags(qw(tr td span b img));
+         @MyProplantaParser::texte = ();
+         $MyProplantaParser::startDay = 0;
+
+         # parsing the complete html-page-response, needs some time
+         $parser->parse($response);
+      }
    }
-   else
-   {
-      PROPLANTA_Log $hash, 4, "Start HTML parsing of captured page";
 
-      my $parser = MyProplantaParser->new;
-      $parser->report_tags(qw(tr td span b img));
-      @MyProplantaParser::texte = ();
-      $MyProplantaParser::startDay = 0;
+# Get data from location specified in define
+   else {
+      $URL = $hash->{URL};
+      my @URL_days = (0, 4, 7, 11);
+      
+      foreach (@URL_days) {
+         last unless $_ < $fcDays;
+         $response = PROPLANTA_HtmlAcquire($hash,$URL . $_); 
+         $MyProplantaParser::startDay = $_;
 
-      # parsing the complete html-page-response, needs some time
-      $parser->parse($response);
-
-   # add next periods
-      if ($attrURL eq "")
-      {
-         $URL = $hash->{URL2};
-         my @URL_days = (4, 7, 11);
-         unshift @URL_days, 0
-            if @MyProplantaParser::texte == 0; 
-         foreach (@URL_days)
-         {
-            last unless $_ < $fcDays;
-            $response = PROPLANTA_HtmlAcquire($hash,$URL . $_); 
-            $MyProplantaParser::startDay = $_;
-            if ($response !~ /^Error\|/)
-            {
-               PROPLANTA_Log $hash, 4, "Start HTML parsing of captured page";
-               $parser->parse($response);
-            }
+         if ($response !~ /^Error\|/) {
+            PROPLANTA_Log $hash, 4, "Start HTML parsing of captured page";
+            $parser->parse($response);
          }
      }
       
       PROPLANTA_Log $hash, 4, "Found terms: " . @MyProplantaParser::texte;
       
       # pack the results in a single string
-      if (@MyProplantaParser::texte > 0) 
-      {
+      if (@MyProplantaParser::texte > 0) {
          $ptext .= "|". join('|', @MyProplantaParser::texte);
       }
       PROPLANTA_Log $hash, 5, "Parsed string: " . $ptext;

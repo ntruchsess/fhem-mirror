@@ -85,7 +85,10 @@ sub MilightDevice_Initialize($)
   $hash->{GetFn} = "MilightDevice_Get";
   $hash->{AttrFn} = "MilightDevice_Attr";
   $hash->{NotifyFn} = "MilightDevice_Notify";
-  $hash->{AttrList} = "IODev dimStep defaultBrightness defaultRampOn defaultRampOff presets dimOffWhite:1,0 updateGroupDevices:1,0 colorCast gamma lightSceneParamsToSave ".$readingFnAttributes;
+  $hash->{AttrList} = "IODev dimStep defaultBrightness defaultRampOn " .
+                      "defaultRampOff presets dimOffWhite:1,0 updateGroupDevices:1,0 " .
+                      "restoreAtStart:1,0 colorCast gamma lightSceneParamsToSave " . 
+                      $readingFnAttributes;
   FHEM_colorpickerInit();
     
 }
@@ -119,7 +122,8 @@ sub MilightDevice_Define($$)
   my ($hash, $def) = @_;
   my @args = split("[ \t][ \t]*", $def);
   my ($name, $type, $ledtype, $iodev, $slot) = @args;
-
+  
+  $hash->{INIT} = 0; # Set to 1 when lamp initialised (MilightDevice_Restore)
   $hash->{LEDTYPE} = $ledtype;
   $hash->{SLOT} = $slot;
   $hash->{SLOTID} = $slot;
@@ -140,7 +144,7 @@ sub MilightDevice_Define($$)
   # Verify IODev is valid
   AssignIoPort($hash, $iodev);
   if(defined($hash->{IODev}->{NAME})) {
-    Log3 $name, 3, $name."_Define: I/O device is " . $hash->{IODev}->{NAME};
+    Log3 $name, 4, $name."_Define: I/O device is " . $hash->{IODev}->{NAME};
   } else {
     Log3 $name, 1, $name."_Define: no I/O device";
   }
@@ -203,9 +207,14 @@ sub MilightDevice_Define($$)
 
   # IODev
   $attr{$name}{IODev} = $hash->{IODev} if (!defined($attr{$name}{IODev}));
-  
-  InternalTimer(gettimeofday() + 5, "MilightDevice_Init", $hash, 0);
 
+  # restoreAtStart
+  if($slot eq 'A') {
+    $attr{$name}{"restoreAtStart"} = 0 if (!defined($attr{$name}{"restoreAtStart"}));
+  } else {
+    $attr{$name}{"restoreAtStart"} = 1 if (!defined($attr{$name}{"restoreAtStart"}));
+  }
+  
   return undef;
 }
 
@@ -216,14 +225,13 @@ sub MilightDevice_Init($)
 
   if( AttrVal($hash->{NAME}, "gamma", "1.0") eq "1.0")
   {
-    Log3 $name, 5, $name." dimstep ".MilightDevice_roundfunc(100/MilightDevice_DimSteps($hash))." / gamma 1.0";
+    Log3 ($name, 5, $name." dimstep ".MilightDevice_roundfunc(100 / MilightDevice_DimSteps($hash))." / gamma 1.0");
   } else {
     $hash->{helper}->{COMMANDSET} =~ s/dim:slider,0,.*,100/dim:slider,0,1,100/g;
     $hash->{helper}->{COMMANDSET} =~ s/brightness:slider,0,.*,100/brightness:slider,0,1,100/g;
     Log3 $name, 5, $name." dimstep 1 / gamma ".AttrVal($hash->{NAME}, "gamma", "1.0");
     $hash->{helper}->{GAMMAMAP} = MilightDevice_CreateGammaMapping($hash, AttrVal($hash->{NAME}, "gamma", "1.0"));
   }
-
 
   # Colormap / Commandsets
   if (($hash->{LEDTYPE} eq 'RGBW') || ($hash->{LEDTYPE} eq 'RGB'))
@@ -240,9 +248,7 @@ sub MilightDevice_Init($)
       }
     }
     $hash->{helper}->{COLORMAP} = MilightDevice_ColorConverter($hash, @a);
-
   }
-
 
   return undef;
 }
@@ -272,7 +278,7 @@ sub MilightDevice_Set(@)
   my $event = undef;
   my $usage = "set $name ...";
 
-  if ($hash->{IODev}->{STATE} ne "ok") {
+  if ($hash->{IODev}->{STATE} ne "ok" && $hash->{IODev}->{STATE} ne "Initialized") {
     readingsSingleUpdate($hash, "state", "error", 1);
     $flags = "q";
     $args[2] .= "q" if ($args[2] !~ m/.*[qQ].*/);
@@ -729,23 +735,28 @@ sub MilightDevice_Attr(@)
 sub MilightDevice_Notify(@)
 {
   my ($hash,$dev) = @_;
-  my $events = deviceEvents($dev, 1);
-  my ($hue, $sat, $val);
-  
-  return if($dev->{NAME} ne "global");
+  return MilightDevice_Restore($hash);
+}
 
-  Log3 ($hash, 5, "$hash->{NAME}_Notify: Triggered by $dev->{NAME}");
+#####################################
+# Restore HSV settings from readings.
+# Called after initialization to synchronise lamp state with fhem.
+sub MilightDevice_Restore(@)
+{
+  my ($hash) = @_;
 
-  return if(!grep(m/^INITIALIZED|REREADCFG|DEFINED$/, @{$dev->{CHANGED}}));
-
-  # Clear inProgress flag
-  readingsSingleUpdate($hash, "transitionInProgress", 0, 1);
-
-  # Restore previous state (as defined in statefile)
-  # wait for global: INITIALIZED after start up
-  if (@{$events}[0] eq 'INITIALIZED')
-  {   
+  return if ($hash->{INIT});
+  if ($init_done)
+  {
+    return if (AttrVal($hash->{NAME}, "restoreAtStart", 0) == 0);
+    Log3 ($hash, 4, "$hash->{NAME}_Restore: Restoring saved HSV values");
+    $hash->{INIT} = 1;
+    # Initialize device
+    MilightDevice_Init($hash);
+    # Clear inProgress flag: MJW Do we still need to do this?
+    readingsSingleUpdate($hash, "transitionInProgress", 0, 1);
     # Default to OFF if not defined
+    my ($hue, $sat, $val);
     $hue = ReadingsVal($hash->{NAME}, "hue", 0);
     $sat = ReadingsVal($hash->{NAME}, "saturation", 0);
     $val = ReadingsVal($hash->{NAME}, "brightness", 0);
@@ -755,8 +766,6 @@ sub MilightDevice_Notify(@)
     return MilightDevice_White_SetHSV($hash, $hue, $sat, $val, 1) if ($hash->{LEDTYPE} eq 'White');
     return MilightDevice_RGB_SetHSV($hash, $hue, $sat, $val, 1) if ($hash->{LEDTYPE} eq 'RGB');
   }
-  
-  return undef;
 }
 
 ###############################################################################
@@ -1990,11 +1999,12 @@ sub MilightDevice_CmdQueue_Add(@)
 sub MilightDevice_CmdQueue_Exec(@)
 {
   my ($hash) = @_; 
-
-  if ($hash->{IODev}->{STATE} ne "ok") {
-    InternalTimer(gettimeofday() + 60, "MilightDevice_CmdQueue_Exec", $hash, 0);
-    return undef;    
-  }
+  RemoveInternalTimer($hash);
+  #if ($hash->{IODev}->{STATE} ne "ok" && $hash->{IODev}->{STATE} ne "Initialized") {
+  #  InternalTimer(gettimeofday() + 60, "MilightDevice_CmdQueue_Exec", $hash, 0);
+  #  return undef;    
+  #}
+  
 
   my $actualCmd = @{$hash->{helper}->{cmdQueue}}[0];
 
@@ -2051,24 +2061,24 @@ sub MilightDevice_CmdQueue_Exec(@)
 sub MilightDevice_CmdQueue_Clear(@)
 {
   my ($hash) = @_;
-
-  if ($hash->{IODev}->{STATE} ne "ok") {
-    InternalTimer(gettimeofday() + 60, "MilightDevice_CmdQueue_Exec", $hash, 0);
-    return undef;    
-  }
-  
   Log3 ($hash, 4, "$hash->{NAME}_CmdQueue_Clear");
-  
+  RemoveInternalTimer($hash);
+  #if ($hash->{IODev}->{STATE} ne "ok" && $hash->{IODev}->{STATE} ne "Initialized") {
+  #  InternalTimer(gettimeofday() + 60, "MilightDevice_CmdQueue_Exec", $hash, 0);
+  #  return undef;    
+  #}
+
   readingsSingleUpdate($hash, "transitionInProgress", 0, 1); # Clear inProgress flag
   
-  foreach my $args (keys %intAt) 
-  {
-    if (($intAt{$args}{ARG} eq $hash) && ($intAt{$args}{FN} eq 'MilightDevice_CmdQueue_Exec'))
-    {
-      Log3 ($hash, 5, "$hash->{NAME}_CmdQueue_Clear: Remove timer at: ".$intAt{$args}{TRIGGERTIME});
-      delete($intAt{$args});
-    }
-  }
+  #foreach my $args (keys %intAt) 
+  #{
+  #  if (($intAt{$args}{ARG} eq $hash) && ($intAt{$args}{FN} eq 'MilightDevice_CmdQueue_Exec'))
+  #  {
+  #    Log3 ($hash, 5, "$hash->{NAME}_CmdQueue_Clear: Remove timer at: ".$intAt{$args}{TRIGGERTIME});
+  #    delete($intAt{$args});
+  #  }
+  #}
+
   $hash->{helper}->{cmdQueue} = [];
 
   return undef;
@@ -2340,6 +2350,10 @@ sub MilightDevice_roundfunc($) {
     <li>
       <b>updateGroupDevices</b><br/>
          Update the state of single devices switched with slot 'A'.
+    </li>
+    <li>
+      <b>restoreAtStart</b><br/>
+         Restore the state of devices at startup. Default 0 for slot 'A', 1 otherwise.
     </li>
     <li>
       <b>defaultBrightness</b><br/>

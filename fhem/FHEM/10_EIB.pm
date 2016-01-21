@@ -17,6 +17,10 @@
 # ABU 20150923 improved failure-tolerance for none / wrong model
 # ABU 20150924 fixed date/time again
 # ABU 20150926 removed eventMarker, removed no get for dummies
+# ABU 20151207 added dpt3, fixed doku-section myDimmer
+# ABU 20151213 added dpt13
+# ABU 20151221 added multiple group support for get according thread 45954
+
 package main;
 
 use strict;
@@ -55,6 +59,10 @@ my %models = (
 my %eib_dpttypes = (
   #Binary value
   "dpt1" 		=> {"CODE"=>"dpt1", "UNIT"=>"",  "factor"=>1},
+  
+  
+  #Step value (four-bit)
+  "dpt3" 		=> {"CODE"=>"dpt3", "UNIT"=>"",  "factor"=>1},
 
   # 1-Octet unsigned value
   "dpt5" 		=> {"CODE"=>"dpt5", "UNIT"=>"",  "factor"=>1},
@@ -108,6 +116,11 @@ my %eib_dpttypes = (
   # 4-Octet unsigned value (handled as dpt7)
   "dpt12" 		=> {"CODE"=>"dpt12", "UNIT"=>""},
   
+  # 4-Octet Signed Value
+  "dpt13" 		=> {"CODE"=>"dpt13", "UNIT"=>"",  "factor"=>1},
+  "dpt13.010" 		=> {"CODE"=>"dpt13", "UNIT"=>"W/h",  "factor"=>1},
+  "dpt13.013" 		=> {"CODE"=>"dpt13", "UNIT"=>"kW/h",  "factor"=>1},
+
   # 4-Octet single precision float
   "dpt14"         => {"CODE"=>"dpt14", "UNIT"=>""},
 
@@ -221,15 +234,36 @@ EIB_SetState($$$$) {
 ###################################
 sub
 EIB_Get($@) {
-	my ($hash, @a) = @_;
-
-	#return "No get for dummies" if(IsDummy($hash->{NAME}));
+	#my ($hash, @a) = @_;
+	##return "No get for dummies" if(IsDummy($hash->{NAME}));
+	#return "" if($a[1] && $a[1] eq "?");  # Temporary hack for FHEMWEB
+	##send read-request to the bus
+	#IOWrite($hash, "B", "r" . $hash->{GROUP});
+	#return "Current value for $hash->{NAME} ($hash->{GROUP}) requested.";
+	
+	my ($hash, @a, $str) = @_;
+	my $na = int(@a);
+	my $value = $a[1];
+	
 	return "" if($a[1] && $a[1] eq "?");  # Temporary hack for FHEMWEB
 
-	#send read-request to the bus
-	IOWrite($hash, "B", "r" . $hash->{GROUP});
+  	my $groupnr = 1;
+	
+	# the command can be send to any of the defined groups indexed starting by 1
+	# optional last argument starting with g indicates the group
+	# execute only for non-strings. Otherwise a "g" is interpreted to execute this group-send-mechanism...
+	if (defined($value) and ($value ne "string"))
+	{
+		$groupnr = $1 if($na=2 && $a[1]=~ m/g([0-9]*)/);
+		#return, if unknown group
+		return "groupnr $groupnr not known." if(!$hash->{CODE}{$groupnr}); 
+	}
+	my $groupcode = $hash->{CODE}{$groupnr};
+
+  	#send read-request to the bus
+	IOWrite($hash, "B", "r" . $groupcode);
   
-	return "Current value for $hash->{NAME} ($hash->{GROUP}) requested.";	  
+	return "Current value for $hash->{NAME} ($groupcode) requested.";
 }
 
 ###################################
@@ -569,6 +603,82 @@ EIB_EncodeByDatapointType($$$$) {
 				
 		Log3 $hash, 5,"EIB $code encode $value translated: $transval";
 	}
+	elsif ($code eq "dpt3") 
+	{
+		#4-bit steps
+		my $rawval = $value;
+		my $sign = undef;
+		my $fullval = undef;
+		
+		#determine dim-direction, assuming positive direction by default
+		if ($value =~ /^-/)
+		{
+			$value = -$value;
+			$sign = 0;
+		}
+		else
+		{
+			$sign = 1;
+		}
+		
+		#determine value
+		if ($value >= 75)
+		{
+			#adjust 100%
+			$fullval = 01;
+		}
+		elsif ($value >= 50)
+		{
+			#adjust 50%
+			$fullval = 02;
+		}
+		elsif ($value >= 25)
+		{
+			#adjust 25%
+			$fullval = 03;
+		}
+		elsif ($value >= 12)
+		{
+			#adjust 12%
+			$fullval = 04;
+		}
+		elsif ($value >= 6)
+		{
+			#adjust 6%
+			$fullval = 05;
+		}
+		elsif ($value >= 3)
+		{
+			#adjust 3%
+			$fullval = 06;
+		}
+		elsif ($value >= 1)
+		{
+			#adjust 1%
+			$fullval = 07;
+		}
+		elsif ($value >= 0)
+		{
+			#adjust 0%
+			$fullval = 00;
+		}
+		else 
+		{
+			#do nothing
+			$fullval = undef;
+		}
+
+		#place signe
+		if (defined ($fullval) && ($sign eq 1))
+		{
+			$fullval = $fullval | 8;
+		}
+
+		#make it hex
+		$transval = sprintf("0%.1x",$fullval);
+		
+		Log3 $hash, 5,"EIB $code encode $rawval = sign $sign value $value to $fullval. Translated to hex $transval.";
+	}
 	elsif ($code eq "dpt5") 
 	{
 		#1-byte unsigned
@@ -700,6 +810,18 @@ EIB_EncodeByDatapointType($$$$) {
 		my $fullval = sprintf("00%.8x",$value);
 		$transval = $fullval;
 		Log3 $hash, 5,"EIB $code encode $value" . '=' . " $fullval translated: $transval";
+	}
+	elsif ($code eq "dpt13") 
+	{
+	  #4-byte signed
+	  my $dpt13factor = $eib_dpttypes{"$model"}{"factor"};
+	  my $fullval = int($value/$dpt13factor);
+      $fullval += 4294967296 if ($fullval < 0);
+      $fullval = 0 if ($fullval < 0);
+      $fullval = 0xFFFFFFFF if ($fullval > 0xFFFFFFFF);
+	  $transval = sprintf("00%.8x",$fullval);
+
+	  Log3 $hash, 5,"EIB $code encode $value = $fullval factor = $dpt13factor translated: $transval";
 	} 
 	elsif($code eq "dpt14") 
 	{
@@ -796,6 +918,83 @@ EIB_ParseByDatapointType($$$$)
 		$value = "on" if ($value eq 1); 
 		$transval = $value;	
 	}
+	elsif ($code eq "dpt3") 
+	{
+		#4-bit steps
+		my $rawval = $value;
+		my $sign = undef;
+		my $fullval = undef;
+		
+		#make it decimal
+		$value = hex ($value);
+		
+		#determine dim-direction
+		if ($value & 8)
+		{
+			$sign = "+";
+		}
+		else
+		{
+			$sign = "-";
+		}
+		
+		#mask it...
+		$value = $value & 7; 
+		
+		#determine value
+		if ($value == 7)
+		{
+			#adjust 1%
+			$fullval = 1;
+		}
+		elsif ($value == 6)
+		{
+			#adjust 3%
+			$fullval = 3;
+		}
+		elsif ($value == 5)
+		{
+			#adjust 6%
+			$fullval = 6;
+		}
+		elsif ($value == 4)
+		{
+			#adjust 12%
+			$fullval = 12;
+		}
+		elsif ($value == 3)
+		{
+			#adjust 25%
+			$fullval = 25;
+		}
+		elsif ($value == 2)
+		{
+			#adjust 50%
+			$fullval = 50;
+		}
+		elsif ($value == 1)
+		{
+			#adjust 100%
+			$fullval = 100;
+		}
+		elsif ($value == 0)
+		{
+			#adjust 0%
+			$fullval = 0;
+		}
+		else 
+		{
+			#do nothing
+			$fullval = undef;
+		}
+		
+		if (defined ($sign) && defined ($fullval))
+		{
+			$transval = "$sign$fullval";
+		}
+		
+		Log3 $hash, 5,"EIB $code decode $rawval = sign $sign value $value to $fullval";
+	}
 	elsif ($code eq "dpt5") 
 	{
 		#1-byte unsigned
@@ -886,6 +1085,14 @@ EIB_ParseByDatapointType($$$$)
 		my $fullval = hex($value);
 		$transval = $fullval;		
 	} 
+	elsif ($code eq "dpt13") 
+	{
+		my $dpt13factor = $eib_dpttypes{"$model"}{"factor"};
+		my $fullval = hex($value);
+		$transval = $fullval;
+		$transval -= 4294967296 if $transval >= 0x80000000;
+		$transval = sprintf("%.0f",$transval * $dpt13factor) if($dpt13factor != 0);
+	}	
 	elsif ($code eq "dpt14")
     {
         # 4-byte float
@@ -1105,6 +1312,7 @@ eib_name2hex($)
       	<li>dpt5.003</li>
       	<li>angle</li>
       	<li>percent</li>
+		<li>dpt3 -> usage: set value to +/-0..100. -54 means dim down by 50%</li>
       	<li>dpt5.004</li>
       	<li>percent255</li>
       	<li>dpt6</li>
@@ -1139,6 +1347,7 @@ eib_name2hex($)
       	<li>dpt11  -> transferred from and to state, format hh:mm:ss</li>
       	<li>date  -> receiving has no effect, sending any value contains actual system date</li>
       	<li>dpt12</li>
+		<li>dpt13</li>
       	<li>dpt14</li>
       	<li>dpt16  -> has to be used with "set string"</li>
       </ul>      
@@ -1155,9 +1364,9 @@ eib_name2hex($)
       <pre>
       define myDimmer EIB 0/1/1 0/1/2
       attr myDimmer EIBreadingX 1
-      attr myDimmer model dpt1 dpt5.slider # GA 0/1/1 will be interpreted as on/off, GA 0/1/2 will be handled as dpt5 and show a slider on FHEMWEB
-      attr myDimmer eventmap /on:An/off:Aus/value g2:dim/
-      attr myDimmer webcmd on off dim
+      attr myDimmer model dpt1 dpt5.Slider # GA 0/1/1 will be interpreted as on/off, GA 0/1/2 will be handled as dpt5 and show a slider on FHEMWEB
+      attr myDimmer eventMap /on:An/off:Aus/value g2:dim/
+      attr myDimmer webCmd on:off:dim
       attr myDimmer stateFormat getG2 % # copies actual dim-level (as sent/received to/from dimmer) into STATE 
       </pre>    
      </li>

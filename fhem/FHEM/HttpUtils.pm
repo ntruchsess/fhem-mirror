@@ -147,7 +147,8 @@ HttpUtils_Connect($)
       }
       my $ret = connect($hash->{conn}, sockaddr_in($port, $iaddr));
       if(!$ret) {
-        if($!{EINPROGRESS} || int($!)==10035) { # Nonblocking connect
+        if($!{EINPROGRESS} || int($!)==10035 ||
+           (int($!)==140 && $^O eq "MSWin32")) { # Nonblocking connect
 
           $hash->{FD} = $hash->{conn}->fileno();
           my %timerHash = ( hash => $hash );
@@ -264,7 +265,7 @@ HttpUtils_Connect2($)
               if(defined($hash->{auth}) && 
                  !($hash->{header} &&
                    $hash->{header} =~ /^Authorization:\s*Digest/mi));
-  $hdr .= $hash->{header}."\r\n" if(defined($hash->{header}));
+  $hdr .= $hash->{header}."\r\n" if($hash->{header});
   if(defined($data)) {
     $hdr .= "Content-Length: ".length($data)."\r\n";
     $hdr .= "Content-Type: application/x-www-form-urlencoded\r\n"

@@ -17,19 +17,22 @@ telnet_Initialize($)
 
   $hash->{DefFn}   = "telnet_Define";
   $hash->{ReadFn}  = "telnet_Read";
+  $hash->{AsyncOutputFn}  = "telnet_Output";
   $hash->{UndefFn} = "telnet_Undef";
   $hash->{AttrFn}  = "telnet_Attr";
   $hash->{NotifyFn}= "telnet_SecurityCheck";
-  $hash->{AttrList} = "globalpassword password prompt ".
+  $hash->{AttrList} = "globalpassword password prompt allowedCommands ".
                         "allowfrom SSL connectTimeout connectInterval ".
                         "encoding:utf8,latin1 sslVersion";
   $hash->{ActivateInformFn} = "telnet_ActivateInform";
 
   my %lhash = ( Fn=>"CommandTelnetEncoding",
                 ClientFilter => "telnet",
-                Hlp=>"[utf8|latin1],query and set the character encoding for the current telnet session" );
+                Hlp=>"[utf8|latin1],query and set the character encoding ".
+                                "for the current telnet session" );
   $cmds{encoding} = \%lhash;
 }
+
 sub
 CommandTelnetEncoding($$)
 {
@@ -59,15 +62,28 @@ telnet_SecurityCheck($$)
             !grep(m/^INITIALIZED$/, @{$dev->{CHANGED}}));
   my $motd = AttrVal("global", "motd", "");
   if($motd =~ "^SecurityCheck") {
-      my @list = grep { !(AttrVal($_, "password", undef) ||
-                        AttrVal($_, "globalpassword", undef)) }
-               devspec2array("TYPE=telnet");
-    $motd .= (join(",", sort @list).
-                        " has no password/globalpassword attribute.\n")
-        if(@list);
+    my @list1 = devspec2array("TYPE=telnet");
+    my @list2 = devspec2array("TYPE=allowed");
+    my @list3;
+    for my $l (@list1) { # This is a hack, as hardcoded to basicAuth
+      next if(!$defs{$l} || $defs{$l}{TEMPORARY}); # Blocking.pm /Forum #47022
+      my $fnd = 0;
+      for my $a (@list2) {
+        next if(!$defs{$a});
+        my $vf = AttrVal($a, "validFor","");
+        $fnd = 1 if(($vf && $vf =~ m/\b$l\b/) && 
+                    (AttrVal($a, "password","") ||
+                     AttrVal($a, "globalpassword","")));
+      }
+      push @list3, $l if(!$fnd);
+    }
+    $motd .= (join(",", sort @list3).
+            " has no associated allowed device with password/globalpassword.\n")
+        if(@list3);
     $attr{global}{motd} = $motd;
   }
   delete $modules{telnet}{NotifyFn};
+  return;
   return;
 }
 
@@ -146,8 +162,7 @@ telnet_Define($$$)
   return "Usage: define <name> telnet { [IPV6:]<tcp-portnr> [global] | ".
                                       " [IPV6:]serverName:port }"
         if(!($isServer || $isClient) ||
-            ($isClient && $global) ||
-            ($global && $global ne "global"));
+            ($isClient && $global));
 
   # Make sure that fhem only runs once
   if($isServer) {
@@ -165,19 +180,6 @@ telnet_Define($$$)
   }
 }
 
-sub
-telnet_pw($$)
-{
-  my ($sname, $cname) = @_;
-  my $pw = $attr{$sname}{password};
-  return $pw if($pw);
-
-  $pw = $attr{$sname}{globalpassword};
-  return $pw if($pw && $cname !~ m/^telnet:127.0.0.1/);
-
-  return undef;
-}
-
 ##########################
 sub
 telnet_Read($)
@@ -187,13 +189,16 @@ telnet_Read($)
   if($hash->{SERVERSOCKET}) {   # Accept and create a child
     my $chash = TcpServer_Accept($hash, "telnet");
     return if(!$chash);
+    $chash->{canAsyncOutput} = 1;
     $chash->{encoding} = AttrVal($name, "encoding", "utf8");
     $chash->{prompt}  = AttrVal($name, "prompt", "fhem>");
     syswrite($chash->{CD}, sprintf("%c%c%c", 255, 253, 0) )
         if( AttrVal($name, "encoding", "") ); #DO BINARY
     $chash->{CD}->flush();
+    my $auth = Authenticate($chash, undef);
     syswrite($chash->{CD}, sprintf("%c%c%cPassword: ", 255, 251, 1)) # WILL ECHO
-        if(telnet_pw($name, $chash->{NAME}));
+        if($auth);
+    $chash->{Authenticated} = 0 if(!$auth);
     return;
   }
 
@@ -203,6 +208,7 @@ telnet_Read($)
     if($hash->{isClient}) {
       telnet_ClientDisconnect($hash, 0);
     } else {
+      delete $hash->{canAsyncOutput};
       CommandDelete(undef, $name);
     }
     return;
@@ -215,8 +221,7 @@ telnet_Read($)
 
   $buf =~ s/\r//g;
   my $sname = ($hash->{isClient} ? $name : $hash->{SNAME});
-  my $pw = telnet_pw($sname, $name);
-  if($pw) {
+  if(!defined($hash->{Authenticated}) || $hash->{Authenticated}) {
     $buf =~ s/\xff..//g;              # Telnet IAC stuff
     $buf =~ s/\xfd(.)//;              # Telnet Do ?
     syswrite($hash->{CD}, sprintf("%c%c%c", 0xff, 0xfc, ord($1)))
@@ -230,31 +235,23 @@ telnet_Read($)
     my ($cmd, $rest) = split("\n", $hash->{BUF}, 2);
     $hash->{BUF} = $rest;
 
-    if(!$hash->{pwEntered}) {
-      if($pw) {
-        syswrite($hash->{CD}, sprintf("%c%c%c\r\n", 255, 252, 1)); # WONT ECHO
+    if(!defined($hash->{Authenticated})) {
+      syswrite($hash->{CD}, sprintf("%c%c%c\r\n", 255, 252, 1)); # WONT ECHO
 
-        $ret = ($pw eq $cmd);
-        if($pw =~ m/^{.*}$/) {  # Expression as pw
-          my $password = $cmd;
-          $ret = eval $pw;
-          Log3 $name, 1, "password expression: $@" if($@);
-        }
-
-        if($ret) {
-          $hash->{pwEntered} = 1;
-          next;
+      if(Authenticate($hash, $cmd) == 1) {
+        $hash->{Authenticated} = 1;
+        next;
+      } else {
+        if($hash->{isClient}) {
+          telnet_ClientDisconnect($hash, 0);
         } else {
-          if($hash->{isClient}) {
-            telnet_ClientDisconnect($hash, 0);
-          } else {
-            delete($hash->{rcvdQuit});
-            CommandDelete(undef, $name);
-          }
-          return;
+          delete($hash->{rcvdQuit});
+          CommandDelete(undef, $name);
         }
+        return;
       }
     }
+
     $gotCmd = 1;
     if($cmd) {
       if($cmd =~ m/\\ *$/) {                     # Multi-line
@@ -284,17 +281,10 @@ telnet_Read($)
   $ret .= (join("\n", @ret) . "\n") if(@ret);
   $ret .= ($hash->{prevlines} ? "> " : $hash->{prompt}." ")
           if($gotCmd && $hash->{showPrompt} && !$hash->{rcvdQuit});
-  if($ret) {
-    $ret = utf8ToLatin1($ret) if( $hash->{encoding} eq "latin1" );
-    $ret =~ s/\n/\r\n/g if($pw);  # only for DOS telnet 
-    for(;;) {
-      my $l = syswrite($hash->{CD}, $ret);
-      last if(!$l || $l == length($ret));
-      $ret = substr($ret, $l);
-    }
-    $hash->{CD}->flush();
 
-  }
+  $ret =~ s/\n/\r\n/g if($hash->{Authenticated});  # only for DOS telnet 
+  telnet_Output($hash,$ret);
+
   if($hash->{rcvdQuit}) {
     if($hash->{isClient}) {
       delete($hash->{rcvdQuit});
@@ -304,21 +294,53 @@ telnet_Read($)
     }
   }
 }
+sub
+telnet_Output($$)
+{
+  my ($hash,$ret) = @_;
+
+  if($ret) {
+    $ret = utf8ToLatin1($ret) if( $hash->{encoding} eq "latin1" );
+    for(;;) {
+      my $l = syswrite($hash->{CD}, $ret);
+      last if(!$l || $l == length($ret));
+      $ret = substr($ret, $l);
+    }
+    $hash->{CD}->flush();
+
+  }
+
+  return undef;
+}
 
 ##########################
 sub
 telnet_Attr(@)
 {
+  my ($type, $devName, $attrName, @param) = @_;
   my @a = @_;
-  my $hash = $defs{$a[1]};
+  my $hash = $defs{$devName};
 
-  if($a[0] eq "set" && $a[2] eq "SSL") {
+  if($type eq "set" && $attrName eq "SSL") {
     TcpServer_SetSSL($hash);
     if($hash->{CD}) {
       my $ret = IO::Socket::SSL->start_SSL($hash->{CD});
-      Log3 $a[1], 1, "$hash->{NAME} start_SSL: $ret" if($ret);
+      Log3 $devName, 1, "$hash->{NAME} start_SSL: $ret" if($ret);
     }
   }
+
+  if(($attrName eq "allowedCommands" ||
+      $attrName eq "password" ||
+      $attrName eq "globalpassword" ) && $type eq "set") {
+    my $aName = "allowed_$devName";
+    my $exists = ($defs{$aName} ? 1 : 0);
+    AnalyzeCommand(undef, "defmod $aName allowed");
+    AnalyzeCommand(undef, "attr $aName validFor $devName");
+    AnalyzeCommand(undef, "attr $aName $attrName ".join(" ",@param));
+    return "$devName: ".($exists ? "modifying":"creating").
+                " device $aName for attribute $attrName";
+  }
+
   return undef;
 }
 
@@ -351,15 +373,19 @@ telnet_ActivateInform($;$)
   <a name="telnetdefine"></a>
   <b>Define</b>
   <ul>
-    <code>define &lt;name&gt; telnet &lt;portNumber&gt; [global]</code><br>
+    <code>define &lt;name&gt; telnet &lt;portNumber&gt;
+    [global|hostname]</code><br>
+
     or<br>
     <code>define &lt;name&gt; telnet &lt;servername&gt:&lt;portNumber&gt;</code>
     <br><br>
 
     First form, <b>server</b> mode:<br>
     Listen on the TCP/IP port <code>&lt;portNumber&gt;</code> for incoming
-    connections. If the second parameter global is <b>not</b> specified,
-    the server will only listen to localhost connections.
+    connections. If the second parameter is <b>not</b> specified,
+    the server will only listen to localhost connections. If the second
+    parameter is global, telnet will listen on all interfaces, else it wil try
+    to resolve the parameter as a hostname, and listen only on this interface.
     <br>
     To use IPV6, specify the portNumber as IPV6:&lt;number&gt;, in this
     case the perl module IO::Socket:INET6 will be requested.
@@ -369,8 +395,10 @@ telnet_ActivateInform($;$)
     Examples:
     <ul>
         <code>define tPort telnet 7072 global</code><br>
-        <code>attr tPort globalpassword mySecret</code><br>
         <code>attr tPort SSL</code><br>
+        <code>attr allowed_tPort allowed</code><br>
+        <code>attr allowed_tPort validFor tPort</code><br>
+        <code>attr allowed_tPort globalpassword mySecret</code><br>
     </ul>
     Note: The old global attribute port is automatically converted to a
     telnet instance with the name telnetPort. The global allowfrom attibute is
@@ -406,35 +434,6 @@ telnet_ActivateInform($;$)
   <a name="telnetattr"></a>
   <b>Attributes:</b>
   <ul>
-    <a name="password"></a>
-    <li>password<br>
-        Specify a password, which has to be entered as the very first string
-        after the connection is established. If the argument is enclosed in {},
-        then it will be evaluated, and the $password variable will be set to
-        the password entered. If the return value is true, then the password
-        will be accepted. If thies parameter is specified, fhem sends telnet
-        IAC requests to supress echo while entering the password.
-        Also all returned lines are terminated with \r\n.
-        Example:<br>
-        <ul>
-        <code>
-        attr tPort password secret<br>
-        attr tPort password {"$password" eq "secret"}
-        </code>
-        </ul>
-        Note: if this attribute is set, you have to specify a password as the
-        first argument when using fhem.pl in client mode:
-        <ul>
-          perl fhem.pl localhost:7072 secret "set lamp on"
-        </ul>
-        </li><br>
-
-    <a name="globalpassword"></a>
-    <li>globalpassword<br>
-        Just like the attribute password, but a password will only required for
-        non-local connections.
-        </li><br>
-
     <a name="prompt"></a>
     <li>prompt<br>
         Sets the string for the telnet prompt, the default is fhem&gt;
@@ -495,16 +494,19 @@ telnet_ActivateInform($;$)
   <a name="telnetdefine"></a>
   <b>Define</b>
   <ul>
-    <code>define &lt;name&gt; telnet &lt;portNumber&gt; [global]</code><br>
-    oder<br>
+    <code>define &lt;name&gt; telnet &lt;portNumber&gt;
+    [global|hostname]</code><br> oder<br>
+
     <code>define &lt;name&gt; telnet &lt;servername&gt:&lt;portNummer&gt;</code>
     <br><br>
 
     Erste Form, <b>Server</b>-mode:<br>
     &Uuml;berwacht den TCP/IP-Port <code>&lt;portNummer&gt;</code> auf
-    ankommende Verbindungen. Wenn der zweite Parameter gobal <b>nicht</b>
+    ankommende Verbindungen. Wenn der zweite Parameter <b>nicht</b>
     angegeben wird, wird der Server nur auf Verbindungen von localhost achten.
-
+    Falls der zweite Parameter global ist, dann wird telnet auf allen lokalen
+    Netzwerk-Interfaces zuh&ouml;ren, ansonsten wird der Parameter als Hostname
+    oder Adresse interpretiert, und nur diese lokale Adresse bedient.
     <br>
     F&uuml;r den Gebrauch von IPV6 muss die Portnummer als IPV6:&lt;nummer&gt;
     angegeben werden, in diesem Fall wird das Perl-Modul IO::Socket:INET6
@@ -515,8 +517,10 @@ telnet_ActivateInform($;$)
     Beispiele:
     <ul>
         <code>define tPort telnet 7072 global</code><br>
-        <code>attr tPort globalpassword mySecret</code><br>
         <code>attr tPort SSL</code><br>
+        <code>attr allowed_tPort allowed</code><br>
+        <code>attr allowed_tPort validFor tPort</code><br>
+        <code>attr allowed_tPort globalpassword mySecret</code><br>
     </ul>
     Hinweis: Das alte (pre 5.3) "global attribute port" wird automatisch in
     eine telnet-Instanz mit dem Namen telnetPort umgewandelt. Im Rahmen dieser
@@ -556,41 +560,6 @@ telnet_ActivateInform($;$)
   <a name="telnetattr"></a>
   <b>Attribute</b>
   <ul>
-    <a name="password"></a>
-    <li>password<br>
-        Bezeichnet ein Passwort, welches als allererster String eingegeben
-        werden muss, nachdem die Verbindung aufgebaut wurde. Wenn das Argument
-        in {} eingebettet ist, dann wird es als Perl-Ausdruck ausgewertet, und
-        die Variable $password mit dem eingegebenen Passwort verglichen. Ist
-        der zur&uuml;ckgegebene Wert wahr (true), wurde das Passwort
-        akzeptiert.  Falls dieser Parameter gesetzt wird, sendet fhem
-        telnet IAC Requests, um ein Echo w&auml;hrend der Passworteingabe zu
-        unterdr&uuml;cken. Ebenso werden alle zur&uuml;ckgegebenen Zeilen mit
-        \r\n abgeschlossen.
-
-        Beispiel:<br>
-        <ul>
-        <code>
-        attr tPort password secret<br>
-        attr tPort password {"$password" eq "secret"}
-        </code>
-        </ul>
-        Hinweis: Falls dieses Attribut gesetzt wird, muss als erstes Argument
-        ein Passwort angegeben werden, wenn fhem.pl im Client-mode betrieben
-        wird:
-        <ul>
-        <code>
-          perl fhem.pl localhost:7072 secret "set lamp on"
-        </code>
-        </ul>
-        </li><br>
-
-    <a name="globalpassword"></a>
-    <li>globalpassword<br>
-        Entspricht dem Attribut password; ein Passwort wird aber
-        ausschlie&szlig;lich f&uuml;r nicht-lokale Verbindungen verlangt.
-        </li><br>
-
     <a name="prompt"></a>
     <li>prompt<br>
         Gibt die Zeichenkette an, welche in der Telnet-Sitzung als

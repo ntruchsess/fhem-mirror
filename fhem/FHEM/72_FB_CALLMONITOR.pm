@@ -36,44 +36,6 @@ use HttpUtils;
 use DevIo;
 use FritzBoxUtils;
 
-my %connection_type = (
-    0 => "0",
-    1 => "FON1",
-    2 => "FON2",
-    3 => "FON3",
-    4 => "ISDN",
-    5 => "FAX",
-    6 => "not_defined",
-    7 => "not_defined",
-    8 => "not_defined",
-    9 => "not_defined",
-    10 => "DECT_1",
-    11 => "DECT_2",
-    12 => "DECT_3",
-    13 => "DECT_4",
-    14 => "DECT_5",
-    15 => "DECT_6",
-    16 => "FRITZMini_1",
-    17 => "FRITZMini_2",
-    18 => "FRITZMini_3",
-    19 => "FRITZMini_4",
-    20 => "VoIP_1",
-    21 => "VoIP_2",
-    22 => "VoIP_3",
-    23 => "VoIP_4",
-    24 => "VoIP_5",
-    25 => "VoIP_6",
-    26 => "VoIP_7",
-    27 => "VoIP_8",
-    28 => "VoIP_9",
-    29 => "VoIP_10",
-    40 => "Answering_Machine_1",
-    41 => "Answering_Machine_2",
-    42 => "Answering_Machine_3",
-    43 => "Answering_Machine_4",
-    44 => "Answering_Machine_5"
-);
-
 
 #####################################
 sub
@@ -93,10 +55,12 @@ FB_CALLMONITOR_Initialize($)
     $hash->{NOTIFYDEV} = "global";
     $hash->{AttrList}  = "do_not_notify:0,1 ".
                          "disable:0,1 ".
+                         "disabledForIntervals ".
                          "unique-call-ids:0,1 ".
                          "local-area-code ".
                          "country-code ".
                          "remove-leading-zero:0,1 ".
+                         "answMachine-is-missed-call:0,1 ".
                          "reverse-search-cache-file ".
                          "reverse-search:sortable-strict,phonebook,textfile,klicktel.de,dasoertliche.de,search.ch,dasschnelle.at ".
                          "reverse-search-cache:0,1 ".
@@ -248,7 +212,6 @@ FB_CALLMONITOR_Get($@)
     {
         return "unknown argument ".$arguments[1].", choose one of search".(exists($hash->{helper}{PHONEBOOK_NAMES}) ? " showPhonebookIds" : "").(exists($hash->{helper}{PHONEBOOK}) ? " showPhonebookEntries" : "").(exists($hash->{helper}{CACHE}) ? " showCacheEntries" : "").(exists($hash->{helper}{TEXTFILE}) ? " showTextfileEntries" : ""); 
     }
-
 }
 
 #####################################
@@ -303,9 +266,47 @@ FB_CALLMONITOR_Read($)
 {
     my ($hash) = @_;
 
+    my %connection_type = (
+        0 => "0",
+        1 => "FON1",
+        2 => "FON2",
+        3 => "FON3",
+        4 => "ISDN",
+        5 => "FAX",
+        6 => "not_defined",
+        7 => "not_defined",
+        8 => "not_defined",
+        9 => "not_defined",
+        10 => "DECT_1",
+        11 => "DECT_2",
+        12 => "DECT_3",
+        13 => "DECT_4",
+        14 => "DECT_5",
+        15 => "DECT_6",
+        16 => "FRITZMini_1",
+        17 => "FRITZMini_2",
+        18 => "FRITZMini_3",
+        19 => "FRITZMini_4",
+        20 => "VoIP_1",
+        21 => "VoIP_2",
+        22 => "VoIP_3",
+        23 => "VoIP_4",
+        24 => "VoIP_5",
+        25 => "VoIP_6",
+        26 => "VoIP_7",
+        27 => "VoIP_8",
+        28 => "VoIP_9",
+        29 => "VoIP_10",
+        40 => "Answering_Machine_1",
+        41 => "Answering_Machine_2",
+        42 => "Answering_Machine_3",
+        43 => "Answering_Machine_4",
+        44 => "Answering_Machine_5"
+    );
+    
     my $buf = DevIo_SimpleRead($hash);
     
-    return "" if(!defined($buf));
+    return "" if(!defined($buf) or IsDisabled($hash->{NAME}));
     
     my $name = $hash->{NAME};
     my @array;
@@ -344,11 +345,11 @@ FB_CALLMONITOR_Read($)
             
             if(not $external_number =~ /^0/ and $area_code ne "")
             {
-                if($area_code =~ /^0[1-9]\d+$/)
+                if($area_code =~ /^0[1-9]\d+$/ and $external_number =~ /^[1-9]\d+$/)
                 {
                     $external_number = $area_code.$external_number;
                 }
-                else
+                elsif(not $area_code =~ /^0[1-9]\d+$/)
                 {
                     Log3 $name, 2, "FB_CALLMONITOR ($name) - given local area code '$area_code' is not an area code. therefore will be ignored";
                 }
@@ -370,6 +371,10 @@ FB_CALLMONITOR_Read($)
             {
                 $hash->{helper}{TEMP}{$array[2]}{call_id} = Digest::MD5::md5_hex($data);
             }
+            else
+            {
+                $hash->{helper}{TEMP}{$array[2]}{call_id} = $array[2];
+            }
         }
 
         if($array[1] eq "CALL")
@@ -378,7 +383,7 @@ FB_CALLMONITOR_Read($)
             $hash->{helper}{TEMP}{$array[2]}{external_name} = (defined($reverse_search) ? $reverse_search : "unknown");
             $hash->{helper}{TEMP}{$array[2]}{internal_number} = $array[4];
             $hash->{helper}{TEMP}{$array[2]}{external_connection} = $array[6];
-            $hash->{helper}{TEMP}{$array[2]}{internal_connection} =  $connection_type{$array[3]} if(defined($connection_type{$array[3]}));
+            $hash->{helper}{TEMP}{$array[2]}{internal_connection} = $connection_type{$array[3]} if(defined($connection_type{$array[3]}));
             $hash->{helper}{TEMP}{$array[2]}{direction} = "outgoing";
         }
        
@@ -393,35 +398,31 @@ FB_CALLMONITOR_Read($)
        
         if($array[1] eq "CONNECT" and not exists($hash->{helper}{TEMP}{$array[2]}{internal_connection}))
         {
-            $hash->{helper}{TEMP}{$array[2]}{internal_connection} =  $connection_type{$array[3]} if(defined($connection_type{$array[3]}));
+            $hash->{helper}{TEMP}{$array[2]}{internal_connection} = $connection_type{$array[3]} if(defined($connection_type{$array[3]}));
+            $hash->{helper}{TEMP}{$array[2]}{".internal_connection_id"} = $array[3] if(defined($connection_type{$array[3]}));
         }    
         
         if($array[1] eq "DISCONNECT")
         {
             $hash->{helper}{TEMP}{$array[2]}{call_duration} = $array[3];
         
-            if(exists($hash->{helper}{TEMP}{$array[2]}{direction}) and exists($hash->{helper}{TEMP}{$array[2]}{external_number}) and $hash->{helper}{TEMP}{$array[2]}{direction} eq "incoming" and $array[3] eq "0")
+            if(exists($hash->{helper}{TEMP}{$array[2]}{direction}) and $hash->{helper}{TEMP}{$array[2]}{direction} eq "incoming")
             {
-                $hash->{helper}{TEMP}{$array[2]}{missed_call} = $hash->{helper}{TEMP}{$array[2]}{external_number}.(exists($hash->{helper}{TEMP}{$array[2]}{external_name}) and $hash->{helper}{TEMP}{$array[2]}{external_name} ne "unknown" ? " (".$hash->{helper}{TEMP}{$array[2]}{external_name}.")" : "");
-                $hash->{helper}{TEMP}{$array[2]}{missed_call_line} = $hash->{helper}{TEMP}{$array[2]}{internal_number};
+                if(($hash->{helper}{TEMP}{$array[2]}{".last-event"} eq "RING") or (AttrVal($name, "answMachine-is-missed-call", "0") eq "1" and exists($hash->{helper}{TEMP}{$array[2]}{internal_connection}) and $hash->{helper}{TEMP}{$array[2]}{".internal_connection_id"} =~/^4[0-4]$/))
+                {
+                    $hash->{helper}{TEMP}{$array[2]}{missed_call} = $hash->{helper}{TEMP}{$array[2]}{external_number}.(exists($hash->{helper}{TEMP}{$array[2]}{external_name}) and $hash->{helper}{TEMP}{$array[2]}{external_name} ne "unknown" ? " (".$hash->{helper}{TEMP}{$array[2]}{external_name}.")" : "");
+                }
             }
         }    
+        
+        $hash->{helper}{TEMP}{$array[2]}{".last-event"} = $array[1];
         
         readingsBeginUpdate($hash);
         readingsBulkUpdate($hash, "event", lc($array[1]));
         
         foreach my $key (keys %{$hash->{helper}{TEMP}{$array[2]}})
         {
-            readingsBulkUpdate($hash, $key, $hash->{helper}{TEMP}{$array[2]}{$key}) unless($key eq "call_id");
-        }   
-        
-        if(AttrVal($name, "unique-call-ids", "0") eq "1" and exists($hash->{helper}{TEMP}{$array[2]}{call_id}))
-        {
-            readingsBulkUpdate($hash, "call_id", $hash->{helper}{TEMP}{$array[2]}{call_id});
-        }
-        else
-        {
-            readingsBulkUpdate($hash, "call_id", $array[2]);
+            readingsBulkUpdate($hash, $key, $hash->{helper}{TEMP}{$array[2]}{$key}) unless($key =~ /^\./);
         }
         
         if($array[1] eq "DISCONNECT")
@@ -430,7 +431,6 @@ FB_CALLMONITOR_Read($)
         } 
         
         readingsEndUpdate($hash, 1);
-        
     }
 }
 
@@ -449,7 +449,6 @@ FB_CALLMONITOR_Ready($)
 sub
 FB_CALLMONITOR_Attr($@)
 {
-    
     my ($cmd, $name, $attrib, $value) = @_;
     my $hash = $defs{$name};
     
@@ -471,17 +470,9 @@ FB_CALLMONITOR_Attr($@)
             return FB_CALLMONITOR_loadTextFile($hash, $value);
         }
             
-        if($attrib eq "disable")
+        if($attrib eq "disable" and $value eq "1")
         {
-            if($value eq "0")
-            {
-                DevIo_OpenDev($hash, 0, undef);
-            }
-            elsif($value eq "1")
-            {
-                DevIo_CloseDev($hash); 
-                $hash->{STATE} = "disabled";
-            }
+            $hash->{STATE} = "disabled";
         }
     }
     elsif($cmd eq "del")
@@ -500,17 +491,14 @@ FB_CALLMONITOR_Attr($@)
         {
             delete($hash->{helper}{TEXTFILE}) if(defined($hash->{helper}{TEXTFILE}));
         }
-        
-        if($attrib eq "disable")
-        {
-            DevIo_OpenDev($hash, 0, undef);
-        }
     }
     
     return undef;
 }
 
-
+#####################################
+# receives events, waits for global INITIALIZED or REREADCFG
+# to initiate the phonebook initialization
 sub
 FB_CALLMONITOR_Notify($$)
 {
@@ -540,10 +528,8 @@ FB_CALLMONITOR_reverseSearch($$)
     my $invert_match = undef;
     my @attr_list = split("(,|\\|)", AttrVal($name, "reverse-search", ""));
     
-    
     foreach my $method (@attr_list)
     {
-    
         # Using internal phonebook if available and enabled
         if($method eq "phonebook")
         {
@@ -575,7 +561,6 @@ FB_CALLMONITOR_reverseSearch($$)
                 }
             }    
             
-        
             # Ask klicktel.de
             if($method eq "klicktel.de")
             { 
@@ -622,7 +607,7 @@ FB_CALLMONITOR_reverseSearch($$)
                 else
                 {
                     #Log 2, $result;
-                    if($result =~ /<a href="http\:\/\/.+?\.dasoertliche\.de.+?".+?class="name ".+?><span class="">(.+?)<\/span>/)
+                    if($result =~ m,<a href="http\://.+?\.dasoertliche\.de.+?".+?class="name ".+?><span class="">(.+?)</span>,)
                     {
                         $invert_match = $1;
                         $invert_match = FB_CALLMONITOR_html2txt($invert_match);
@@ -638,8 +623,7 @@ FB_CALLMONITOR_reverseSearch($$)
                     $status = "unknown";
                 }
             }
-        
-
+            
             # SWITZERLAND ONLY!!! Ask search.ch
             elsif($method eq  "search.ch")
             {
@@ -657,23 +641,23 @@ FB_CALLMONITOR_reverseSearch($$)
                 else
                 {
                     #Log 2, $result;
-                    if($result =~ /<entry>(.+?)<\/entry>/s)
+                    if($result =~ m,<entry>(.+?)</entry>,s)
                     {
                         my $xml = $1;
                         
                         $invert_match = "";
                         
-                        if($xml =~ /<tel:firstname>(.+?)<\/tel:firstname>/)
+                        if($xml =~ m,<tel:firstname>(.+?)</tel:firstname>,)
                         {
                             $invert_match .= $1;
                         }
                         
-                        if($xml =~ /<tel:name>(.+?)<\/tel:name>/)
+                        if($xml =~ m,<tel:name>(.+?)</tel:name>,)
                         {
                             $invert_match .= " $1";
                         }
                         
-                        if($xml =~ /<tel:occupation>(.+?)<\/tel:occupation>/)
+                        if($xml =~ m,<tel:occupation>(.+?)</tel:occupation>,)
                         {
                             $invert_match .= ", $1";
                         }
@@ -727,8 +711,7 @@ FB_CALLMONITOR_reverseSearch($$)
                     $status = "unknown";
                 }
             }
-        }
-        
+        } 
     }
     
     if(AttrVal($name, "reverse-search-cache", "0") eq "1" and defined($status))
@@ -738,14 +721,12 @@ FB_CALLMONITOR_reverseSearch($$)
     }
 
     return undef;
-
 } 
 
 #####################################
 # replaces all HTML entities to their utf-8 counter parts.
 sub FB_CALLMONITOR_html2txt($)
 {
-
     my ($string) = @_;
 
     $string =~ s/&nbsp;/ /g;
@@ -761,7 +742,6 @@ sub FB_CALLMONITOR_html2txt($)
     $string =~ s/(^\s+|\s+$)//g;
 
     return trim($string);
-
 }
 
 #####################################
@@ -801,7 +781,7 @@ sub FB_CALLMONITOR_writeToCache($$$)
 }
 
 #####################################
-# reads a FritzBox phonebook
+# get and reads a FritzBox phonebook
 sub FB_CALLMONITOR_readPhonebook($;$)
 {
     my ($hash, $testPassword) = @_;
@@ -811,7 +791,7 @@ sub FB_CALLMONITOR_readPhonebook($;$)
     
 	if(AttrVal($name, "fritzbox-remote-phonebook", "0") eq "1")
     {
-        if(AttrVal($name, "fritzbox-remote-phonebook-via", "web") eq "telnet")
+        if(AttrVal($name, "fritzbox-remote-phonebook-via", "tr064") eq "telnet")
         {
             ($err, $phonebook) = FB_CALLMONITOR_readRemotePhonebookViaTelnet($hash, $testPassword);
             
@@ -835,9 +815,8 @@ sub FB_CALLMONITOR_readPhonebook($;$)
                 Log3 $name, 2, "FB_CALLMONITOR ($name) - read $count_contacts contact".($count_contacts == 1 ? "" : "s")." from remote phonebook via telnet";
             }
         }
-        elsif(AttrVal($name, "fritzbox-remote-phonebook-via", "web") =~ /(web|tr064)/)
+        elsif(AttrVal($name, "fritzbox-remote-phonebook-via", "tr064") =~ /^(web|tr064)$/)
         {
-
             my $do_with = $1;
             $err = FB_CALLMONITOR_identifyPhoneBooksViaWeb($hash, $testPassword) if($do_with eq "web");
             $err = FB_CALLMONITOR_identifyPhoneBooksViaTR064($hash, $testPassword) if($do_with eq "tr064");
@@ -858,7 +837,7 @@ sub FB_CALLMONITOR_readPhonebook($;$)
             
             foreach my $phonebookId (sort keys %{$hash->{helper}{PHONEBOOK_NAMES}})
             {
-                if(exists($excludedIds{$phonebookId}))
+                if(exists($excludedIds{$phonebookId}) or exists($excludedIds{$hash->{helper}{PHONEBOOK_NAMES}{$phonebookId}}))
                 {
                     Log3 $name, 4, "FB_CALLMONITOR ($name) - skipping excluded phonebook id $phonebookId (".$hash->{helper}{PHONEBOOK_NAMES}{$phonebookId}.")";
                     next;
@@ -871,8 +850,7 @@ sub FB_CALLMONITOR_readPhonebook($;$)
                 
                 if(defined($err))
                 {
-                        Log3 $name, 2, "FB_CALLMONITOR ($name) - unable to retrieve phonebook \"".$hash->{helper}{PHONEBOOK_NAMES}{$phonebookId}."\" from FritzBox - $err";
-                        return "unable to retrieve phonebook \"".$hash->{helper}{PHONEBOOK_NAMES}{$phonebookId}."\" from FritzBox - $err";
+                    Log3 $name, 2, 'FB_CALLMONITOR ($name) - unable to retrieve phonebook "'.$hash->{helper}{PHONEBOOK_NAMES}{$phonebookId}.'" from FritzBox - '.$err;
                 }
                 else
                 {
@@ -881,11 +859,10 @@ sub FB_CALLMONITOR_readPhonebook($;$)
                     if(defined($err))
                     {
                         Log3 $name, 2, "FB_CALLMONITOR ($name) - could not parse remote phonebook ".$hash->{helper}{PHONEBOOK_NAMES}{$phonebookId}." - $err";
-                        return "could not parse remote phonebook ".$hash->{helper}{PHONEBOOK_NAMES}{$phonebookId}." - $err";
                     }
                     else
                     {
-                        Log3 $name, 2, "FB_CALLMONITOR ($name) - read $count_contacts contact".($count_contacts == 1 ? "" : "s")." from remote phonebook \"".$hash->{helper}{PHONEBOOK_NAMES}{$phonebookId}."\"";
+                        Log3 $name, 2, "FB_CALLMONITOR ($name) - read $count_contacts contact".($count_contacts == 1 ? "" : "s").' from remote phonebook "'.$hash->{helper}{PHONEBOOK_NAMES}{$phonebookId}.'"';
                     }
                 }
             }
@@ -937,43 +914,41 @@ sub FB_CALLMONITOR_readPhonebook($;$)
 # reads the FritzBox phonebook file and parses the entries
 sub FB_CALLMONITOR_parsePhonebook($$)
 {
-
     my ($hash, $phonebook) = @_;
     my $name = $hash->{NAME};
     my $contact;
     my $contact_name;
     my $number;
     my $count_contacts = 0;
-
-   
-    if($phonebook =~ /<contact/ and $phonebook =~ /<realName>/ and $phonebook =~ /<number/ and $phonebook =~ /<phonebook/ and $phonebook =~ /<\/phonebook>/) 
-    {
     
-        while($phonebook =~ m/<contact[^>]*>(.+?)<\/contact>/gs) 
+    if($phonebook =~ /<phonebooks>/ and $phonebook =~ /<phonebook[^>]+>/ and $phonebook =~ m,</phonebook>, and $phonebook =~ m,</phonebooks>,) 
+    {
+        if($phonebook =~ /<contact/ and $phonebook =~ /<realName>/ and $phonebook =~ /<number/)
         {
-            $contact = $1;
-             
-            if($contact =~ m/<realName>(.+?)<\/realName>/) 
+            while($phonebook =~ m,<contact[^>]*>(.+?)</contact>,gcs) 
             {
-                $contact_name = $1; 
-                
-                while($contact =~ m/<number[^>]*?type="([^<>"]+?)"[^<>]*?>([^<>"]+?)<\/number>/gs) 
+                $contact = $1;
+                 
+                if($contact =~ m,<realName>(.+?)</realName>,) 
                 {
-                    if($1 ne "intern" and $1 ne "memo") 
+                    $contact_name = $1; 
+                    
+                    while($contact =~ m,<number[^>]*?type="([^<>"]+?)"[^<>]*?>([^<>"]+?)</number>,gs) 
                     {
-                        $number = FB_CALLMONITOR_normalizePhoneNumber($hash, $2);
-                       
-                        $count_contacts++;
-                        Log3 $name, 4, "FB_CALLMONITOR ($name) - found $contact_name with number $number";
-                        $hash->{helper}{PHONEBOOK}{$number} = FB_CALLMONITOR_html2txt($contact_name) if(not defined($hash->{helper}{PHONEBOOK}{$number}));
-                        undef $number;
+                        if($1 ne "intern" and $1 ne "memo") 
+                        {
+                            $number = FB_CALLMONITOR_normalizePhoneNumber($hash, $2);
+                           
+                            $count_contacts++;
+                            Log3 $name, 4, "FB_CALLMONITOR ($name) - found $contact_name with number $number";
+                            $hash->{helper}{PHONEBOOK}{$number} = FB_CALLMONITOR_html2txt($contact_name) if(not defined($hash->{helper}{PHONEBOOK}{$number}));
+                            undef $number;
+                        }
                     }
+                    undef $contact_name;
                 }
-                undef $contact_name;
             }
         }
-        
-        undef $phonebook;
  
         return (undef, $count_contacts);
     }
@@ -1046,27 +1021,24 @@ sub FB_CALLMONITOR_loadTextFile($;$)
     my $name = $hash->{NAME};
     my $err;
     $file = AttrVal($hash->{NAME}, "reverse-search-text-file", "") unless(defined($file));
-  
-
+    
     if($file ne "" and -r $file)
     { 
         delete($hash->{helper}{TEXTFILE}) if(defined($hash->{helper}{TEXTFILE}));
   
         Log3 $hash->{NAME}, 3, "FB_CALLMONITOR ($name) - loading textfile $file";
         
-        ($err, @file) = FileRead($file);
+        ($err, @file) = FileRead({FileName => $file, ForceType => "file"});
         
         unless(defined($err) and $err)
         {      
             foreach my $line (@file)
             {
                 $line =~ s/#.*$//g;
-                $line =~ s/\/\/.*$//g;
+                $line =~ s,//.*$,,g;
                 
-                
-                if(not $line =~ /^\s*$/)
+                if((not $line =~ /^\s*$/) and $line =~ /,/)
                 {
-                
                     chomp $line;
                     @tmpline = split(/,/, $line,2);
                     if(@tmpline == 2)
@@ -1100,7 +1072,7 @@ sub FB_CALLMONITOR_loadTextFile($;$)
                     "# 45678,Boss",
                     "####"
                     );                     
-        $err = FileWrite($file,@tmpline);
+        $err = FileWrite({FileName => $file, ForceType => "file"},@tmpline);
         
         Log3 $name, 3, "FB_CALLMONITOR ($name) - unable to create textfile $file: $err" if(defined($err) and $err ne "");
     }
@@ -1286,12 +1258,12 @@ EOD
 
     my ($nonce, $realm);
     
-    if($data =~ /<Nonce>(.+?)<\/Nonce>/i)
+    if($data =~ m,<Nonce>(.+?)</Nonce>,i)
     {
         $nonce = $1;
     }
     
-    if($data =~ /<Realm>(.+?)<\/Realm>/i)
+    if($data =~ m,<Realm>(.+?)</Realm>,i)
     {
         $realm = $1;
     }
@@ -1332,6 +1304,9 @@ EOD
     
     ($err, $data) = HttpUtils_BlockingGet($param);
 
+    $err = "" unless(defined($err));
+    $data = "" unless(defined($data));
+    
     if ($err ne "")
     {
         Log3 $name, 3, "FB_CALLMONITOR ($name) - error while requesting phonebook id's: $err";
@@ -1347,7 +1322,7 @@ EOD
     Log3 $name, 5, "FB_CALLMONITOR ($name) - received response:\n$data";
 
     # if status is still "unauthenticated" => user/password combination is wrong
-    if($data =~ /<Status>Unauthenticated<\/Status>/i)
+    if($data =~ m,<Status>Unauthenticated</Status>,i)
     {
         $hash->{helper}{PWD_NEEDED} = 1;
         Log3 $name, 3, "FB_CALLMONITOR ($name) - unable to login via TR-064, wrong user/password";
@@ -1357,7 +1332,7 @@ EOD
     my @phonebooks;
 
     # read list response (TR-064 id's: "0,1,2,...")
-    if($data =~ m/<NewPhonebookList>(.+?)<\/NewPhonebookList>/si)
+    if($data =~ m,<NewPhonebookList>(.+?)</NewPhonebookList>,si)
     {
         @phonebooks = split(",",$1);
         Log3 $name, 3, "FB_CALLMONITOR ($name) - found ".scalar @phonebooks." phonebooks";
@@ -1417,20 +1392,19 @@ EOD
 
         Log3 $name, 5, "FB_CALLMONITOR ($name) - received response with phonebook description for id $_:\n$data";
 
-        if($data =~ m/<NewPhonebookName>(.+?)<\/NewPhonebookName>.*?<NewPhonebookURL>.*?pbid=(\d+)\D*?<\/NewPhonebookURL>/si)
+        if($data =~ m,<NewPhonebookName>(.+?)</NewPhonebookName>.*?<NewPhonebookURL>.*?pbid=(\d+)\D*?</NewPhonebookURL>,si)
         {
             $phb_id = $2;
             $hash->{helper}{PHONEBOOK_NAMES}{$phb_id} = $1;
             Log3 $name, 4, "FB_CALLMONITOR ($name) - found phonebook: $1 - $2";
         }
 
-        if($data =~ m/<NewPhonebookURL>(.*?)<\/NewPhonebookURL>/i)
+        if($data =~ m,<NewPhonebookURL>(.*?)</NewPhonebookURL>,i)
         {
             $hash->{helper}{PHONEBOOK_URL}{$phb_id} = $1;
             $hash->{helper}{PHONEBOOK_URL}{$phb_id} =~ s/&amp;/&/g;
             Log3 $name, 4, "FB_CALLMONITOR ($name) - found phonebook url for id $phb_id: ".$hash->{helper}{PHONEBOOK_URL}{$phb_id};
         }
-
     }
 
     Log3 $name, 4, "FB_CALLMONITOR ($name) - phonebooks found: ".join(", ", map { $hash->{helper}{PHONEBOOK_NAMES}{$_}." (id: $_)" } sort keys %{$hash->{helper}{PHONEBOOK_NAMES}}) if(exists($hash->{helper}{PHONEBOOK_NAMES}));
@@ -1531,14 +1505,14 @@ sub FB_CALLMONITOR_identifyPhoneBooksViaWeb($;$)
 
     Log3 $name, 4, "FB_CALLMONITOR ($name) - phonebooks successfully identified";
     
-    if($data =~ m/<form[^>]*name="mainform"[^>]*>(.+?)<\/form>/s)
+    if($data =~ m,<form[^>]*name="mainform"[^>]*>(.+?)</form>,s)
     {
         $data = $1;
     }
 
     delete($hash->{helper}{PHONEBOOK_NAMES}) if(exists($hash->{helper}{PHONEBOOK_NAMES}));
     
-    while($data =~ /<label[^>]*for="uiBookid:(\d+)"[^>]*>\s*(.+?)\s*<\/label>/gcs)
+    while($data =~ m,<label[^>]*for="uiBookid:(\d+)"[^>]*>\s*(.+?)\s*</label>,gcs)
     {
         $hash->{helper}{PHONEBOOK_NAMES}{$1} = $2;
         Log3 $name, 4, "FB_CALLMONITOR ($name) - found phonebook: $2";
@@ -1627,7 +1601,6 @@ sub FB_CALLMONITOR_readRemotePhonebookViaWeb($$;$)
     delete($hash->{helper}{PWD_NEEDED}) if(exists($hash->{helper}{PWD_NEEDED}));
 
     return (undef, $phonebook); 
-    
 }
 
 #####################################
@@ -1720,7 +1693,8 @@ sub FB_CALLMONITOR_readPassword($;$)
     }
 }
 
-
+#####################################
+# normalizes a formated phone number
 sub FB_CALLMONITOR_normalizePhoneNumber($$)
 {
 
@@ -1730,24 +1704,20 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
     my $area_code = AttrVal($name, "local-area-code", "");
     my $country_code = AttrVal($name, "country-code", "0049");
     
-
     $number =~ s/\s//g;                             # Remove spaces
     $number =~ s/^(\#[0-9]{1,10}\#)//g;             # Remove phone control codes
     $number =~ s/^\+/00/g;                          # Convert leading + to 00 country extension
     $number =~ s/[^*\d]//g if(not $number =~ /@/);  # Remove anything else isn't a number if it is no VoIP number
     $number =~ s/^$country_code/0/g;                # Replace own country code with leading 0
 
-
-
     if(not $number =~ /^0/ and not $number =~ /@/ and $area_code =~ /^0[1-9]\d+$/) 
     {
        $number = $area_code.$number;
-    }   
-
-
+    }
+    
     return $number;
 }
-  
+
 1;
 
 =pod
@@ -1756,9 +1726,8 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
 <a name="FB_CALLMONITOR"></a>
 <h3>FB_CALLMONITOR</h3>
 <ul>
-  <tr><td>
   The FB_CALLMONITOR module connects to a AVM FritzBox Fon and listens for telephone
-  <a href="#FB_CALLMONITORevents">events</a> (Receiving incoming call, Making a call)
+  <a href="#FB_CALLMONITOR_events">events</a> (Receiving incoming call, Making a call)
   <br><br>
   In order to use this module with fhem you <b>must</b> enable the Callmonitor feature via 
   telephone shortcode.<br><br>
@@ -1775,7 +1744,7 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
   This module work with any FritzBox Fon model.
   <br><br>
   
-  <a name="FB_CALLMONITORdefine"></a>
+  <a name="FB_CALLMONITOR_define"></a>
   <b>Define</b>
   <ul>
     <code>define &lt;name&gt; FB_CALLMONITOR &lt;ip-address&gt;[:port]</code><br>
@@ -1784,17 +1753,17 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
     <br>
   </ul>
   <br>
-  <a name="FB_CALLMONITORset"></a>
+  <a name="FB_CALLMONITOR_set"></a>
   <b>Set</b>
   <ul>
-  <li><b>rereadCache</b> - Reloads the cache file if configured (see attribute: <a href="#reverse-search-cache-file">reverse-search-cache-file</a>)</li>
+  <li><b>rereadCache</b> - Reloads the cache file if configured (see attribute: <a href="#FB_CALLMONITOR_reverse-search-cache-file">reverse-search-cache-file</a>)</li>
   <li><b>rereadPhonebook</b> - Reloads the FritzBox phonebook (from given file, via telnet or directly if available)</li>
-  <li><b>rereadTextfile</b> - Reloads the user given textfile if configured (see attribute: <a href="#reverse-search-text-file">reverse-search-text-file</a>)</li>
-  <li><b>password</b> - set the FritzBox password (only available when password is really needed for network access to FritzBox phonebook, see attribute <a href="#fritzbox-remote-phonebook">fritzbox-remote-phonebook</a>)</li>
+  <li><b>rereadTextfile</b> - Reloads the user given textfile if configured (see attribute: <a href="#FB_CALLMONITOR_reverse-search-text-file">reverse-search-text-file</a>)</li>
+  <li><b>password</b> - set the FritzBox password (only available when password is really needed for network access to FritzBox phonebook, see attribute <a href="#FB_CALLMONITOR_fritzbox-remote-phonebook">fritzbox-remote-phonebook</a>)</li>
   </ul>
   <br>
 
-  <a name="FB_CALLMONITORget"></a>
+  <a name="FB_CALLMONITOR_get"></a>
   <b>Get</b>
   <ul>
   <li><b>search &lt;phone-number&gt;</b> - returns the name of the given number via reverse-search (internal phonebook, cache or internet lookup)</li>
@@ -1805,30 +1774,42 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
   </ul>
   <br>
 
-  <a name="FB_CALLMONITORattr"></a>
+  <a name="FB_CALLMONITOR_attr"></a>
   <b>Attributes</b><br><br>
   <ul>
     <li><a href="#do_not_notify">do_not_notify</a></li>
     <li><a href="#readingFnAttributes">readingFnAttributes</a></li><br>
-    <li><a name="disable">disable</a></li>
+    <li><a name="FB_CALLMONITOR_disable">disable</a></li>
 	Optional attribute to disable the Callmonitor. When disabled, no phone events can be detected.
 	<br><br>
 	Possible values: 0 => Callmonitor is activated, 1 => Callmonitor is deactivated.<br>
     Default Value is 0 (activated)<br><br>
-    <li><a name="reverse-search">reverse-search</a> (phonebook,textfile,klicktel.de,dasoertliche.de,search.ch,dasschnelle.at)</li>
+    <li><a name="FB_CALLMONITOR_disabledForIntervals">disabledForIntervals</a> HH:MM-HH:MM HH:MM-HH-MM...</li>
+    Optional attribute to disable FB_CALLMONITOR during specific time intervals. The attribute contains a space separated list of HH:MM tupels.
+    If the current time is between any of these time specifications, no phone events will be processed.
+    Instead of HH:MM you can also specify HH or HH:MM:SS. 
+    <br><br>To specify an interval spawning midnight, you have to specify two intervals, e.g.:
+    <pre>23:00-24:00 00:00-01:00</pre>
+    Default Value is <i>empty</i> (no intervals defined, FB_CALLMONITOR is always active)<br><br>
+    <li><a name="FB_CALLMONITOR_answMachine-is-missed-call">answMachine-is-missed-call</a></li>
+    If activated, a incoming call, which is answered by an answering machine, will be treated as missed call (see <a href="#FB_CALLMONITOR_events">Generated Events</a>).
+    <br><br>
+    Possible values: 0 => disabled, 1 => enabled (answering machine calls will be treated as "missed call").<br>
+    Default Value is 0 (disabled)<br><br>
+    <li><a name="FB_CALLMONITOR_reverse-search">reverse-search</a> (phonebook,textfile,klicktel.de,dasoertliche.de,search.ch,dasschnelle.at)</li>
     Enables the reverse searching of the external number (at dial and call receiving).
     This attribute contains a comma separated list of providers which should be used to reverse search a name to a specific phone number. 
     The reverse search process will try to lookup the name according to the order of providers given in this attribute (from left to right). The first valid result from the given provider order will be used as reverse search result.
     <br><br>per default, reverse search is disabled.<br><br>
-    <li><a name="reverse-search-cache">reverse-search-cache</a></li>
+    <li><a name="FB_CALLMONITOR_reverse-search-cache">reverse-search-cache</a></li>
     If this attribute is activated each reverse-search result from an internet provider is saved in an internal cache
     and will be used instead of requesting each internet provider every time with the same number. The cache only contains reverse-search results from internet providers.<br><br>
     Possible values: 0 => off , 1 => on<br>
     Default Value is 0 (off)<br><br>
-    <li><a name="reverse-search-cache-file">reverse-search-cache-file</a> &lt;file&gt;</li>
+    <li><a name="FB_CALLMONITOR_reverse-search-cache-file">reverse-search-cache-file</a> &lt;file&gt;</li>
     Write the internal reverse-search-cache to the given file and use it next time FHEM starts.
     So all reverse search results are persistent written to disk and will be used instantly after FHEM starts.<br><br>
-    <li><a name="reverse-search-text-file">reverse-search-text-file</a> &lt;file&gt;</li>
+    <li><a name="FB_CALLMONITOR_reverse-search-text-file">reverse-search-text-file</a> &lt;file&gt;</li>
     Define a custom list of numbers and their according names in a textfile. This file uses comma separated values per line in form of:
     <pre>
     &lt;number1&gt;,&lt;name1&gt;
@@ -1838,40 +1819,40 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
     </pre>
     You can use the hash sign to comment entries in this file. If the specified file does not exists, it will be created by FHEM.
     <br><br>
-    <li><a name="reverse-search-phonebook-file">reverse-search-phonebook-file</a> &lt;file&gt;</li>
+    <li><a name="FB_CALLMONITOR_reverse-search-phonebook-file">reverse-search-phonebook-file</a> &lt;file&gt;</li>
     This attribute can be used to specify the (full) path to a phonebook file in FritzBox format (XML structure). Using this option it is possible to use the phonebook of a FritzBox even without FHEM running on a Fritzbox.
     The phonebook file can be obtained by an export via FritzBox web UI<br><br>
     Default value is /var/flash/phonebook (phonebook filepath on FritzBox)<br><br>
-    <li><a name="remove-leading-zero">remove-leading-zero</a></li>
+    <li><a name="FB_CALLMONITOR_remove-leading-zero">remove-leading-zero</a></li>
     If this attribute is activated, a leading zero will be removed from the external number (e.g. in telefon systems).<br><br>
     Possible values: 0 => off , 1 => on<br>
     Default Value is 0 (off)<br><br>
-    <li><a name="unique-call-ids">unique-call-ids</a></li>
+    <li><a name="FB_CALLMONITOR_unique-call-ids">unique-call-ids</a></li>
     If this attribute is activated, each call will use a biunique call id. So each call can be separated from previous calls in the past.<br><br>
     Possible values: 0 => off , 1 => on<br>
     Default Value is 0 (off)<br><br>
-    <li><a name="local-area-code">local-area-code</a></li>
+    <li><a name="FB_CALLMONITOR_local-area-code">local-area-code</a></li>
     Use the given local area code for reverse search in case of a local call (e.g. 0228 for Bonn, Germany)<br><br>
-    <li><a name="country-code">country-code</a></li>
+    <li><a name="FB_CALLMONITOR_country-code">country-code</a></li>
     Your local country code. This is needed to identify phonenumbers in your phonebook with your local country code as a national phone number instead of an international one as well as handling Call-By-Call numbers in german speaking countries (e.g. 0049 for Germany, 0043 for Austria or 001 for USA)<br><br>
     Default Value is 0049 (Germany)<br><br>
-    <li><a name="fritzbox-remote-phonebook">fritzbox-remote-phonebook</a></li>
+    <li><a name="FB_CALLMONITOR_fritzbox-remote-phonebook">fritzbox-remote-phonebook</a></li>
     If this attribute is activated, the phonebook should be obtained direct from the FritzBox via remote network connection (in case FHEM is not running on a FritzBox). This is only possible if a password (and depending on configuration a username as well) is configured.<br><br>
     Possible values: 0 => off , 1 => on (use remote telnet connection to obtain FritzBox phonebook)<br>
     Default Value is 0 (off)<br><br>
-    <li><a name="fritzbox-remote-phonebook-via">fritzbox-remote-phonebook-via</a></li>
+    <li><a name="FB_CALLMONITOR_fritzbox-remote-phonebook-via">fritzbox-remote-phonebook-via</a></li>
     Set the method how the phonebook should be requested via network. When set to "web", the phonebook is obtained from the web interface via HTTP. When set to "telnet", it uses a telnet connection to login and retrieve the phonebook (telnet must be activated via dial shortcode #96*7*). When set to "tr064" the phonebook is obtained via TR-064 SOAP request.<br><br>
     Possible values: web,telnet,tr064<br>
-    Default Value is web (retrieve phonebooks via web interface)<br><br>
-    <li><a name="fritzbox-remote-phonebook-via">fritzbox-remote-phonebook-exclude</a></li>
-    A comma separated list of phonebook id's which should be excluded when retrieving all possible phonebooks via web method (see attribute <i>fritzbox-remote-phonebook-via</i>). All list possible values is provided by <a href="#FB_CALLMONITORget">get command</a> <i>showPhonebookIds</i>. This attribute is not applicable when using telnet method to obtain remote phonebook.<br><br>
+    Default Value is tr064 (retrieve phonebooks via TR-064 interface)<br><br>
+    <li><a name="FB_CALLMONITOR_fritzbox-remote-phonebook-exclude">fritzbox-remote-phonebook-exclude</a></li>
+    A comma separated list of phonebook id's or names which should be excluded when retrieving all possible phonebooks via web or tr064 method (see attribute <i>fritzbox-remote-phonebook-via</i>). All list possible values is provided by <a href="#FB_CALLMONITOR_get">get command</a> <i>showPhonebookIds</i>. This attribute is not applicable when using telnet method to obtain remote phonebook.<br><br>
     Default Value: <i>empty</i> (all phonebooks should be used, no exclusions)<br><br>
-    <li><a name="fritzbox-user">fritzbox-user</a></li>
+    <li><a name="FB_CALLMONITOR_fritzbox-user">fritzbox-user</a></li>
     Use the given user for remote connect to obtain the phonebook. This attribute is only needed, if you use multiple users on your FritzBox.<br><br>
     </ul>
   <br>
  
-  <a name="FB_CALLMONITORevents"></a>
+  <a name="FB_CALLMONITOR_events"></a>
   <b>Generated Events:</b><br><br>
   <ul>
   <li><b>event</b> (call|ring|connect|disconnect) - which event in detail was triggerd</li>
@@ -1883,8 +1864,7 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
   <li><b>external_connection</b> - The external connection (fixed line, VoIP account) which is used to take or perform the call</li>
   <li><b>call_duration</b> - The call duration in seconds. Is only generated at a disconnect event. The value 0 means, the call was not taken by anybody.</li>
   <li><b>call_id</b> - The call identification number to separate events of two or more different calls at the same time. This id number is equal for all events relating to one specific call.</li>
-  <li><b>missed_call</b> - This event will be raised in case of a missing incoming call. If available, also the name of the calling number will be displayed.</li>
-  <li><b>missed_call_line</b> - Will be raised together with "missed_call". It shows the number of the internal line which received the missed call.</li> 
+  <li><b>missed_call</b> - This event will be raised in case of a incoming call, which is not answered. If available, also the name of the calling number will be displayed.</li>
   </ul>
   <br>
   <b>Legal Notice:</b><br><br>
@@ -1900,9 +1880,8 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
 <a name="FB_CALLMONITOR"></a>
 <h3>FB_CALLMONITOR</h3>
 <ul>
-  <tr><td>
   Das Modul FB_CALLMONITOR verbindet sich zu einer AVM FritzBox Fon und verarbeitet
-  Telefonie-<a href="#FB_CALLMONITORevents">Ereignisse</a>.(eingehende & ausgehende Telefonate)
+  Telefonie-<a href="#FB_CALLMONITOR_events">Ereignisse</a>.(eingehende & ausgehende Telefonate)
   <br><br>
   Um dieses Modul nutzen zu k&ouml;nnen, muss der Callmonitor via Kurzwahl mit einem Telefon aktiviert werden.
  .<br><br>
@@ -1918,7 +1897,7 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
   Dieses Modul funktioniert mit allen Fritz!Box Modellen, welche Telefonie unterst&uuml;tzen (Namenszusatz: Fon).
   <br><br>
   
-  <a name="FB_CALLMONITORdefine"></a>
+  <a name="FB_CALLMONITOR_define"></a>
   <b>Definition</b>
   <ul>
     <code>define &lt;name&gt; FB_CALLMONITOR &lt;IP-Addresse&gt;[:Port]</code><br>
@@ -1927,17 +1906,17 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
     <br>
   </ul>
   <br>
-  <a name="FB_CALLMONITORset"></a>
+  <a name="FB_CALLMONITOR_set"></a>
   <b>Set-Kommandos</b>
   <ul>
-  <li><b>rereadCache</b> - Liest den Cache aus der Datei neu ein (sofern konfiguriert, siehe dazu Attribut <a href="#reverse-search-cache-file">reverse-search-cache-file</a>)</li>
+  <li><b>rereadCache</b> - Liest den Cache aus der Datei neu ein (sofern konfiguriert, siehe dazu Attribut <a href="#FB_CALLMONITOR_reverse-search-cache-file">reverse-search-cache-file</a>)</li>
   <li><b>rereadPhonebook</b> - Liest das Telefonbuch der FritzBox neu ein (per Datei, Telnet oder direkt lokal)</li>
-  <li><b>rereadTextfile</b> - Liest die nutzereigene Textdatei neu ein (sofern konfiguriert, siehe dazu Attribut <a href="#reverse-search-text-file">reverse-search-text-file</a>)</li>
-  <li><b>password</b> - speichert das FritzBox Passwort, welches f&uuml;r das Einlesen aller Telefonb&uuml;cher direkt von der FritzBox ben&ouml;tigt wird. Dieses Kommando ist nur verf&uuml;gbar, wenn ein Passwort ben&ouml;tigt wird um das Telefonbuch via Netzwerk einzulesen, siehe dazu Attribut <a href="#fritzbox-remote-phonebook">fritzbox-remote-phonebook</a>.</li>
+  <li><b>rereadTextfile</b> - Liest die nutzereigene Textdatei neu ein (sofern konfiguriert, siehe dazu Attribut <a href="#FB_CALLMONITOR_reverse-search-text-file">reverse-search-text-file</a>)</li>
+  <li><b>password</b> - speichert das FritzBox Passwort, welches f&uuml;r das Einlesen aller Telefonb&uuml;cher direkt von der FritzBox ben&ouml;tigt wird. Dieses Kommando ist nur verf&uuml;gbar, wenn ein Passwort ben&ouml;tigt wird um das Telefonbuch via Netzwerk einzulesen, siehe dazu Attribut <a href="#FB_CALLMONITOR_fritzbox-remote-phonebook">fritzbox-remote-phonebook</a>.</li>
   </ul>
   <br>
 
-  <a name="FB_CALLMONITORget"></a>
+  <a name="FB_CALLMONITOR_get"></a>
   <b>Get-Kommandos</b>
   <ul>
   <li><b>search &lt;Rufnummer&gt;</b> - gibt den Namen der Telefonnummer zur&uuml;ck (aus Cache, Telefonbuch oder R&uuml;ckw&auml;rtssuche)</li>
@@ -1948,38 +1927,51 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
   </ul>
   <br>
 
-  <a name="FB_CALLMONITORattr"></a>
+  <a name="FB_CALLMONITOR_attr"></a>
   <b>Attribute</b><br><br>
   <ul>
     <li><a href="#do_not_notify">do_not_notify</a></li>
     <li><a href="#readingFnAttributes">readingFnAttributes</a></li><br>
-    <li><a name="disable">disable</a></li>
+    <li><a name="FB_CALLMONITOR_disable">disable</a></li>
 	Optionales Attribut zur Deaktivierung des Callmonitors. Es k&ouml;nnen dann keine Anruf-Events mehr erkannt und erzeugt werden.
 	<br><br>
 	M&ouml;gliche Werte: 0 => Callmonitor ist aktiv, 1 => Callmonitor ist deaktiviert.<br>
     Standardwert ist 0 (aktiv)<br><br>
-    <li><a name="reverse-search">reverse-search</a> (phonebook,klicktel.de,dasoertliche.de,search.ch,dasschnelle.at)</li>
+    <li><a name="FB_CALLMONITOR_disabledForIntervals">disabledForIntervals</a></li>
+    Optionales Attribut zur Deaktivierung des Callmonitors innerhalb von bestimmten Zeitintervallen.
+    Das Argument ist eine Leerzeichen-getrennte Liste von Minuszeichen-getrennten HH:MM P&auml;rchen (Stunde : Minute).
+    Falls die aktuelle Uhrzeit zwischen diese Werte f&auml;llt, dann wird die Verarbeitung, wie bei <a href="#FB_CALLMONITOR_disable">disable</a>, ausgesetzt.
+    Statt HH:MM kann man auch HH oder HH:MM:SS angeben.<br><br>
+    Um einen Intervall um Mitternacht zu spezifizieren, muss man zwei einzelne Intervalle angeben, z.Bsp.:
+    <pre>23:00-24:00 00:00-01:00</pre>
+    Standardwert ist <i>nicht gesetzt</i> (dauerhaft aktiv)<br><br>
+    <li><a name="FB_CALLMONITOR_answMachine-is-missed-call">answMachine-is-missed-call</a></li>
+    Sofern aktiviert, werden Anrufe, welche durch einen internen Anrufbeantworter beantwortet werden, als "unbeantworteter Anruf" gewertet (siehe Reading "missed_call" unter <a href="#FB_CALLMONITOR_events">Generated Events</a>).
+    <br><br>
+    M&ouml;gliche Werte: 0 => deaktiviert, 1 => aktiviert (Anrufbeantworter gilt als "unbeantworteter Anruf").<br>
+    Standardwert ist 0 (deaktiviert)<br><br>
+    <li><a name="FB_CALLMONITOR_reverse-search">reverse-search</a> (phonebook,klicktel.de,dasoertliche.de,search.ch,dasschnelle.at)</li>
     Aktiviert die R&uuml;ckw&auml;rtssuche der externen Rufnummer (bei eingehenden/ausgehenden Anrufen).
     Dieses Attribut enth&auml;lt eine komma-separierte Liste mit allen Anbietern die f&uuml;r eine R&uuml;ckw&auml;rtssuche benutzt werden sollen.
-    Die R&uuml;ckw&auml;rtssuche prüft in der gegebenen Reihenfolge (von links nach rechts) ob der entsprechende Anbieter (Telefonbuch, Textdatei oder Internetanbieter) die Rufnummer auflösen können.
-    Das erste Resultat was dabei gefunden wird, wird als Ergebnis für die R&uuml;ckw&auml;rtssuche verwendet.
+    Die R&uuml;ckw&auml;rtssuche pr&uuml;ft in der gegebenen Reihenfolge (von links nach rechts) ob der entsprechende Anbieter (Telefonbuch, Textdatei oder Internetanbieter) die Rufnummer aufl&ouml;sen k&ouml;nnen.
+    Das erste Resultat was dabei gefunden wird, wird als Ergebnis f&uuml;r die R&uuml;ckw&auml;rtssuche verwendet.
     Es ist m&ouml;glich einen bestimmten Suchanbieter zu verwenden, welcher f&uuml;r die R&uuml;ckw&auml;rtssuche verwendet werden soll.
     Der Anbieter "textfile" verwendet die nutzereigene Textdatei, sofern definiert (siehe Attribut reverse-search-text-file).
     Der Anbieter "phonebook" verwendet das Telefonbuch der FritzBox (siehe Attribut reverse-search-phonebook-file oder fritzbox-remote-phonebook).<br><br>
     Standardm&auml;&szlig;ig ist diese Funktion deaktiviert (nicht gesetzt)<br><br>
-    <li><a name="reverse-search-cache">reverse-search-cache</a></li>
+    <li><a name="FB_CALLMONITOR_reverse-search-cache">reverse-search-cache</a></li>
     Wenn dieses Attribut gesetzt ist, werden alle Ergebisse von Internetanbietern in einem modul-internen Cache gespeichert
     und alle existierenden Ergebnisse aus dem Cache genutzt anstatt eine erneute Anfrage bei einem Internet-Anbieter durchzuf&uuml;hren. 
     Der Cache ist immer an die Internetanbieter gekoppelt und speichert nur Ergebnisse von Internetanbietern.<br><br>
     M&ouml;gliche Werte: 0 => deaktiviert , 1 => aktiviert<br>
     Standardwert ist 0 (deaktiviert)<br><br>
-    <li><a name="reverse-search-cache-file">reverse-search-cache-file</a> &lt;Dateipfad&gt;</li>
+    <li><a name="FB_CALLMONITOR_reverse-search-cache-file">reverse-search-cache-file</a> &lt;Dateipfad&gt;</li>
     Da der Cache nur im Arbeitsspeicher existiert, ist er nicht persistent und geht beim stoppen von FHEM verloren.
     Mit diesem Parameter werden alle Cache-Ergebnisse in eine Textdatei geschrieben (z.B. /usr/share/fhem/telefonbuch.txt) 
     und beim n&auml;chsten Start von FHEM wieder in den Cache geladen und genutzt.
     <br><br>
-    <li><a name="reverse-search-cache-file">reverse-search-text-file</a> &lt;Dateipfad&gt;</li>
-    L&auml;dt eine nutzereigene Textdatei welche eine eigene Namenszuordnungen für Rufnummern enth&auml;lt. Diese Datei enth&auml;lt zeilenweise komma-separierte Werte nach folgendem Schema:
+    <li><a name="FB_CALLMONITOR_reverse-search-cache-file">reverse-search-text-file</a> &lt;Dateipfad&gt;</li>
+    L&auml;dt eine nutzereigene Textdatei welche eine eigene Namenszuordnungen f&uuml;r Rufnummern enth&auml;lt. Diese Datei enth&auml;lt zeilenweise komma-separierte Werte nach folgendem Schema:
     <pre>
     &lt;Nummer1&gt;,&lt;Name1&gt;
     &lt;Nummer2&gt;,&lt;Name2&gt;
@@ -1988,54 +1980,53 @@ sub FB_CALLMONITOR_normalizePhoneNumber($$)
     </pre>
     Die Datei kann dabei auch Kommentar-Zeilen enthalten mit # vorangestellt. Sollte die Datei nicht existieren, wird sie durch FHEM erstellt.
     <br><br>
-    <li><a name="reverse-search-phonebook-file">reverse-search-phonebook-file</a> &lt;Dateipfad&gt</li>
+    <li><a name="FB_CALLMONITOR_reverse-search-phonebook-file">reverse-search-phonebook-file</a> &lt;Dateipfad&gt</li>
     Mit diesem Attribut kann man optional den Pfad zu einer Datei angeben, welche ein Telefonbuch im FritzBox-Format (XML-Struktur) enth&auml;lt.
     Dadurch ist es m&ouml;glich ein FritzBox-Telefonbuch zu verwenden, ohne das FHEM auf einer FritzBox laufen muss.
     Sofern FHEM auf einer FritzBox l&auml;uft (und nichts abweichendes angegeben wurde), wird das interne File /var/flash/phonebook verwendet. Alternativ kann man das Telefonbuch in der FritzBox-Weboberfl&auml;che exportieren und dieses verwenden<br><br>
     Standardwert ist /var/flash/phonebook (entspricht dem Pfad auf einer FritzBox)<br><br>
-    <li><a name="remove-leading-zero">remove-leading-zero</a></li>
+    <li><a name="FB_CALLMONITOR_remove-leading-zero">remove-leading-zero</a></li>
     Wenn dieses Attribut aktiviert ist, wird die f&uuml;hrende Null aus der externen Rufnummer (bei eingehenden & abgehenden Anrufen) entfernt. Dies ist z.B. notwendig bei Telefonanlagen.<br><br>
     M&ouml;gliche Werte: 0 => deaktiviert , 1 => aktiviert<br>
     Standardwert ist 0 (deaktiviert)<br><br>
-    <li><a name="unique-call-ids">unique-call-ids</a></li>
+    <li><a name="FB_CALLMONITOR_unique-call-ids">unique-call-ids</a></li>
     Wenn dieses Attribut aktiviert ist, wird f&uuml;r jedes Gespr&auml;ch eine eineindeutige Identifizierungsnummer verwendet. Dadurch lassen sich auch bereits beendete Gespr&auml;che voneinander unterscheiden. Dies ist z.B. notwendig bei der Verarbeitung der Events durch eine Datenbank.<br><br>
     M&ouml;gliche Werte: 0 => deaktiviert , 1 => aktiviert<br>
     Standardwert ist 0 (deaktiviert)<br><br>
-    <li><a name="local-area-code">local-area-code</a></li>
+    <li><a name="FB_CALLMONITOR_local-area-code">local-area-code</a></li>
     Verwendet die gesetze Vorwahlnummer bei R&uuml;ckw&auml;rtssuchen von Ortsgespr&auml;chen (z.B. 0228 f&uuml;r Bonn)<br><br>
-    <li><a name="country-code">country-code</a></li>
+    <li><a name="FB_CALLMONITOR_country-code">country-code</a></li>
     Die Landesvorwahl wird ben&ouml;tigt um Telefonbucheintr&auml;ge mit lokaler Landesvorwahl als Inlands-Rufnummern, als auch um Call-By-Call-Vorwahlen richtig zu erkennen (z.B. 0049 f&uuml;r Deutschland, 0043 f&uuml;r &Ouml;sterreich oder 001 f&uuml;r USA).<br><br>
     Standardwert ist 0049 (Deutschland)<br><br>
-    <li><a name="fritzbox-remote-phonebook">fritzbox-remote-phonebook</a></li>
+    <li><a name="FB_CALLMONITOR_fritzbox-remote-phonebook">fritzbox-remote-phonebook</a></li>
     Wenn dieses Attribut aktiviert ist, wird das FritzBox Telefonbuch direkt von der FritzBox gelesen. Dazu ist das FritzBox Passwort und je nach FritzBox Konfiguration auch ein Username notwendig, der in den entsprechenden Attributen konfiguriert sein muss.<br><br>
     M&ouml;gliche Werte: 0 => deaktiviert , 1 => aktiviert<br>
     Standardwert ist 0 (deaktiviert)<br><br>  
-    <li><a name="fritzbox-remote-phonebook-via">fritzbox-remote-phonebook-via</a></li>
+    <li><a name="FB_CALLMONITOR_fritzbox-remote-phonebook-via">fritzbox-remote-phonebook-via</a></li>
     Setzt die Methode mit der das Telefonbuch von der FritzBox abgefragt werden soll. Bei der Methode "web", werden alle verf&uuml;gbaren Telefonb&uuml;cher (lokales sowie alle konfigurierten Online-Telefonb&uuml;cher) &uuml;ber die Web-Oberfl&auml;che eingelesen. Bei der Methode "telnet" wird eine Telnet-Verbindung zur FritzBox aufgebaut um das lokale Telefonbuch abzufragen (keine Online-Telefonb&uuml;cher). Dazu muss die Telnet-Funktion aktiviert sein (Telefon Kurzwahl: #96*7*). Bei der Methode "tr064" werden alle verf&uuml;gbaren Telefonb&uuml;cher &uuml;ber die TR-064 SOAP Schnittstelle ausgelesen. <br><br>
     M&ouml;gliche Werte: web,telnet,tr064<br>
-    Standardwert ist "web" (Abfrage aller verf&uuml;gbaren Telefonb&uuml;cher &uuml;ber die Web-Oberfl&auml;che)<br><br>
-    <li><a name="fritzbox-remote-phonebook-via">fritzbox-remote-phonebook-exclude</a></li>
-    Eine komma-separierte Liste von Telefonbuch-ID's welche beim einlesen &uuml;bersprungen werden sollen. Dieses Attribut greift nur beim einlesen der Telefonb&uuml;cher via "web"-Methode (siehe Attribut <i>fritzbox-remote-phonebook-via</i>). Eine Liste aller m&ouml;glichen Werte kann &uuml;ber das <a href="#FB_CALLMONITORget">Get-Kommando</a> <i>showPhonebookIds</i> angezeigt werden.<br><br>
+    Standardwert ist "tr064" (Abfrage aller verf&uuml;gbaren Telefonb&uuml;cher &uuml;ber die TR-064-Schnittstelle)<br><br>
+    <li><a name="FB_CALLMONITOR_fritzbox-remote-phonebook-exclude">fritzbox-remote-phonebook-exclude</a></li>
+    Eine komma-separierte Liste von Telefonbuch-ID's oder Namen welche beim einlesen &uuml;bersprungen werden sollen. Dieses Attribut greift nur beim einlesen der Telefonb&uuml;cher via "web"- oder "tr064"-Methode (siehe Attribut <i>fritzbox-remote-phonebook-via</i>). Eine Liste aller m&ouml;glichen Werte kann &uuml;ber das <a href="#FB_CALLMONITOR_get">Get-Kommando</a> <i>showPhonebookIds</i> angezeigt werden.<br><br>
     Standardm&auml;&szlig;ig ist diese Funktion deaktiviert (alle Telefonb&uuml;cher werden eingelesen)<br><br>
-    <li><a name="fritzbox-user">fritzbox-user</a></li>
+    <li><a name="FB_CALLMONITOR_fritzbox-user">fritzbox-user</a></li>
     Der Username f&uuml;r das Telnet-Interface, sofern das Telefonbuch direkt von der FritzBox geladen werden soll (Attribut: fritzbox-remote-phonebook). Dieses Attribut ist nur notwendig, wenn mehrere Benutzer auf der FritzBox konfiguriert sind.<br><br>
     </ul>
   <br>
  
-  <a name="FB_CALLMONITORevents"></a>
+  <a name="FB_CALLMONITOR_events"></a>
   <b>Generierte Events:</b><br><br>
   <ul>
   <li><b>event</b> (call|ring|connect|disconnect) - Welches Event wurde genau ausgel&ouml;st. ("call" =&gt; ausgehender Rufversuch, "ring" =&gt; eingehender Rufversuch, "connect" =&gt; Gespr&auml;ch ist zustande gekommen, "disconnect" =&gt; es wurde aufgelegt)</li>
   <li><b>direction</b> (incoming|outgoing) - Die Anruf-Richtung ("incoming" =&gt; eingehender Anruf, "outgoing" =&gt; ausgehender Anruf)</li>
   <li><b>external_number</b> - Die Rufnummer des Gegen&uuml;bers, welcher anruft (event: ring) oder angerufen wird (event: call)</li>
-  <li><b>external_name</b> - Das Ergebniss der R&uuml;ckw&auml;rtssuche (sofern aktiviert). Im Fehlerfall kann diese Reading auch den Inhalt "unknown" (keinen Eintrag gefunden) oder "timeout" (Zeit&uuml;berschreitung bei der Abfrage) enthalten. Im Falle einer Zeit&uuml;berschreitung und aktiviertem Caching, wird die Rufnummer beim n&auml;chsten Mal erneut gesucht.</li>
+  <li><b>external_name</b> - Das Ergebniss der R&uuml;ckw&auml;rtssuche (sofern aktiviert). Im Fehlerfall kann diese Reading auch den Inhalt "unknown" (keinen Eintrag gefunden) enthalten. Im Falle einer Zeit&uuml;berschreitung bei der R&uuml;ckw&auml;rtssuche und aktiviertem Caching, wird die Rufnummer beim n&auml;chsten Mal erneut gesucht.</li>
   <li><b>internal_number</b> - Die interne Rufnummer (Festnetz, VoIP-Nummer, ...) auf welcher man angerufen wird (event: ring) oder die man gerade nutzt um jemanden anzurufen (event: call)</li>
   <li><b>internal_connection</b> - Der interne Anschluss an der Fritz!Box welcher genutzt wird um das Gespr&auml;ch durchzuf&uuml;hren (FON1, FON2, ISDN, DECT, ...)</li>
   <li><b>external_connection</b> - Der externe Anschluss welcher genutzt wird um das Gespr&auml;ch durchzuf&uuml;hren  (Festnetz, VoIP Nummer, ...)</li>
   <li><b>call_duration</b> - Die Gespr&auml;chsdauer in Sekunden. Dieser Wert wird nur bei einem disconnect-Event erzeugt. Ist der Wert 0, so wurde das Gespr&auml;ch von niemandem angenommen.</li>
   <li><b>call_id</b> - Die Identifizierungsnummer eines einzelnen Gespr&auml;chs. Dient der Zuordnung bei zwei oder mehr parallelen Gespr&auml;chen, damit alle Events eindeutig einem Gespr&auml;ch zugeordnet werden k&ouml;nnen</li>
   <li><b>missed_call</b> - Dieses Event wird nur generiert, wenn ein eingehender Anruf nicht beantwortet wird. Sofern der Name dazu bekannt ist, wird dieser ebenfalls mit angezeigt.</li>
-  <li><b>missed_call_line</b> - Analog zu "missed_call" wird dieses Event nur generiert, wenn ein eingehender Anruf nicht beantwortet wird. Es zeigt die Rufnummer an &uuml;ber, den dieser unbeantwortete Anruf eingegangen ist.</li>
   </ul>
   <br>
   <b>Rechtlicher Hinweis:</b><br><br>

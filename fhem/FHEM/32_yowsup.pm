@@ -258,13 +258,20 @@ yowsup_Set($$@)
     if( $cmd eq 'image' ) {
       return "MASTER not connected" if( !$phash->{PID} );
 
-      return yowsup_Write( $phash, "/image send $hash->{NUMBER} $args[0]" );
+      readingsSingleUpdate( $hash, 'sent', 'image: '. join( ' ', @args ), 1 );
+
+      my $number = $hash->{NUMBER};
+      $number =~ s/\./-/;
+
+      my $image = shift(@args);
+
+      return yowsup_Write( $phash, "/image send $number $image '". join( ' ', @args ) ."'" );
 
       return undef;
     } elsif( $cmd eq 'send' ) {
       return "MASTER not connected" if( !$phash->{PID} );
 
-      readingsSingleUpdate( $hash, "sent", join( ' ', @args ), 1 );
+      readingsSingleUpdate( $hash, 'sent', join( ' ', @args ), 1 );
 
       my $number = $hash->{NUMBER};
       $number =~ s/\./-/;
@@ -284,12 +291,19 @@ yowsup_Set($$@)
       return undef;
 
     } elsif( $cmd eq 'image' ) {
-      return yowsup_Write( $hash, "/image send $args[0] $args[1]" );
+      readingsSingleUpdate( $hash, 'sent', 'image: '. join( ' ', @args ), 1 );
+
+      my $number = shift(@args);
+      $number =~ s/\./-/;
+
+      my $image = shift(@args);
+
+      return yowsup_Write( $hash, "/image send $number $image '". join( ' ', @args ) ."'" );
 
       return undef;
 
     } elsif( $cmd eq 'send' ) {
-      readingsSingleUpdate( $hash, "sent", join( ' ', @args ), 1 );
+      readingsSingleUpdate( $hash, 'sent', join( ' ', @args ), 1 );
 
       my $number = shift(@args);
       $number =~ s/\./-/;
@@ -436,8 +450,7 @@ yowsup_Parse($$)
           if( !$accept_from || $last_sender || ",$accept_from," =~/,$last_sender,/ ) {
             Log3 $name, 3, "$cname: received command: $cmd";
 
-            my $allowed = AttrVal($cname, "allowedCommands", undef );
-            my $ret = AnalyzeCommandChain( $hash, $cmd, $allowed );
+            my $ret = AnalyzeCommandChain( $hash, $cmd );
 
             Log3 $name, 4, "$cname: command result: $ret";
 
@@ -517,11 +530,21 @@ yowsup_Write($$)
 sub
 yowsup_Attr($$$)
 {
-  my ($cmd, $name, $attrName, $attrVal) = @_;
+  my ($cmd, $name, $attrName, @params) = @_;
+  my ($attrVal) = @params;
 
   my $orig = $attrVal;
 
-  if( $attrName eq "disable" ) {
+  if($attrName eq "allowedCommands" && $cmd eq "set") {
+    my $aName = "allowed_$name";
+    my $exists = ($defs{$aName} ? 1 : 0);
+    AnalyzeCommand(undef, "defmod $aName allowed");
+    AnalyzeCommand(undef, "attr $aName validFor $name");
+    AnalyzeCommand(undef, "attr $aName $attrName ".join(" ",@params));
+    return "$name: ".($exists ? "modifying":"creating").
+                " device $aName for attribute $attrName";
+
+  } elsif( $attrName eq "disable" ) {
     my $hash = $defs{$name};
     yowsup_Disconnect($hash);
     if( $cmd eq "set" && $attrVal ne "0" ) {
@@ -587,10 +610,10 @@ yowsup_Attr($$$)
   <a name="yowsup_Set"></a>
   <b>Set</b>
   <ul>
-    <li>image &lt;path&gt;<br>
-      sends an image</li>
-    <li>send &lt;text&gt;<br>
-      sends &lt;text&gt;</li>
+    <li>image [&lt;number&gt;] &lt;path&gt; [&lt;text&gt;]<br>
+      sends an image with optional text. &lt;number&gt; has to be given if sending via master device.</li>
+    <li>send [&lt;numner&gt;] &lt;text&gt;<br>
+      sends &lt;text&gt;. &lt;number&gt; has to be given if sending via master device.</li>
   </ul><br>
 
   <a name="yowsup_Attr"></a>

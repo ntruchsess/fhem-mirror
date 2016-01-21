@@ -20,15 +20,16 @@ sub JeeLink_Write($$);
 sub JeeLink_SimpleWrite(@);
 sub JeeLink_ResetDevice($);
 
-my $clientsJeeLink = ":PCA301:EC3000:RoomNode:LaCrosse:ETH200comfort:CUL_IR:HX2272:FS20:AliRF:Level:EMT7110";
+my $clientsJeeLink = ":PCA301:EC3000:RoomNode:LaCrosse:ETH200comfort:CUL_IR:HX2272:FS20:AliRF:Level:EMT7110:KeyValueProtocol";
 
 my %matchListPCA301 = (
-    "1:PCA301"          => "^\\S+\\s+24",
-    "2:EC3000"          => "^\\S+\\s+22",
-    "3:RoomNode"        => "^\\S+\\s+11",
-    "4:LaCrosse"        => "^(\\S+\\s+9 |OK\\sWS\\s)",
-    "5:AliRF"           => "^\\S+\\s+5 ",
-    "6:EMT7110"         => "^OK\\sEMT7110\\s",
+    "1:PCA301"           => "^\\S+\\s+24",
+    "2:EC3000"           => "^\\S+\\s+22",
+    "3:RoomNode"         => "^\\S+\\s+11",
+    "4:LaCrosse"         => "^(\\S+\\s+9 |OK\\sWS\\s)",
+    "5:AliRF"            => "^\\S+\\s+5 ",
+    "6:EMT7110"          => "^OK\\sEMT7110\\s",
+    "7:KeyValueProtocol" => "^OK\\sVALUES\\s",
 );
 
 my %matchListJeeLink433 = (
@@ -660,8 +661,14 @@ JeeLink_Parse($$$$)
   return if($dmsg =~ m/^  / );                     # ignore startup messages
   return if($dmsg =~ m/^-> ack/ );                 # ignore send ack
 
+  if( $dmsg =~ /^INIT / ) {
+    $hash->{initMessages} .= "\n" if( $hash->{initMessages} );
+    $hash->{initMessages} .= $dmsg;
+    return;
+  }
+
   if($dmsg =~ m/^\[/ ) {
-        $hash->{model} = $dmsg;
+    $hash->{model} = $dmsg;
 
     if( $hash->{STATE} eq "Opened" ) {
       if( my $initCommandsString = AttrVal($name, "initCommands", undef) ) {
@@ -696,6 +703,7 @@ JeeLink_Parse($$$$)
       }
 
       $hash->{STATE} = "Initialized";
+      $hash->{initMessages} = '';
     }
 
     return;
@@ -887,7 +895,7 @@ JeeLink_Attr(@)
   if( $aName eq "Clients" ) {
     $hash->{Clients} = $aVal;
     $hash->{Clients} = $clientsJeeLink if( !$hash->{Clients}) ;
-  
+
   } elsif( $aName eq "timeout" ) {
     return "Usage: attr $name $aName <timeout,checkInterval>" if($aVal && $aVal !~ m/^[0-9]{1,6},[0-9]{1,6}$/);
 
@@ -898,7 +906,7 @@ JeeLink_Attr(@)
       my ($timeout, $interval) = split(',', $aVal);
       InternalTimer(gettimeofday()+$interval, "JeeLink_OnTimer", $timerName, 0);
     }
-    
+
   } elsif( $aName eq "MatchList" ) {
     my $match_list;
     if( $cmd eq "set" ) {
@@ -1115,13 +1123,13 @@ sub JeeLink_getIndexOfArray($@) {
     <li>flashCommand<br>
       See "Set flash"
     </li>
-  
+
     <li>timeout<br>
       format: &lt;timeout, checkInterval&gt;
       Checks every 'checkInterval' seconds if the last data reception is longer than 'timout' seconds ago.<br>
       If this is the case, a reset is done for the IO-Device.
     </li><br>
-    
+
   </ul>
   <br>
 </ul>

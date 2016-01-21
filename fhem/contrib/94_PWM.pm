@@ -9,6 +9,10 @@
 # 13.10.15 GA add event-on-change-reading
 # 13.10.15 GA add several readings
 # 15.10.15 GA add reading for avg pulses
+# 19.10.15 GA add overall heating switch
+# 22.10.15 GA add new definition for overall heating switch. Decision now based on threshold for pulseMax
+# 30.11.15 GA add new definition for overall heating switch. based on pulseMax or roomsOn
+# 30.11.15 GA add new followUpTime can now delay switching of OverallHeatingSwitch from "on" to "off"
 
 ##############################################
 # $Id: 
@@ -333,7 +337,8 @@ PWM_Calculate($)
     }
     $minRoomsOnList =~ s/,$//;
 
-    #if ($roomsActive == 0 or $hash->{NoRoomsToStayOnThreshold} == 0 or $newpulseSum/$roomsActive < $hash->{NoRoomsToStayOnThreshold}) {
+    #if ($roomsActive == 0 or $hash->{NoRoomsToStayOnThreshold} == 0 or $newpulseSum/$roomsActive < $hash->{NoRoomsToStayOnThreshold}) 
+
 
     if ($roomsActive == 0 or $hash->{NoRoomsToStayOnThreshold} == 0 or $pulseSum/$roomsCounted < $hash->{NoRoomsToStayOnThreshold}) {
       $minRoomsOn = 0;
@@ -432,6 +437,65 @@ PWM_Calculate($)
     readingsBulkUpdate ($hash,  "roomsToStayOn", $minRoomsOn);
     readingsBulkUpdate ($hash,  "roomsToStayOnList", $minRoomsOnList);
   }
+
+  if ( defined ($hash->{OverallHeatingSwitch}) ) {
+    if ( $hash->{OverallHeatingSwitch} ne "") {
+
+      my $newstate = "on";
+      if ( $hash->{OverallHeatingSwitch_threshold} > 0) {
+
+        # threshold based
+        $newstate = ($newpulseMax > $hash->{OverallHeatingSwitch_threshold}) ? "on" : "off";
+
+      } else {
+
+        # room based
+        $newstate = ($cntRoomsOn > 0) ? "on" : "off";
+
+      }
+ 
+      my $actor    = $hash->{OverallHeatingSwitch};
+      my $actstate = ($defs{$actor}{STATE} =~ $hash->{OverallHeatingSwitch_regexp_on}) ? "on" : "off";
+
+      if ($hash->{OverallHeatingSwitch_followUpTime} > 0) {
+
+        if ($actstate eq "on" and $newstate eq "off") {
+
+          if ($hash->{READINGS}{OverallHeatingSwitchWaitUntil}{VAL} eq "") {
+            $newstate = "on";
+            Log3 ($name, 2, "PWM_Calculate: $name: OverallHeatingSwitch wait for followUpTime before switching off (init timestamp)");
+            readingsBulkUpdate ($hash,  "OverallHeatingSwitchWaitUntil", FmtDateTime(time() + $hash->{OverallHeatingSwitch_followUpTime}));
+
+          } elsif ($hash->{READINGS}{OverallHeatingSwitchWaitUntil}{VAL} ge TimeNow()) {
+            $newstate = "on";
+            Log3 ($name, 2, "PWM_Calculate: $name: OverallHeatingSwitch wait for followUpTime before switching off");
+          } else {
+            readingsBulkUpdate ($hash,  "OverallHeatingSwitchWaitUntil", "");
+          }
+
+        } else {
+          readingsBulkUpdate ($hash,  "OverallHeatingSwitchWaitUntil", "");
+        }
+      }
+
+      if ($newstate ne $actstate or $hash->{READINGS}{OverallHeatingSwitch}{VAL} ne $actstate) {
+
+        my $ret = fhem sprintf ("set %s %s", $hash->{OverallHeatingSwitch}, $newstate);
+        if (!defined($ret)) {    # sucessfull
+          Log3 ($name, 4, "PWMR_SetRoom: $name: set $actor $newstate");
+  
+          readingsBulkUpdate ($hash,  "OverallHeatingSwitch", $newstate);
+ 
+#          push @{$room->{CHANGED}}, "actor $newstate";
+#          DoTrigger($name, undef);
+  
+	} else {
+          Log3 ($name, 4, "PWMR_SetRoom $name: set $actor $newstate failed ($ret)");
+        }
+      }
+    }
+  }
+
  
   readingsEndUpdate($hash, 1);
 
@@ -617,8 +681,9 @@ PWM_Define($$)
 
   my $name = $hash->{NAME};
 
-  return "syntax: define <name> PWM [<interval>] [<cycletime>] [<minonofftime>] [<maxPulse>] [<maxSwitchOnPerCycle>,<maxSwitchOffPerCycle>] [<roomStayOn>,<roomStayOff>,<stayOnThreshold>]"
-    if(int(@a) < 2 || int(@a) > 8);
+  return "syntax: define <name> PWM [<interval>] [<cycletime>] [<minonofftime>] [<maxPulse>] [<maxSwitchOnPerCycle>,<maxSwitchOffPerCycle>] [<roomStayOn>,<roomStayOff>,<stayOnThreshold>]".
+    " [<overallHeatingSwitch>[,<pulseMaxThreshold>[,<followUpTime>[,<h_regexp_on>]]]"
+    if(int(@a) < 2 || int(@a) > 9);
 
   my $interval     = ((int(@a) > 2) ? $a[2] : 60);
   my $cycletime    = ((int(@a) > 3) ? $a[3] : 900);
@@ -676,6 +741,39 @@ PWM_Define($$)
 
   }
 
+  ##########
+  # [<overallHeatingSwitch>]
+
+  if (int(@a) > 8) {
+    my ($hactor, $h_threshold, $h_followUpTime, $h_regexp_on) = split (",", $a[8], 4);
+    $h_followUpTime  = 0    unless ($h_followUpTime);
+    $h_threshold     = 0    unless ($h_threshold);
+    $h_regexp_on     = "on" unless ($h_regexp_on);
+
+    if (!$defs{$hactor} && $hactor ne "dummy")
+    {
+      my $msg = "$name: Unknown actor device $hactor specified";
+      Log3 ($hash, 3, "PWM_Define $msg");
+      return $msg;
+    }
+
+    $hash->{OverallHeatingSwitch}           = $hactor;
+    $hash->{OverallHeatingSwitch_threshold} = $h_threshold;
+    $hash->{OverallHeatingSwitch_regexp_on} = $h_regexp_on;
+    $hash->{OverallHeatingSwitch_roomBased} = ($h_threshold > 0) ? "off" : "on";
+    $hash->{OverallHeatingSwitch_followUpTime}  = $h_followUpTime;
+    readingsSingleUpdate ($hash,  "OverallHeatingSwitchWaitUntil", "", 0);
+    readingsSingleUpdate ($hash,  "OverallHeatingSwitch", "", 0);
+  } else {
+    $hash->{OverallHeatingSwitch}           = "";
+    $hash->{OverallHeatingSwitch_threshold} = "";
+    $hash->{OverallHeatingSwitch_regexp_on} = "";
+    $hash->{OverallHeatingSwitch_roomBased} = "";
+    $hash->{OverallHeatingSwitch_followUpTime}  = "";
+    readingsSingleUpdate ($hash,  "OverallHeatingSwitchWaitUntil", "", 0);
+    readingsSingleUpdate ($hash,  "OverallHeatingSwitch", "", 0);
+  }
+
   AssignIoPort($hash);
 
   if($hash->{INTERVAL} > 0) {
@@ -724,7 +822,9 @@ sub PWM_Undef($$)
 
   <b>Define</b>
   <ul>
-    <code>define &lt;name&gt; PWM [&lt;interval&gt;] [&lt;cycletime&gt;] [&lt;minonofftime&gt;] [&lt;maxPulse&gt;] [&lt;maxSwitchOnPerCycle&gt;,&lt;maxSwitchOffPerCycle&gt;] [&lt;roomStayOn&gt;,&lt;roomStayOff&gt;,&lt;stayOnThreshold&gt;]<br></code>
+    <code>define &lt;name&gt; PWM [&lt;interval&gt;] [&lt;cycletime&gt;] [&lt;minonofftime&gt;] [&lt;maxPulse&gt;] [&lt;maxSwitchOnPerCycle&gt;,&lt;maxSwitchOffPerCycle&gt;] [&lt;roomStayOn&gt;,&lt;roomStayOff&gt;,&lt;stayOnThreshold&gt;] [&lt;overallHeatingSwitch&gt[,&lt;pulseMaxThreshold&gt[,&lt;followUpTime&gt[,&lt;h_regexp_on&gt]]]]<br></code>
+    <br>
+    eg. define fb PWM 60 900 120 1 99,99 0,0,0 pumpactor<br>
     <br>
     Define a calculation object with the following parameters:<br>
     <ul>
@@ -765,10 +865,20 @@ sub PWM_Undef($$)
       <i>stayOnThreshold</i> = 0 ... no impact.<br>
       For energy saving reasons the following may be set: "4,1,0.25". This means:<br>
       The room with the least pulse will be kept off (<i>roomsStayOff</i>=1)<br>
-      If the average pulse for the (<i>roomsStayOn</i>=4) rooms with the most heating required is greater than (<i>stayOnThreshold</i>=0.25) then <i>maxRoomStayOn</i> will be kept in state "on", even it the time for the current pulse is reached.
+      If the average pulse for the (<i>roomsStayOn</i>=4) rooms with the most heating required is greater than (<i>stayOnThreshold</i>=0.25) then <i>maxRoomStayOn</i> will be kept in state "on", even if the time for the current pulse is reached.
       If the threshold is not reached (not so much heating required) then all rooms can be switched off at the same time.<br>
       <br>
     </li>
+
+    <li>overallHeatingSwitch&gt[,&lt;pulseMaxThreshold&gt[,&lt;followUpTime&gt;[,&lt;regexp_on&gt]]]<br>
+      Universal switch to controll eg. pumps or the heater itself. It will be set to "off" if no heating is required and otherwise "on".<br>
+      <i>pulseMaxThreshold</i> defines a threshold which is applied to reading <i>maxPulse</i> of the PWM object to decide if heating is required. If (calculated maxPulse > threshold) then actor is set to "on", otherwise "off".<br>
+      If <i>pulseMaxThreshold</i> is set to 0 (or is not defined) then the decision is based on <i>roomsOn</i>. If (roomsOn > 0) then actor is set to "on", otherwise "off".<br>
+      <i>followUpTime</i> defines a number of seconds which is used to delay the status change from "on" to "off". This can be used to prevent a toggling switch.<br>
+      <i>regexp_on</i> defines a regular expression to be applied to the state of the actor. Default is "on". If state matches the regular expression it is handled as "on", otherwise "off".<br>
+      <br>
+    </li>
+
     </ul>
 
     <br>

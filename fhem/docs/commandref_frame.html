@@ -38,6 +38,7 @@
       <a href="#attr">attr</a> &nbsp;
       <a href="#backup">backup</a> &nbsp;
       <a href="#CULflash">CULflash</a> &nbsp;
+      <a href="#cancel">cancel</a> &nbsp;
       <a href="#cmdalias">cmdalias</a> &nbsp;
       <a href="#configdb">configdb</a> &nbsp;
       <a href="#copy">copy</a> &nbsp;
@@ -92,6 +93,7 @@
   <b>Helper modules</b>
   <ul>
     <a href="#at">at</a> &nbsp;
+    <a href="#allowed">allowed</a> &nbsp;
     <a href="#autocreate">autocreate</a> &nbsp;
     <a href="#average">average</a> &nbsp;
     <a href="#Calendar">Calendar</a> &nbsp;
@@ -132,6 +134,7 @@
     <a href="#readingsHistory">readingsHistory</a> &nbsp;
     <a href="#readingsProxy">readingsProxy</a> &nbsp;
     <a href="#remotecontrol">remotecontrol</a> &nbsp;
+    <a href="#rssFeed">rssFeed</a> &nbsp;
     <a href="#RESIDENTS">RESIDENTS</a> &nbsp;
     <a href="#ROOMMATE">ROOMMATE</a> &nbsp;
     <a href="#SUNRISE_EL">SUNRISE_EL</a> &nbsp;
@@ -306,9 +309,11 @@ A line ending with \ will be concatenated with the next one, so long lines
   <li>a single device name. This is the most common case.</li>
   <li>a list of devices, separated by comma (,)</li>
   <li>a regular expression</li>
-  <li>a NAME=VALUE pair, where NAME can be an Internal value like TYPE, a
+  <li>a NAME=VALUE pair, where NAME can be an internal value like TYPE, a
         Reading-Name or an attribute. VALUE is a regexp. To negate the
-        comparison, use NAME!=VALUE</li>
+        comparison, use NAME!=VALUE. To restrict the search, use i: as prefix
+        for internal values, r: for readings and a: for attributes. See the
+        example below.</li>
   <li>if the spec is followed by the expression :FILTER=NAME=VALUE, then the
       values found in the first round are filtered by the second expression.
   </ul>
@@ -322,6 +327,7 @@ A line ending with \ will be concatenated with the next one, so long lines
     <code>set room=kitchen:FILTER=STATE!=off off</code><br>
     <code>list disabled=</code><br>
     <code>list TYPE=FS20 STATE</code><br>
+    <code>list i:TYPE=FS20 STATE</code><br>
   </ul>
   Notes:
   <ul>
@@ -542,6 +548,7 @@ attribute list if you want to know if a device supports these attributes.  <br>
     <tr><td>max</td><td>the largest value encountered</td></tr>
     <tr><td>mean</td><td>the arithmetic mean of all values</td></tr>
     <tr><td>sd</td><td>the standard deviation from the mean</td></tr>
+    <tr><td>integral</td><td>the arithmetic sum (if not time-weighted) or integral area (if time-weighted) of all values</td></tr>
     </table>
     <p>
 
@@ -730,6 +737,15 @@ The following local attributes are used by a wider range of devices:
   <ul>
     <li>There is no way to delete a single default-attribute from the list</li>
   </ul>
+</ul>
+
+<a name="cancel"></a>
+<h3>cancel</h3>
+<ul>
+  <code>cancel [&lt;id&gt; [quiet]]</code>
+  <br><br>
+  Cancels a named <a href="#sleep">sleep</a>.
+
 </ul>
 
 <a name="define"></a>
@@ -1116,7 +1132,7 @@ The following local attributes are used by a wider range of devices:
   Each device has different set parameters, see the corresponding device
   section for details.<br>
   <br><br>
-  From featurelevel 5.7 on the set command replaces:
+  From featurelevel 5.7 on the set (and setreading) command replaces:
   <ul>
   <li>[device:reading] with the corresponding reading of device, if both device
     and reading exists.</li>
@@ -1186,7 +1202,8 @@ The following local attributes are used by a wider range of devices:
   <br><br>
   Set the reading &lt;reading&gt; for the device <code>&lt;name&gt;</code> to
   &lt;value&gt; without sending out commands to the device, but triggering
-  events and eventMap/stateFormat transformations as usual.
+  events and eventMap/stateFormat transformations as usual. See the set
+  command documentation for replacement description.
   <br><br>
   Examples:
   <ul>
@@ -1218,16 +1235,18 @@ The following local attributes are used by a wider range of devices:
 <a name="shutdown"></a>
 <h3>shutdown</h3>
 <ul>
-  <code>shutdown [restart]</code>
+  <code>shutdown [restart|exitValue]</code>
   <br><br>
   Shut down the server (after saving the <a href="#statefile">state information
   </a>). It triggers the global:SHUTDOWN event.  If the optional restart
-  parameter is specified, fhem tries to restart itself.
+  parameter is specified, fhem tries to restart itself. exitValue may be
+  important for start scripts.
   <br><br>
   Example:
   <ul>
     <code>shutdown</code><br>
-    <code>shutdown restart</code>
+    <code>shutdown restart</code><br>
+    <code>shutdown 1</code><br>
   </ul>
 </ul>
 
@@ -1250,12 +1269,15 @@ The following local attributes are used by a wider range of devices:
 <a name="sleep"></a>
 <h3>sleep</h3>
 <ul>
-  <code>sleep &lt;sec&gt; [quiet]</code>
+  <code>sleep &lt;sec&gt; [&lt;id&gt;] [quiet]</code>
   <br><br>
   sleep followed by another command is comparable to a nameless <a
   href="#at">at</a>, it executes the following commands after waiting the
   specified time. The unit is seconds, with millisecond accuracy, as you can
   specify decimal places.<br><br>
+
+  A sleep with an &lt;id&lt; will replace a sleep with the same &lt;id&lt;
+  and can be canceled by <a href="#cancel">cancel</a>.
 
   When called in a notify/at/etc, then nonempty return values of the following
   commands are logged to the global logfile with loglevel 2.<br> If quiet is

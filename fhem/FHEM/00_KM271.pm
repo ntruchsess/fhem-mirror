@@ -151,7 +151,7 @@ my %km271_tr = (
   "HK1_Ausschaltoptimierung"        => "8007:0",
   "HK1_Pumpe"                       => "8008:0",
   "HK1_Mischerstellung"             => "8009:0,ne",  # great part of all messages
-  "HK1_Heizkennlinie_+10_Grad"      => "800c:0",
+  "HK1_Heizkennlinie_10_Grad"       => "800c:0",
   "HK1_Heizkennlinie_0_Grad"        => "800d:0",
   "HK1_Heizkennlinie_-10_Grad"      => "800e:0",
   "HK2_Betriebswerte1"              => "8112:0,bf:0",
@@ -164,7 +164,7 @@ my %km271_tr = (
   "HK2_Ausschaltoptimierung"        => "8119:0",
   "HK2_Pumpe"                       => "811a:0",
   "HK2_Mischerstellung"             => "811b:0,ne",  # great part of all messages
-  "HK2_Heizkennlinie_+10_Grad"      => "811e:0",
+  "HK2_Heizkennlinie_10_Grad"      => "811e:0",
   "HK2_Heizkennlinie_0_Grad"        => "811f:0",
   "HK2_Heizkennlinie_-10_Grad"      => "8120:0",
   "WW_Betriebswerte1"               => "8424:0,bf:2",
@@ -1162,7 +1162,7 @@ KM271_SetReading($$$$)
     <li>HK1_Betriebswerte1</li>
     <li>HK1_Betriebswerte2</li>
     <li>HK1_Einschaltoptimierung</li>
-    <li>HK1_Heizkennlinie_+10_Grad</li>
+    <li>HK1_Heizkennlinie_10_Grad</li>
     <li>HK1_Heizkennlinie_-10_Grad</li>
     <li>HK1_Heizkennlinie_0_Grad</li>
     <li>HK1_Mischerstellung</li>
@@ -1175,7 +1175,7 @@ KM271_SetReading($$$$)
     <li>HK2_Betriebswerte1</li>
     <li>HK2_Betriebswerte2</li>
     <li>HK2_Einschaltoptimierung</li>
-    <li>HK2_Heizkennlinie_+10_Grad</li>
+    <li>HK2_Heizkennlinie_10_Grad</li>
     <li>HK2_Heizkennlinie_-10_Grad</li>
     <li>HK2_Heizkennlinie_0_Grad</li>
     <li>HK2_Mischerstellung</li>

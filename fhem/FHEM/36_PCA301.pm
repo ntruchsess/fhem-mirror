@@ -26,8 +26,9 @@ PCA301_Initialize($)
   $hash->{ParseFn}   = "PCA301_Parse";
   $hash->{AttrFn}    = "PCA301_Attr";
   $hash->{AttrList}  = "IODev"
-                       ." readonly:1"
-                       ." forceOn:1"
+                       ." ignore:1,0"
+                       ." readonly:1,0"
+                       ." forceOn:1,0"
                        ." offLevel"
                        ." $readingFnAttributes";
 }
@@ -287,8 +288,6 @@ PCA301_Attr(@)
 <a name="PCA301"></a>
 <h3>PCA301</h3>
 <ul>
-
-  <tr><td>
   The PCA301 is a RF controlled AC mains plug with integrated power meter functionality from ELV.<br><br>
 
   It can be integrated in to FHEM via a <a href="#JeeLink">JeeLink</a> as the IODevice.<br><br>
@@ -344,6 +343,8 @@ PCA301_Attr(@)
       a power level less or equal <code>offLevel</code> is considered to be off.</li>
     <li>readonly<br>
       if set to a value != 0 all switching commands (on, off, toggle, ...) will be disabled.</li>
+    <li>ignore<br>
+      1 -> ignore this device.</li>
   </ul><br>
 </ul>
 

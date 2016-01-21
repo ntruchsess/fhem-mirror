@@ -147,14 +147,15 @@ FileLog_Switch($)
   my $cn = ResolveDateWildcards($log->{logfile},  @t);
 
   if($cn ne $log->{currentlogfile}) { # New logfile
-    $fh->close();
+    $log->{currentlogfile} = $cn;
+    return 1 if($log->{READONLY});
+    $fh->close() if($fh);
     HandleArchiving($log);
     $fh = new IO::File ">>$cn";
     if(!defined($fh)) {
       Log3 $log, 0, "Can't open $cn";
       return 0;
     }
-    $log->{currentlogfile} = $cn;
     $log->{FH} = $fh;
     return 1;
   }
@@ -366,15 +367,8 @@ FileLog_fhemwebFn($$$$)
 
   $ret .= "<br>Regexp parts";
   $ret .= "<br><table class=\"block wide\">";
-  
-  my $regexp= $hash->{REGEXP};
-  my @ra= ();
-  while($regexp =~ /^(.+?:.+?)\|(.+?:.+)$/) {
-    push @ra, $1;
-    $regexp= $2;
-  }
-  push @ra, $regexp;
-  if(@ra > 0) {
+  my @ra = split(/\|/, $hash->{REGEXP});
+  if(@ra > 1) {
     foreach my $r (@ra) {
       $ret .= "<tr class=\"".(($row++&1)?"odd":"even")."\">";
       my $cmd = "cmd.X= set $d removeRegexpPart&val.X=$r"; # =.set: avoid JS
@@ -907,19 +901,22 @@ RESCAN:
 }
 
 ###############
-# this is not elegant
+# this is not elegant. Assume, that current seek pos is after a cr/nl
 sub
 seekBackOneLine($$)
 {
   my ($fh, $pos) = @_;
   my $buf;
-  $pos -= 2; # skip current CR/NL
+
+  while($pos > 0) { # skip current CR/NL
+    $fh->seek(--$pos, 0);
+    $fh->read($buf, 1);
+    last if($buf ne "\n" && $buf ne "\r");
+  }
   $fh->seek($pos, 0);
+
   while($pos > 0 && $fh->read($buf, 1)) {
-    if($buf eq "\n" || $buf eq "\r") {
-      $fh->seek(++$pos, 0);
-      return $pos;
-    }
+    return ++$pos if($buf eq "\n" || $buf eq "\r");
     $fh->seek(--$pos, 0);
   }
   return 0;
@@ -941,8 +938,13 @@ FileLog_seekTo($$$$$)
   $fh->seek(0, 2); # Go to the end
   my $upper = $fh->tell;
 
-  my ($lower, $next, $last) = (0, $upper/2, 0);
-  while() {                                             # Binary search
+  my ($lower, $next, $last) = (0, $upper/2, -1);
+  for(my $iter=0; $iter<200; $iter++) {       # Binary search
+    if($next == $last) {
+      $fh->seek($next, 0);
+      last;
+    }
+
     $fh->seek($next, 0);
     my $data = <$fh>;
     if(!$data) {
@@ -951,24 +953,8 @@ FileLog_seekTo($$$$$)
     }
     if($reformatFn) { no strict; $data = &$reformatFn($data); use strict; }
     if($data !~ m/^\d\d\d\d-\d\d-\d\d_\d\d:\d\d:\d\d /o) {
-      $next = $fh->tell;
-      $data = <$fh>;
-      if(!$data) {
-        $last = seekBackOneLine($fh, $next);
-        last;
-      }
-      if($reformatFn) { no strict; $data = &$reformatFn($data); use strict; }
-
-      # If the second line is longer then the first,
-      # binary search will never get it: 
-      if($next eq $last && $data ge $ts) {
-        $last = seekBackOneLine($fh, $next);
-        last;
-      }
-    }
-    if($next eq $last) {
-      $fh->seek($next, 0);
-      last;
+      $next = seekBackOneLine($fh, $fh->tell);
+      next;
     }
 
     $last = $next;
@@ -978,6 +964,7 @@ FileLog_seekTo($$$$$)
       ($upper, $next) = ($next, int(($lower+$next)/2));
     }
   }
+  $last = 0 if($last < 0); # Forum #46512
   $hash->{pos}{"$fname:$ts"} = $last;
 }
 

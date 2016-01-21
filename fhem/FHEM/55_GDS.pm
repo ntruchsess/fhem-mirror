@@ -42,6 +42,8 @@ use Archive::Extract;
 use Net::FTP;
 use XML::Simple;
 
+#use Data::Dumper;
+
 eval "use GDSweblink";
 
 no if $] >= 5.017011, warnings => 'experimental';
@@ -299,7 +301,9 @@ sub GDS_Define($$$) {
 	Log3($name, 4, "GDS $name: tempDir=".$tempDir);
 
     _GDS_addExtension("GDS_CGI","gds","GDS Files");
-
+	$hash->{firstrun} = 1;
+	retrieveData($hash,'conditions');
+	delete $hash->{firstrun};
 	readingsSingleUpdate($hash, 'state', 'active',1);
 
 	return undef;
@@ -386,7 +390,8 @@ sub GDS_Set($@) {
 			}
 
 		when("conditions"){
-            $attr{$name}{gdsSetCond} = $parameter; #ReadingsVal($name,'c_stationName',undef);
+			CommandAttr(undef, "$name gdsSetCond $parameter");
+#            $attr{$name}{gdsSetCond} = $parameter; #ReadingsVal($name,'c_stationName',undef);
 			GDS_GetUpdate($hash,'set conditions');
 			break;
 			}
@@ -417,6 +422,7 @@ sub GDS_Get($@) {
 				"conditionsmap:".$cmapList." ".
 				"forecasts:".$fcList." ".
 				"forecastsmap:".$fmapList." ".
+				"headlines ".
 				"radarmap:".$cmapList." ".
 				"warningsmap:"."Deutschland,Bodensee,".$bulaList." ".
 				"warnings:".$bulaList;
@@ -430,7 +436,7 @@ sub GDS_Get($@) {
 
 	readingsSingleUpdate($hash, 'state', 'active', 0);
 	my $_gdsAll		= AttrVal($name,"gdsAll", 0);
-	my $_gdsDebug	= AttrVal($name,"gdsDebug", 0);
+	my $gdsDebug	= AttrVal($name,"gdsDebug", 0);
 
 	my ($result, @datensatz, $found);
 
@@ -452,6 +458,12 @@ sub GDS_Get($@) {
 			$hash->{file}{target}	= $tempDir.$name."_forecastsmap.jpg";
 			retrieveData($hash,'FILE');
 			break;
+		}
+
+		when("headlines"){
+			return "Error: Alerts disabled by attribute." unless AttrVal($name,'gdsUseAlerts',0);
+			$parameter //= "|";
+			return gdsAlertsHeadlines($name,$parameter);
 		}
 
 		when("warningsmap"){
@@ -499,6 +511,7 @@ sub GDS_Get($@) {
 
 		when("alerts"){
 			return "Error: Alerts disabled by attribute." unless AttrVal($name,'gdsUseAlerts',0);
+
 			if($parameter =~ y/0-9// == length($parameter)){
 				while ( my( $key, $val ) = each %capCellHash ) {
 					push @datensatz,$val if $key =~ m/^$parameter/;
@@ -519,13 +532,7 @@ sub GDS_Get($@) {
 				$result = "Keine Warnmeldung für die gesuchte Region vorhanden.";
 			}
             my $_gdsAll		= AttrVal($name,"gdsAll", 0);
-            my $_gdsDebug	= AttrVal($name,"gdsDebug", 0);
-			break;
-			}
-
-		when("headlines"){
-			return "Error: Alerts disabled by attribute." unless AttrVal($name,'gdsUseAlerts',0);
-			$result = gdsHeadlines($name);
+            my $gdsDebug	= AttrVal($name,"gdsDebug", 0);
 			break;
 			}
 
@@ -537,10 +544,14 @@ sub GDS_Get($@) {
 		when("rereadcfg"){
 			DoTrigger($name, "REREAD", 1);
 			$hash->{GDS_REREAD}  = int(time());
-			retrieveData($hash,'conditions');
-			retrieveData($hash,'capdata')  if AttrVal($name,'gdsUseAlerts',0);
-			retrieveListCapStations($hash) if AttrVal($name,'gdsUseAlerts',0);
-			retrieveData($hash,'forecast') if AttrVal($name,'gdsUseForecasts',0);
+			retrieveData($hash,'conditions') if AttrVal($name,'gdsSetCond',0);
+			if (AttrVal($name,'gdsUseAlerts',0)) {
+				%capCityHash = ();
+				%capCellHash = ();
+				retrieveData($hash,'capdata');
+				retrieveListCapStations($hash);
+			}
+			retrieveData($hash,'forecast')   if AttrVal($name,'gdsUseForecasts',0);
 #			GDS_GetUpdate($hash);
 			break;
 			}
@@ -608,13 +619,24 @@ sub GDS_Attr(@){
 	my @a = @_;
 	my $hash = $defs{$a[1]};
 	my ($cmd, $name, $attrName, $attrValue) = @a;
+	$attrValue //= '';
 	my $useUpdate = 0;
 
 	given($attrName){
  		when("gdsSetCond"){
 			unless ($attrValue eq '' || $cmd eq 'del') {
 				$attr{$name}{$attrName} = $attrValue;
-				retrieveData($hash,'conditions');
+				my $diff = time - InternalVal($name,'GDS_CONDITIONS_READ',0);
+				if ( $diff < 300) {
+					my @b;
+					push @b, undef;
+					push @b, undef;
+					push @b, $attrValue;
+					getConditions($hash, "c", @b);
+					DoTrigger($name,"REREADCONDITIONS",1);
+				} else {
+					retrieveData($hash,'conditions');
+				}
 				$useUpdate = 1;
 			}
 		}
@@ -704,10 +726,10 @@ sub GDS_GetUpdate($;$) {
 
 	# schedule next update
 	my $next = gettimeofday()+$hash->{helper}{INTERVAL};
-	my $_gdsAll		= AttrVal($name,"gdsAll", 0);
-	my $_gdsDebug	= AttrVal($name,"gdsDebug", 0);
+	my $gdsAll		= AttrVal($name,"gdsAll", 0);
+	my $gdsDebug	= AttrVal($name,"gdsDebug", 0);
 	InternalTimer($next, "GDS_GetUpdate", $hash, 1);
-	readingsSingleUpdate($hash, "_nextUpdate", localtime($next), 1) if($_gdsAll || $_gdsDebug);
+	readingsSingleUpdate($hash, "_nextUpdate", localtime($next), 1) if($gdsAll || $gdsDebug);
 
 	return 1;
 }
@@ -799,7 +821,7 @@ sub __GDS_HTMLTail {
 #
 #	Tools
 
-sub gdsHeadlines($;$) {
+sub gdsAlertsHeadlines($;$) {
   my ($d,$sep) = @_;
   my $text = "";
   $sep = (defined($sep)) ? $sep : '|';
@@ -809,6 +831,12 @@ sub gdsHeadlines($;$) {
     $text .= ReadingsVal('gds','a_'.$i.'_headline','')
   }
   return $text;
+}
+
+sub gdsHeadlines($;$) {
+  my $text = "GDS error: gdsHeadlines() is deprecated. Please use gdsAlertsHeadlines()";
+  Log 1, $text;
+  return $text; 
 }
 
 sub setHelp(){
@@ -884,9 +912,9 @@ sub getConditions($$@){
 	(my $myStation	= utf8ToLatin1($a[2])) =~ s/_/ /g; # replace underscore in stationName by space
 
 	my $searchLen	= length($myStation);
-
+	return unless $searchLen;
+	
 	my ($line, $item, %pos, %alignment, %wx, %cread, $k, $v);
-
     foreach my $l (@allConditionsData) {
         $line = $l;                 # save line for further use
  		if ($l =~ /Station/) {		# Header line... find out data positions
@@ -900,7 +928,8 @@ sub getConditions($$@){
 
 	%alignment = ("Station" => "l", "H\xF6he" => "r", "Luftd." => "r", "TT" => "r", "Tn12" => "r", "Tx12" => "r", 
 	"Tmin" => "r", "Tmax" => "r", "Tg24" => "r", "Tn24" => "r", "Tm24" => "r", "Tx24" => "r", "SSS24" => "r", "SGLB24" => "r", 
-	"RR1" => "r", "RR12" => "r", "RR24" => "r", "SSS" => "r", "DD" => "r", "FF" => "r", "FX" => "r", "Wetter/Wolken" => "l", "B\xF6en" => "l");
+	"RR1" => "r", "RR12" => "r", "RR24" => "r", "RR30" => "r", "SSS" => "r", "DD" => "r", 
+	"FF" => "r", "FX" => "r", "Wetter/Wolken" => "l", "B\xF6en" => "l");
 	
 	foreach $item (@a) {
 		Log3($hash, 4, "conditions item: $item");
@@ -1002,97 +1031,99 @@ sub retrieveListCapStations($){
 		retrieveData($hash,'FILE') if ($alter > 86400);
 	}
 }
+
 sub decodeCAPData($$$){
 	my ($hash, $datensatz, $anum) = @_;
 	my $name		= $hash->{NAME};
-	my $info		= int($datensatz/100);
-	my $area		= $datensatz-$info*100;
+	my $info		= 9999; # to be deleted
+	my $alert		= int($datensatz/100);
+	my $area		= $datensatz-$alert*100;
 
 	my (%readings, @dummy, $i, $k, $n, $v, $t);
 
-	my $_gdsAll		= AttrVal($name,"gdsAll", 0);
-	my $_gdsDebug	= AttrVal($name,"gdsDebug", 0);
-	my $_gdsLong	= AttrVal($name,"gdsLong", 0);
-	my $_gdsPolygon	= AttrVal($name,"gdsPolygon", 0);
+	my $gdsAll		= AttrVal($name,"gdsAll", 0);
+	my $gdsDebug	= AttrVal($name,"gdsDebug", 0);
+	my $gdsLong		= AttrVal($name,"gdsLong", 0);
+	my $gdsPolygon	= AttrVal($name,"gdsPolygon", 0);
 
 	Log3($name, 4, "GDS $name: Decoding CAP record #".$datensatz);
 
 # topLevel informations
-	if($_gdsAll || $_gdsDebug) {
-		@dummy = split(/\./, $alertsXml->{identifier});
-		$readings{"a_".$anum."_identifier"}		= $alertsXml->{identifier};
+	if($gdsAll || $gdsDebug) {
+		@dummy = split(/\./, $alertsXml->{alert}[$alert]{identifier});
+		$readings{"a_".$anum."_identifier"}		= $alertsXml->{alert}[$alert]{identifier};
 		$readings{"a_".$anum."_idPublisher"}	= $dummy[5];
 		$readings{"a_".$anum."_idSysten"}		= $dummy[6];
 		$readings{"a_".$anum."_idTimeStamp"}	= $dummy[7];
 		$readings{"a_".$anum."_idIndex"}		= $dummy[8];
 	}
 	
-	$readings{"a_".$anum."_sent"}			= $alertsXml->{sent}[0];
-	$readings{"a_".$anum."_status"}			= $alertsXml->{status}[0];
-	$readings{"a_".$anum."_msgType"}		= $alertsXml->{msgType}[0];
+	$readings{"a_".$anum."_sent"}			= $alertsXml->{alert}[$alert]{sent};
+	$readings{"a_".$anum."_status"}			= $alertsXml->{alert}[$alert]{status};
+	$readings{"a_".$anum."_msgType"}		= $alertsXml->{alert}[$alert]{msgType};
 
 # infoSet informations
-	if($_gdsAll || $_gdsDebug) {
-		$readings{"a_".$anum."_language"}	= $alertsXml->{info}[$info]{language};
-		$readings{"a_".$anum."_urgency"}	= $alertsXml->{info}[$info]{urgency};
-		$readings{"a_".$anum."_severity"}	= $alertsXml->{info}[$info]{severity};
-		$readings{"a_".$anum."_certainty"}	= $alertsXml->{info}[$info]{certainty};
+	if($gdsAll || $gdsDebug) {
+		$readings{"a_".$anum."_language"}	= $alertsXml->{alert}[$alert]{info}{language};
+		$readings{"a_".$anum."_urgency"}	= $alertsXml->{alert}[$alert]{info}{urgency};
+		$readings{"a_".$anum."_severity"}	= $alertsXml->{alert}[$alert]{info}{severity};
+		$readings{"a_".$anum."_certainty"}	= $alertsXml->{alert}[$alert]{info}{certainty};
 	}
 	
-	$readings{"a_".$anum."_category"}		= $alertsXml->{info}[$info]{category};
-	$readings{"a_".$anum."_event"}			= $alertsXml->{info}[$info]{event};
-	$readings{"a_".$anum."_responseType"}	= $alertsXml->{info}[$info]{responseType};
+	$readings{"a_".$anum."_category"}		= $alertsXml->{alert}[$alert]{info}{category};
+	$readings{"a_".$anum."_event"}			= $alertsXml->{alert}[$alert]{info}{event};
+	$readings{"a_".$anum."_responseType"}	= $alertsXml->{alert}[$alert]{info}{responseType};
 
 # eventCode informations
 # loop through array
 	$i = 0;
 	while(1){
 		($n, $v) = (undef, undef);
-		$n = $alertsXml->{info}[$info]{eventCode}[$i]{valueName};
+		$n = $alertsXml->{alert}[$alert]{info}{eventCode}[$i]{valueName};
 		if(!$n) {last;}
 		$n = "a_".$anum."_eventCode_".$n;
-		$v = $alertsXml->{info}[$info]{eventCode}[$i]{value};
+		$v = $alertsXml->{alert}[$alert]{info}{eventCode}[$i]{value};
 		$readings{$n} .= $v." " if($v);
 		$i++;
 	}
 
 # time/validity informations
-	$readings{"a_".$anum."_effective"}		= $alertsXml->{info}[$info]{effective} if($_gdsAll);
-	$readings{"a_".$anum."_onset"}			= $alertsXml->{info}[$info]{onset};
-	$readings{"a_".$anum."_expires"}		= $alertsXml->{info}[$info]{expires};
+	$readings{"a_".$anum."_effective"}		= $alertsXml->{alert}[$alert]{info}{effective} if($gdsAll);
+	$readings{"a_".$anum."_onset"}			= $alertsXml->{alert}[$alert]{info}{onset};
+	$readings{"a_".$anum."_expires"}		= $alertsXml->{alert}[$alert]{info}{expires};
 	$readings{"a_".$anum."_valid"}			= _checkCAPValid($readings{"a_".$anum."_onset"},$readings{"a_".$anum."_expires"});
 	$readings{"a_".$anum."_onset_local"}	= _capTrans($readings{"a_".$anum."_onset"});
 	$readings{"a_".$anum."_expires_local"}	= _capTrans($readings{"a_".$anum."_expires"}) 
-	         if(defined($alertsXml->{info}[$info]{expires}));
+	         if(defined($alertsXml->{alert}[$alert]{info}{expires}));
 	$readings{"a_".$anum."_sent_local"}		= _capTrans($readings{"a_".$anum."_sent"});
 
 	$readings{a_valid} = ReadingsVal($name,'a_valid',0) || $readings{"a_".$anum."_valid"};
 
 # text informations
-	$readings{"a_".$anum."_headline"}		= $alertsXml->{info}[$info]{headline};
-	$readings{"a_".$anum."_description"}	= $alertsXml->{info}[$info]{description} if($_gdsAll || $_gdsLong);
-	$readings{"a_".$anum."_instruction"}	= $alertsXml->{info}[$info]{instruction}
-			if($readings{"a_".$anum."_responseType"} eq "Prepare" & ($_gdsAll || $_gdsLong));
+	$readings{"a_".$anum."_headline"}		= $alertsXml->{alert}[$alert]{info}{headline};
+	$readings{"a_".$anum."_description"}	= $alertsXml->{alert}[$alert]{info}{description} if($gdsAll || $gdsLong);
+	$readings{"a_".$anum."_instruction"}	= $alertsXml->{alert}[$alert]{info}{instruction}
+			if($readings{"a_".$anum."_responseType"} eq "Prepare" & ($gdsAll || $gdsLong));
 
 # area informations
-	$readings{"a_".$anum."_areaDesc"} 		=  $alertsXml->{info}[$info]{area}[$area]{areaDesc};
-	$readings{"a_".$anum."_areaPolygon"}	=  $alertsXml->{info}[$info]{area}[$area]{polygon} if($_gdsAll || $_gdsPolygon);
+	$readings{"a_".$anum."_areaDesc"} 		=  $alertsXml->{alert}[$alert]{info}{area}[$area]{areaDesc};
+	$readings{"a_".$anum."_areaPolygon"}	=  $alertsXml->{alert}[$alert]{info}{area}[$area]{polygon} if($gdsAll || $gdsPolygon);
 
 # area geocode informations
 # loop through array
 	$i = 0;
 	while(1){
 		($n, $v) = (undef, undef);
-		$n = $alertsXml->{info}[$info]{area}[$area]{geocode}[$i]{valueName};
+		$n = $alertsXml->{alert}[$alert]{info}{area}[$area]{geocode}[$i]{valueName};
 		if(!$n) {last;}
 		$n = "a_".$anum."_geoCode_".$n;
-		$v = $alertsXml->{info}[$info]{area}[$area]{geocode}[$i]{value};
+		$v = $alertsXml->{alert}[$alert]{info}{area}[$area]{geocode}[$i]{value};
 		$readings{$n} .= $v." " if($v);
 		$i++;
 	}
 
-	$readings{"a_".$anum."_altitude"}		= $alertsXml->{info}[$info]{area}[$area]{altitude}		if($_gdsAll);
-	$readings{"a_".$anum."_ceiling"}		= $alertsXml->{info}[$info]{area}[$area]{ceiling}		if($_gdsAll);
+	$readings{"a_".$anum."_altitude"}		= $alertsXml->{alert}[$alert]{info}{area}[$area]{altitude}		if($gdsAll);
+	$readings{"a_".$anum."_ceiling"}		= $alertsXml->{alert}[$alert]{info}{area}[$area]{ceiling}		if($gdsAll);
 
 	readingsBeginUpdate($hash);
 	readingsBulkUpdate($hash, "_dataSource", "Quelle: Deutscher Wetterdienst");
@@ -1264,7 +1295,7 @@ sub _retrieveCONDITIONS {
 			if(@files) {
  				Log3($name, 4, "GDS $name: filelist found.");
  				@files			= sort(@files);
-				my $datafile	= $files[-1];
+				my $datafile	= $files[-2];
 				Log3($name, 5, "GDS $name: retrieving $datafile");
 				my ($file_content,$file_handle);
 				open($file_handle, '>', \$file_content);
@@ -1301,7 +1332,7 @@ sub _finishedCONDITIONS {
 
 	$hash->{GDS_CONDITIONS_READ}	= int(time());
 	my $cf = AttrVal($name,'gdsSetCond',0);
-#	GDS_GetUpdate($hash,1) if $cf; 
+	return unless $cf;
 	my @b;
 	push @b, undef;
 	push @b, undef;
@@ -1334,7 +1365,6 @@ sub _retrieveCAPDATA {
 	my $proxyName	= AttrVal($name, "gdsProxyName", "");
 	my $proxyType	= AttrVal($name, "gdsProxyType", "");
 	my $passive		= AttrVal($name, "gdsPassiveFtp", 1);
-	my $useFritz	= AttrVal($name, "gdsUseFritzkotz", 0);
 	my $dir 		= "gds/specials/alerts/cap/GER/status/";
 	my $dwd			= "Z_CAP*";
 
@@ -1415,7 +1445,6 @@ sub _finishedCAPDATA {
 	my ($name,$datafile,$aL,$capFile,$cellData) = split(/;;;/,shift);
 	my $hash = $defs{$name};
 	$aList = $aL;
-
 	my @h = split(/;;/,$cellData);
 	foreach(@h) {
 		my ($n,$city,$cell)		= split(/:/,$_);
@@ -1425,7 +1454,7 @@ sub _finishedCAPDATA {
 
 	my $xml		= new XML::Simple;
 	eval {
-	$alertsXml	= $xml->XMLin($capFile, KeyAttr => {}, ForceArray => [ 'info', 'eventCode', 'area', 'geocode' ]);
+	$alertsXml	= $xml->XMLin($capFile, KeyAttr => {}, ForceArray => [ 'alert', 'eventCode', 'area', 'geocode' ]);
 	};
     if ($@) {
        Log3($name,1,'GDS: error analyzing alerts XML:'.$@);
@@ -1450,7 +1479,7 @@ sub _mergeCapFile($) {
     my @alertsArray;
     my $xmlHeader   = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>';
     push (@alertsArray,$xmlHeader);
-    push (@alertsArray,"<alert>");
+    push (@alertsArray,"<gds>");
     my $countInfo   = 0;
 	
     foreach my $cF (@capFiles){
@@ -1465,14 +1494,15 @@ sub _mergeCapFile($) {
        foreach my $l (@a) {
           next unless length($l);
           next if($l =~ m/^\<\?xml version.*/);
-          next if($l =~ m/^\<alert.*/);
-          next if($l =~ m/^\<\/alert.*/);
+          $l = "<alert>"  if($l =~ m/^\<alert.*/);
+#          next if($l =~ m/^\<alert.*/);
+#          next if($l =~ m/^\<\/alert.*/);
           next if($l =~ m/^\<sender\>.*/);
           $countInfo++ if($l =~ m/^\<info\>/);
           push (@alertsArray,$l);
        }
     }
-    push (@alertsArray,"</alert>");
+    push (@alertsArray,"</gds>");
 
     # write the big XML file if needed
     if(AttrVal($name,"gdsDebug", 0)) {
@@ -1499,7 +1529,7 @@ sub _buildCAPList($$$){
     
     # make XML array and analyze data
     eval	{	
-	  $alertsXml = $xml->XMLin($cF, KeyAttr => {}, ForceArray => [ 'info', 'eventCode', 'area', 'geocode' ]);
+	  $alertsXml = $xml->XMLin($cF, KeyAttr => {}, ForceArray => [ 'alert', 'eventCode', 'area', 'geocode' ]);
     };
     if ($@) {
        Log3($name,1,'GDS: error analyzing alerts XML:'.$@);
@@ -1510,20 +1540,20 @@ sub _buildCAPList($$$){
     # array elements are determined by $info and $area
     #
 
-	my $cellData = "";
+	my $cellData = '';
 
     for (my $info=0; $info<=$countInfo;$info++) {
        $area = 0;
        while(1){
-          $capCity  = $alertsXml->{info}[$info]{area}[$area]{areaDesc};
-          $capEvent = $alertsXml->{info}[$info]{event};
+          $capCity  = $alertsXml->{alert}[$info]{info}{area}[$area]{areaDesc};
+          $capEvent = $alertsXml->{alert}[$info]{info}{event};
           last unless $capCity;
           $capCell  = __findCAPWarnCellId($info, $area);
           $n        = 100*$info+$area;
           $capCity  = latin1ToUtf8($capCity.' '.$capEvent);
           push @a, $capCity;
           $capCity =~ s/\s/_/g;
-			$cellData .= "$n:$capCity:$capCell$n;;";
+          $cellData .= "$n:$capCity:$capCell$n;;";
           $area++;
           $record++;
           $capCity = undef;
@@ -1542,8 +1572,8 @@ sub __findCAPWarnCellId($$){
 	my ($info, $area) = @_;
 	my $i = 0;
 	while($i < 100){
-		if($alertsXml->{info}[$info]{area}[$area]{geocode}[$i]{valueName} eq "WARNCELLID"){
-			return $alertsXml->{info}[$info]{area}[$area]{geocode}[$i]{value};
+		if($alertsXml->{alert}[$info]{info}{area}[$area]{geocode}[$i]{valueName} eq "WARNCELLID"){
+			return $alertsXml->{alert}[$info]{info}{area}[$area]{geocode}[$i]{value};
 			last;
 		}
 		$i++; # emergency exit :)
@@ -1868,6 +1898,7 @@ sub getListForecastStations($) {
 
 	eval {
 		foreach my $region (@regions) {
+			$data = "";
 			my $areaAndTime = 'Daten_'.$region.'_morgen_spaet';
 			while(($k, $v) = each %allForecastData){
 				if ($k eq $areaAndTime) {
@@ -1907,6 +1938,16 @@ sub getListForecastStations($) {
 #	Changelog
 #
 ###################################################################################################
+#
+#	2016-01-01	fixed		use txt file instead html for conditions (adopt DWD changes)
+#
+#	2015-12-31	fixed		conditions retrieval on startup
+#
+#	2015-11-26	fixed		wrong region handling
+#				added		gdsAlertsHeadlines()
+#
+#	2015-11-17	changed		decodeCAPData - fix wrong cumulation (first try)
+#				fixed		minor bugs
 #
 #	2015-11-06	changed		character encoding in forecast readings (jensb)
 #				fixed		problems after global rereadcfg
@@ -2106,7 +2147,7 @@ sub getListForecastStations($) {
 	
 		<br/>
 		Module uses following additional Perl modules:<br/><br/>
-		<code>Net::FTP, XML::Simple</code><br/><br/>
+		<code>Net::FTP, XML::Simple, Archive::Extract</code><br/><br/>
 		If not already installed in your environment, 
 		please install them using appropriate commands from your environment.
 
@@ -2185,14 +2226,14 @@ sub getListForecastStations($) {
 		<ul>Retrieve current conditions at selected station</ul>
 		<br/>
 
-		<code>get &lt;name&gt; forecasts &lt;region&gt;</code>
-		<br/><br/>
-		<ul>Retrieve forecasts for today and the following 3 days for selected region as text</ul>
-		<br/>
-
 		<code>get &lt;name&gt; conditionsmap &lt;region&gt;</code>
 		<br/><br/>
 		<ul>Retrieve map (imagefile) showing current conditions at selected station</ul>
+		<br/>
+
+		<code>get &lt;name&gt; forecasts &lt;region&gt;</code>
+		<br/><br/>
+		<ul>Retrieve forecasts for today and the following 3 days for selected region as text</ul>
 		<br/>
 
 		<code>get &lt;name&gt; forecastsmap &lt;stationName&gt;</code>
@@ -2200,9 +2241,10 @@ sub getListForecastStations($) {
 		<ul>Retrieve map (imagefile) showing forecasts for selected region</ul>
 		<br/>
 
-		<code>get &lt;name&gt; headlines</code>
+		<code>get &lt;name&gt; headlines [separator]</code>
 		<br/><br/>
-		<ul>Returns a string, containing all alert headlines separated by |</ul>
+		<ul>Returns a string, containing all alert headlines. <br/>
+		    Default separator is | but can be overriden.</ul>
 		<br/>
 
 		<code>get &lt;name&gt; help</code>
@@ -2275,7 +2317,7 @@ sub getListForecastStations($) {
 	</ul>
 	<br/><br/>
 
-	<b>Generated Readings/Events:</b>
+	<b>Generated Readings:</b>
 	<br/><br/>
 	<ul>
 		<li><b>_&lt;readingName&gt;</b> - debug informations</li>
@@ -2308,11 +2350,22 @@ sub getListForecastStations($) {
 	</ul>
 	<br/><br/>
 
+	<b>Other events:</b>
+	<br/><br/>
+	<ul>
+		<li><b>REREAD</b> - start of rereadcfg</li>
+		<li><b>REREADFILE</b> - end of file read</li>
+		<li><b>REREADCONDITIONS</b> - end of condition read and analyzing</li>
+		<li><b>REREADALERTS</b> - end of alerts read and analyzing</li>
+		<li><b>REREADFORECAST</b> - end of forecast read and analyzing</li>
+	</ul>
+	<br/><br/>
+
 	<b>Author's notes</b><br/><br/>
 	<ul>
 
 		<li>Module uses following additional Perl modules:<br/><br/>
-		<code>Net::FTP, XML::Simple</code><br/><br/>
+		<code>Net::FTP, XML::Simple, Archive::Extract</code><br/><br/>
 		If not already installed in your environment, please install them using appropriate commands from your environment.</li>
 		<br/><br/>
 		<li>Have fun!</li><br/>

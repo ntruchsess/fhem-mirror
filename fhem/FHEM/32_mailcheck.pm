@@ -375,8 +375,10 @@ mailcheck_Read($)
       my $msg_count = $client->unseen_count||0;
       if ($msg_count > 0) {
         my $from = $client->get_header($resp, "From");
-        $from =~ s/<[^>]*>//g; #strip the email, only display the sender's name
         Log3 $name, 4, "from: $from";
+        if( $from =~ m/<([^>]*)>/ ) {
+          $from = $1;
+        }
 
         my $subject = $client->get_header($resp, "Subject");
         Log3 $name, 4, "subject: $subject";
@@ -434,7 +436,12 @@ mailcheck_Read($)
           Log3 $name, 2, "accept_from is set but MIME::Parser is not available";
         }
 
-        readingsSingleUpdate($hash, "Subject", $subject, 1 ) if( $do_notify );
+        if( $do_notify ) {
+          readingsBeginUpdate($hash);
+          readingsBulkUpdate($hash, "From", $from);
+          readingsBulkUpdate($hash, "Subject", $subject);
+          readingsEndUpdate($hash, 1);
+        }
 
         $client->delete_message( $resp ) if( AttrVal($name, "delete_message", 0) == 1 );
       }
@@ -503,6 +510,8 @@ mailcheck_Read($)
   <ul>
     <li>Subject<br>
       the subject of the last mail received</li>
+    <li>From<br>
+      the mail address of the last sender</li>
   </ul><br>
 
   <a name="mailcheck_Get"></a>

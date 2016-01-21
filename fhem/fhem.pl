@@ -4,7 +4,7 @@
 #
 #  Copyright notice
 #
-#  (c) 2005-2014
+#  (c) 2005-2015
 #  Copyright: Rudolf Koenig (r dot koenig at koeniglich dot de)
 #  All rights reserved
 #
@@ -44,7 +44,7 @@ sub AddDuplicate($$);
 sub AnalyzeCommand($$;$);
 sub AnalyzeCommandChain($$;$);
 sub AnalyzeInput($);
-sub AnalyzePerlCommand($$);
+sub AnalyzePerlCommand($$;$);
 sub AssignIoPort($;$);
 sub AttrVal($$$);
 sub CallFn(@);
@@ -81,6 +81,7 @@ sub PrintHash($$);
 sub ReadingsNum($$$);
 sub ReadingsTimestamp($$$);
 sub ReadingsVal($$$);
+sub RefreshAuthList();
 sub RemoveInternalTimer($);
 sub ReplaceEventMap($$$);
 sub ResolveDateWildcards($@);
@@ -101,7 +102,7 @@ sub concatc($$$);
 sub configDBUsed();
 sub createNtfyHash();
 sub createUniqueId();
-sub devspec2array($);
+sub devspec2array($;$);
 sub doGlobalDef($);
 sub escapeLogLine($);
 sub evalStateFormat($);
@@ -127,6 +128,7 @@ sub setReadingsVal($$$$);
 sub utf8ToLatin1($);
 
 sub CommandAttr($$);
+sub CommandCancel($$);
 sub CommandDefaultAttr($$);
 sub CommandDefine($$);
 sub CommandDefMod($$);
@@ -211,6 +213,7 @@ use vars qw(%data);             # Hash for user data
 use vars qw(%defaultattr);      # Default attributes, used by FHEM2FHEM
 use vars qw(%defs);             # FHEM device/button definitions
 use vars qw(%inform);           # Used by telnet_ActivateInform
+use vars qw(%logInform);        # Used by FHEMWEB/Event-Monitor
 use vars qw(%intAt);            # Internal at timer hash, global for benchmark
 use vars qw(%modules);          # List of loaded modules (device/log/etc)
 use vars qw(%ntfyHash);         # hash of devices needed to be notified.
@@ -222,14 +225,17 @@ use vars qw($lastDefChange);    # number of last def/attr change
 use vars qw(@structChangeHist); # Contains the last 10 structural changes
 use vars qw($cmdFromAnalyze);   # used by the warnings-sub
 use vars qw($featurelevel); 
+use vars qw(@authorize);        # List of authorization devices
+use vars qw(@authenticate);     # List of authentication devices
+use vars qw($auth_refresh);
 
 my $AttrList = "verbose:0,1,2,3,4,5 room group comment:textField-long alias ".
-                "eventMap userReadings";
+                "eventMap userReadings:textField-long";
 my $currcfgfile="";             # current config/include file
 my $currlogfile;                # logfile, without wildcards
 my $cvsid = '$Id$';
 my $duplidx=0;                  # helper for the above pool
-my $evalSpecials;               # Used by EvalSpecials->AnalyzeCommand parameter passing
+my $evalSpecials;               # Used by EvalSpecials->AnalyzeCommand
 my $intAtCnt=0;
 my $logopened = 0;              # logfile opened or using stdout
 my $namedef = "where <name> is a single device name, a list separated by komma (,) or a regexp. See the devspec section in the commandref.html for details.\n";
@@ -240,11 +246,12 @@ my $wbName = ".WRITEBUFFER";    # Buffer-name for delayed writing via select
 my %comments;                   # Comments from the include files
 my %duplicate;                  # Pool of received msg for multi-fhz/cul setups
 my @cmdList;                    # Remaining commands in a chain. Used by sleep
+my %sleepers;                   # list of sleepers
 
 $init_done = 0;
 $lastDefChange = 0;
 $readytimeout = ($^O eq "MSWin32") ? 0.1 : 5.0;
-$featurelevel = 5.6;
+$featurelevel = 5.7;
 
 
 $modules{Global}{ORDER} = -1;
@@ -307,6 +314,8 @@ $readingFnAttributes = "event-on-change-reading event-on-update-reading ".
   "?"       => { ReplacedBy => "help" },
   "attr"    => { Fn=>"CommandAttr",
            Hlp=>"<devspec> <attrname> [<attrval>],set attribute for <devspec>"},
+  "cancel"  => { Fn=>"CommandCancel",
+           Hlp=>"[<id> [quiet]],list sleepers, cancel sleeper with <id>" },
   "createlog"=> { ModuleName => "autocreate" },
   "define"  => { Fn=>"CommandDefine",
            Hlp=>"<name> <type> <options>,define a device" },
@@ -359,9 +368,9 @@ $readingFnAttributes = "event-on-change-reading event-on-update-reading ".
   "setdefaultattr" => { Fn=>"CommandDefaultAttr",
             Hlp=>"<attrname> <attrvalue>,set attr for following definitions" },
   "shutdown"=> { Fn=>"CommandShutdown",
-            Hlp=>"[restart],terminate the server" },
+            Hlp=>"[restart|exitValue],terminate the server" },
   "sleep"  => { Fn=>"CommandSleep",
-            Hlp=>"<sec> [quiet],sleep for sec, 3 decimal places" },
+            Hlp=>"<sec> [<id>] [quiet],sleep for sec, 3 decimal places" },
   "trigger" => { Fn=>"CommandTrigger",
             Hlp=>"<devspec> <state>,trigger notify command" },
   "update" => {
@@ -567,10 +576,10 @@ if($motd eq "$sc_text\n\n") {
   }
 }
 
-my $osuser = "os $^O, user ".(getlogin || getpwuid($<) || "unknown");
+my $osuser = "os:$^O user:".(getlogin || getpwuid($<) || "unknown");
 Log 0, "Featurelevel: $featurelevel";
 Log 0, "Server started with ".int(keys %defs).
-        " defined entities (version $attr{global}{version}, $osuser, pid $$)";
+        " defined entities ($attr{global}{version} perl:$] $osuser pid:$$)";
 
 ################################################
 # Main Loop
@@ -829,6 +838,13 @@ Log3($$$)
   } else {
     print "$tim $loglevel: $text\n";
   }
+
+  no strict "refs";
+  foreach my $li (keys %logInform) {
+    &{$logInform{$li}}($li, "$tim $loglevel : $text");
+  }
+  use strict "refs";
+
   return undef;
 }
 
@@ -898,7 +914,7 @@ CommandIOWrite($$)
 sub
 AnalyzeCommandChain($$;$)
 {
-  my ($c, $cmd, $allowed) = @_;
+  my ($c, $cmd) = @_;
   my @ret;
 
   if($cmd =~ m/^[ \t]*(#.*)?$/) {      # Save comments
@@ -921,7 +937,7 @@ AnalyzeCommandChain($$;$)
   my $subcmd;
   while(defined($subcmd = shift @cmdList)) {
     $subcmd =~ s/SeMiCoLoN/;/g;
-    my $lret = AnalyzeCommand($c, $subcmd, $allowed);
+    my $lret = AnalyzeCommand($c, $subcmd);
     push(@ret, $lret) if(defined($lret));
   }
   @cmdList = @saveCmdList;
@@ -932,15 +948,17 @@ AnalyzeCommandChain($$;$)
 
 #####################################
 sub
-AnalyzePerlCommand($$)
+AnalyzePerlCommand($$;$)
 {
-  my ($cl, $cmd) = @_;
+  my ($cl, $cmd, $calledFromChain) = @_; # third parmeter is deprecated
+
+  return "Forbidden command $cmd." if($cl && !Authorized($cl, "cmd", "perl"));
 
   $cmd =~ s/\\ *\n/ /g;               # Multi-line. Probably not needed anymore
 
   # Make life easier for oneliners:
-  %value = ();
   if($featurelevel <= 5.6) {
+    %value = ();
     foreach my $d (keys %defs) {
       $value{$d} = $defs{$d}{STATE}
     }
@@ -950,8 +968,8 @@ AnalyzePerlCommand($$)
   my $we = (($wday==0 || $wday==6) ? 1 : 0);
   if(!$we) {
     my $h2we = $attr{global}{holiday2we};
-    if($h2we && $value{$h2we}) {
-      my ($a, $b) = ReplaceEventMap($h2we, [$h2we, $value{$h2we}], 0);
+    if($h2we && Value($h2we)) {
+      my ($a, $b) = ReplaceEventMap($h2we, [$h2we, Value($h2we)], 0);
       $we = 1 if($b ne "none");
     }
   }
@@ -959,7 +977,7 @@ AnalyzePerlCommand($$)
   $year+=1900;
 
   if($evalSpecials) {
-    $cmd = join("", map { my $n = substr($_,1);
+    $cmd = join("", map { my $n = substr($_,1); # ignore the %
                           my $v = $evalSpecials->{$_};
                           $v =~ s/(['\\])/\\$1/g;
                           "my \$$n='$v';";
@@ -967,7 +985,7 @@ AnalyzePerlCommand($$)
            . $cmd;
     # Normally this is deleted in AnalyzeCommandChain, but ECMDDevice calls us
     # directly, and combining perl with something else isnt allowed anyway.
-    $evalSpecials = undef;
+    $evalSpecials = undef if(!$calledFromChain);
   }
 
   $cmdFromAnalyze = $cmd;
@@ -980,7 +998,7 @@ AnalyzePerlCommand($$)
 sub
 AnalyzeCommand($$;$)
 {
-  my ($cl, $cmd, $allowed) = @_;
+  my ($cl, $cmd) = @_; # third parmeter is deprecated
 
   $cmd = "" if(!defined($cmd)); # Forum #29963
   $cmd =~ s/^(\n|[ \t])*//;# Strip space or \n at the begginning
@@ -990,12 +1008,11 @@ AnalyzeCommand($$;$)
   return undef if(!$cmd);
 
   if($cmd =~ m/^{.*}$/s) {              # Perl code
-    return "Forbidden command $cmd." if($allowed && $allowed !~ m/\bperl\b/);
-    return AnalyzePerlCommand($cl, $cmd);
+    return AnalyzePerlCommand($cl, $cmd, 1);
   }
 
   if($cmd =~ m/^"(.*)"$/s) { # Shell code in bg, to be able to call us from it
-    return "Forbidden command $cmd." if($allowed && $allowed !~ m/\bshell\b/);
+    return "Forbidden command $cmd." if($cl && !Authorized($cl,"cmd","shell"));
     if($evalSpecials) {
       map { $ENV{substr($_,1)} = $evalSpecials->{$_}; } keys %{$evalSpecials};
     }
@@ -1027,7 +1044,7 @@ AnalyzeCommand($$;$)
   $fn = $cmds{$fn}{ReplacedBy}
                 if(defined($cmds{$fn}) && defined($cmds{$fn}{ReplacedBy}));
 
-  return "Forbidden command $fn." if($allowed && $allowed !~ m/\b$fn\b/);
+  return "Forbidden command $fn." if($cl && !Authorized($cl,"cmd",$fn));
 
   #############
   # autoload commands.
@@ -1057,12 +1074,17 @@ AnalyzeCommand($$;$)
 }
 
 sub
-devspec2array($)
+devspec2array($;$)
 {
-  my ($name) = @_;
+  my ($name, $cl) = @_;
 
   return "" if(!defined($name));
   if(defined($defs{$name})) {
+    if($cl && !Authorized($cl, "devicename", $name)) {
+      Log 4, "Forbidden device $name";
+      return "";
+    }
+
     # FHEM2FHEM LOG mode fake device, avoid local set/attr/etc operations on it
     return "FHEM2FHEM_FAKE_$name" if($defs{$name}{FAKEDEVICE});
     return $name;
@@ -1086,13 +1108,18 @@ devspec2array($)
       }
       ($n,$op,$re) = ($1,"eval","") if($dName =~ m/^{(.*)}$/);
 
+      my $fType="";
+      if($n =~ m/^(.:)(.*$)/) {
+        $fType = $1;
+        $n = $2;
+      }
       @res=();
       foreach my $d (@names) {
         next if($attr{$d} && $attr{$d}{ignore});
 
         if($op eq "eval") {
           my $exec = EvalSpecials($n, %{{"%DEVICE"=>$d}});
-          push @res, $d if(AnalyzePerlCommand(undef, $exec));
+          push @res, $d if(AnalyzePerlCommand($cl, $exec));
           next;
         }
 
@@ -1101,12 +1128,13 @@ devspec2array($)
           Log 1, "Error: $d has no TYPE";
           next;
         }
-        my $val = $hash->{$n};
-        if(!defined($val)) {
+        my $val;
+        $val = $hash->{$n} if(!$fType || $fType eq "i:");
+        if(!defined($val) && (!$fType || $fType eq "r:")) {
           my $r = $hash->{READINGS};
           $val = $r->{$n}{VAL} if($r && $r->{$n});
         }
-        if(!defined($val)) {
+        if(!defined($val) && (!$fType || $fType eq "a:")) {
           $val = $attr{$d}{$n} if($attr{$d});
         }
         $val="" if(!defined($val));
@@ -1136,6 +1164,7 @@ devspec2array($)
     push @ret,@res;
   }
   return $name if(!@ret && !$isAttr);
+  @ret = grep { Authorized($cl, "devicename", $_) } @ret if($cl);
   return @ret;
 }
 
@@ -1476,7 +1505,12 @@ sub
 CommandShutdown($$)
 {
   my ($cl, $param) = @_;
-  return "Usage: shutdown [restart]"
+  my $exitValue = 0;
+  if($param && $param =~ m/^(\d+)$/) {
+    $exitValue = $1;
+    $param = "";
+  }
+  return "Usage: shutdown [restart|exitvalue]"
         if($param && $param ne "restart");
 
   DoTrigger("global", "SHUTDOWN", 1);
@@ -1497,27 +1531,27 @@ CommandShutdown($$)
       exec('cmd.exe /C net stop fhem & net start fhem');
     }
   }
-  exit(0);
+  exit($exitValue);
 }
 
 
 #####################################
 sub
-ReplaceSetMagic(@)       # Forum #38276
+ReplaceSetMagic($$@)       # Forum #38276
 {
+  my $hash = shift;
+  my $nsplit = shift;
   my $a = join(" ", @_);
+  my $oa = $a;
 
   $a =~ s/\[([a-z0-9._]+):([A-z0-9._]+)\]/{
     my $x = ReadingsVal($1,$2,""); $x eq "" ? "[$1:$2]" : $x
   }/egi;
 
-  $a =~ s/{\((.*)\)}/{
-    my $x = eval $1;
-    Log 1, "ReplaceSetMagic: $1 -> $@" if($@);
-    $@ ? $1 : $x
-  }/eg;
+  $a =~ s/{\((.*)\)}/AnalyzePerlCommand($hash->{CL},$1,1)/eg;
 
-  return split(" ", $a);
+  return (undef, @_) if($oa eq $a);
+  return (undef, split(/ /, $a, $nsplit));
 }
 
 #####################################
@@ -1536,7 +1570,9 @@ DoSet(@)
   return CallFn($dev, "SetFn", $hash, @a) if($a[1] && $a[1] eq "?");
 
   @a = ReplaceEventMap($dev, \@a, 0) if($attr{$dev}{eventMap});
-  @a = ReplaceSetMagic(@a) if($featurelevel >= 5.7);
+  my $err;
+  ($err, @a) = ReplaceSetMagic($hash, 0, @a) if($featurelevel >= 5.7);
+  return $err if($err);
 
   $hash->{".triggerUsed"} = 0; 
   my ($ret, $skipTrigger) = CallFn($dev, "SetFn", $hash, @a);
@@ -1566,10 +1602,12 @@ CommandSet($$)
   return "Usage: set <name> <type-dependent-options>\n$namedef" if(int(@a)<1);
 
   my @rets;
-  foreach my $sdev (devspec2array($a[0])) {
+  foreach my $sdev (devspec2array($a[0], $cl)) {
 
     $a[0] = $sdev;
+    $defs{$sdev}->{CL} = $cl if($defs{$sdev});
     my $ret = DoSet(@a);
+    delete $defs{$sdev}->{CL} if($defs{$sdev});
     push @rets, $ret if($ret);
 
   }
@@ -1588,7 +1626,7 @@ CommandGet($$)
 
 
   my @rets;
-  foreach my $sdev (devspec2array($a[0])) {
+  foreach my $sdev (devspec2array($a[0], $cl)) {
     if(!defined($defs{$sdev})) {
       push @rets, "Please define $sdev first";
       next;
@@ -1599,10 +1637,31 @@ CommandGet($$)
     }
 
     $a[0] = $sdev;
+    $defs{$sdev}->{CL} = $cl;
     my $ret = CallFn($sdev, "GetFn", $defs{$sdev}, @a);
+    delete $defs{$sdev}->{CL};
     push @rets, $ret if(defined($ret) && $ret ne "");
   }
   return join("\n", @rets);
+}
+
+sub
+asyncOutput($$)
+{
+  my ($cl,$ret) = @_;
+
+  return undef if( !$cl );
+
+  if( !$defs{$cl->{NAME}}
+      || $defs{$cl->{NAME}}->{NR} != $cl->{NR}
+      || $defs{$cl->{NAME}}->{NAME} ne $cl->{NAME} ) {
+    Log3 $cl->{NAME},3,"$cl->{NAME} asyncOutput: device gone, output was: $ret";
+    return undef;
+  }
+
+  $ret = CallFn($cl->{NAME}, "AsyncOutputFn", $defs{$cl->{NAME}}, $ret);
+
+  return $ret;
 }
 
 #####################################
@@ -1646,7 +1705,7 @@ CommandDefine($$)
     @a = split("[ \t][ \t]*", $def, 3);
     $ignoreErr = 1;
   }
-  if($a[0] && $a[0] eq "-temporary") { # Forum #39610
+  if($a[0] && $a[0] eq "-temporary") { # Forum #39610, 46640
     $def =~ s/\s*-temporary\s*//;
     @a = split("[ \t][ \t]*", $def, 3);
     $temporary = 1;
@@ -1656,8 +1715,13 @@ CommandDefine($$)
   return "Usage: define <name> <type> <type dependent arguments>"
                 if(int(@a) < 2);
   return "$name already defined, delete it first" if(defined($defs{$name}));
-  return "Invalid characters in name (not A-Za-z0-9.:_): $name"
+  return "Invalid characters in name (not A-Za-z0-9._): $name"
                         if($name !~ m/^[a-z0-9.:_]*$/i);
+  if($name =~ m/:/) { # Forum #45788
+    my $msg = "unsupported character (:) in devicename $name";
+    return $msg if($init_done);
+    Log 3, "WARNING: $msg";
+  }
 
   my $m = $a[1];
   if(!$modules{$m}) {                           # Perhaps just wrong case?
@@ -1818,7 +1882,7 @@ CommandDelete($$)
   return "Usage: delete <name>$namedef\n" if(!$def);
 
   my @rets;
-  foreach my $sdev (devspec2array($def)) {
+  foreach my $sdev (devspec2array($def, $cl)) {
     if(!defined($defs{$sdev})) {
       push @rets, "Please define $sdev first";
       next;
@@ -1867,7 +1931,7 @@ CommandDeleteAttr($$)
   return "Usage: deleteattr <name> [<attrname>]\n$namedef" if(@a < 1);
 
   my @rets;
-  foreach my $sdev (devspec2array($a[0])) {
+  foreach my $sdev (devspec2array($a[0], $cl)) {
 
     if(!defined($defs{$sdev})) {
       push @rets, "Please define $sdev first";
@@ -1913,7 +1977,7 @@ CommandDisplayAttr($$)
   return "Usage: displayattr <name> [<attrname>]\n$namedef" if(@a < 1);
 
   my @rets;
-  my @devspec = devspec2array($a[0]);
+  my @devspec = devspec2array($a[0],$cl);
 
   foreach my $sdev (@devspec) {
 
@@ -1953,7 +2017,7 @@ CommandDeleteReading($$)
 
   %ntfyHash = ();
   my @rets;
-  foreach my $sdev (devspec2array($a[0])) {
+  foreach my $sdev (devspec2array($a[0],$cl)) {
 
     if(!defined($defs{$sdev})) {
       push @rets, "Please define $sdev first";
@@ -1981,12 +2045,20 @@ CommandSetReading($$)
   my @a = split(" ", $def, 3);
   return "Usage: setreading <name> <reading> <value>\n$namedef" if(@a != 3);
 
+  my $err;
+
   my @rets;
-  foreach my $sdev (devspec2array($a[0])) {
+  foreach my $sdev (devspec2array($a[0],$cl)) {
 
     if(!defined($defs{$sdev})) {
       push @rets, "Please define $sdev first";
       next;
+    }
+    my $hash = $defs{$sdev};
+    if($featurelevel >= 5.7) {
+      $hash->{CL} = $cl;
+      ($err, @a) = ReplaceSetMagic($hash, 3, @a);
+      delete($hash->{CL});
     }
     readingsSingleUpdate($defs{$sdev}, $a[1], $a[2], 1);
   }
@@ -2050,7 +2122,7 @@ CommandList($$)
     for my $d (sort { my $x=$modules{$defs{$a}{TYPE}}{ORDER}.$defs{$a}{TYPE} cmp
                             $modules{$defs{$b}{TYPE}}{ORDER}.$defs{$b}{TYPE};
                          $x=($a cmp $b) if($x == 0); $x; } keys %defs) {
-      next if(IsIgnored($d));
+      next if(IsIgnored($d) || ($cl && !Authorized($cl,"devicename",$d)));
       my $t = $defs{$d}{TYPE};
       $str .= "\n$t:\n" if($t ne $lt);
       $str .= sprintf("  %-20s (%s)\n", $d, $defs{$d}{STATE});
@@ -2060,7 +2132,7 @@ CommandList($$)
   } else { # devspecArray
 
     my @arg = split(" ", $param);
-    my @list = devspec2array($arg[0]);
+    my @list = devspec2array($arg[0],$cl);
     if($arg[1]) {
       foreach my $sdev (@list) { # Show a Hash-Entry or Reading for each device
 
@@ -2292,7 +2364,8 @@ GlobalAttr($$$$)
 
     opendir(DH, $modpath) || return "Can't read $modpath: $!";
     push @INC, $modpath if(!grep(/\Q$modpath\E/, @INC));
-    $attr{global}{version} = $cvsid;
+    $cvsid =~ m/(fhem.pl) (\d+) (\d+-\d+-\d+)/;
+    $attr{global}{version} = "$1:$2/$3";
     my $counter = 0;
 
     if(configDBUsed()) {
@@ -2345,7 +2418,7 @@ CommandAttr($$)
            if(@a && @a < 2);
 
   my @rets;
-  foreach my $sdev (devspec2array($a[0])) {
+  foreach my $sdev (devspec2array($a[0],$cl)) {
 
     my $hash = $defs{$sdev};
     my $attrName = $a[1];
@@ -2391,7 +2464,7 @@ CommandAttr($$)
 
       #Log 1, "arg is $arg";
 
-      while($arg =~ /$regexo/) {
+      while($arg =~ /$regexo/s) {
         my $userReading= $2;
         my $trigger= $3 ? $3 : undef;
         my $modifier= $5 ? $5 : "none";
@@ -2489,7 +2562,7 @@ CommandSetstate($$)
   return "Usage: setstate <name> <state>\n$namedef" if(@a != 2);
 
   my @rets;
-  foreach my $sdev (devspec2array($a[0])) {
+  foreach my $sdev (devspec2array($a[0],$cl)) {
     if(!defined($defs{$sdev})) {
       push @rets, "Please define $sdev first";
       next;
@@ -2509,6 +2582,10 @@ CommandSetstate($$)
         push @rets, $ret;
         next;
       }
+
+      Log3 $d, 3, "WARNING: unsupported character in reading $sname ".
+             "(not A-Za-z/\\d_\\.-), notify the $d->{TYPE} module maintainer."
+        if($sname !~ m/^[A-Za-z\d_\.\-\/]+$/ && $sname !~ m/^\./);
 
       if(!defined($d->{READINGS}{$sname}) ||
          !defined($d->{READINGS}{$sname}{TIME}) ||
@@ -2549,7 +2626,7 @@ CommandTrigger($$)
   $state = "" if(!defined($state));
 
   my @rets;
-  foreach my $sdev (devspec2array($dev)) {
+  foreach my $sdev (devspec2array($dev,$cl)) {
     if(!defined($defs{$sdev})) {
       push @rets, "Please define $sdev first";
       next;
@@ -2602,28 +2679,65 @@ sub
 WakeUpFn($)
 {
   my $h = shift;
+  delete $sleepers{$h->{id}} if( $h->{id} );
+
   $evalSpecials = $h->{evalSpecials};
   my $ret = AnalyzeCommandChain(undef, $h->{cmd});
   Log 2, "After sleep: $ret" if($ret && !$h->{quiet});
 }
+sub
+CommandCancel($$)
+{
+  my ($cl, $param) = @_;
+  my ($id, $quiet) = split(" ", $param, 3);
+  return "Last parameter must be quiet" if($quiet && $quiet ne "quiet");
 
+  if( !$id ) {
+    my $ret;
+    foreach $id (keys %sleepers) {
+      $ret .= "\n" if( $ret );
+      $ret .= sprintf( "%-10s %s", $id, $sleepers{$id}->{cmd} );
+    }
+    $ret = "no pending sleeps" if( !$ret );
+    return $ret;
+
+  } elsif( my $h = $sleepers{$id} ) {
+    RemoveInternalTimer( $h );
+    delete $sleepers{$h->{id}};
+
+  } else {
+    return "no such id: $id" if( !$quiet );
+
+  }
+
+  return undef;
+}
 
 sub
 CommandSleep($$)
 {
   my ($cl, $param) = @_;
-  my ($sec, $quiet) = split(" ", $param);
+  my ($sec, $id, $quiet) = split(" ", $param, 3);
+  if( $id && $id eq 'quiet' ) {
+    $quiet = $id;
+    $id = undef;
+  }
 
   return "Argument missing" if(!defined($sec));
   return "Cannot interpret $sec as seconds" if($sec !~ m/^[0-9\.]+$/);
-  return "Second parameter must be quiet" if($quiet && $quiet ne "quiet");
+  return "Last parameter must be quiet" if($quiet && $quiet ne "quiet");
 
   Log 4, "sleeping for $sec";
 
   if(@cmdList && $sec && $init_done) {
     my %h = (cmd          => join(";", @cmdList),
              evalSpecials => $evalSpecials,
-             quiet        => $quiet);
+             quiet        => $quiet,
+             id           => $id);
+    if( $id ) {
+      RemoveInternalTimer( $sleepers{$id} ) if( $sleepers{$id} );
+      $sleepers{$id} = \%h;
+    }
     InternalTimer(gettimeofday()+$sec, "WakeUpFn", \%h, 0);
     @cmdList=();
 
@@ -2855,18 +2969,12 @@ SemicolonEscape($)
 sub
 EvalSpecials($%)
 {
-  # The character % will be replaced with the received event,
-  #     e.g. with on or off or measured-temp: 21.7 (Celsius)
-  # The character @ will be replaced with the device name.
-  # To use % or @ in the text itself, use the double mode (%% or @@).
-  # Instead of % and @, the parameters %EVENT (same as %),
-  #     %NAME (same as @) and %TYPE (contains the device type, e.g. FHT)
-  #     can be used. A single % looses its special meaning if any of these
-  #     parameters appears in the definition.
+  # $NAME will be replaced with the device name which generated the event
+  # $EVENT will be replaced with the whole event string
+  # $EVTPART<N> will be replaced with single words of an event
   my ($exec, %specials)= @_;
   $exec = SemicolonEscape($exec);
 
-  # %EVTPART due to HM remote logic
   my $idx = 0;
   if(defined($specials{"%EVENT"})) {
     foreach my $part (split(" ", $specials{"%EVENT"})) {
@@ -2875,15 +2983,25 @@ EvalSpecials($%)
     }
   }
 
-  my $re = join("|", keys %specials);
+  if($featurelevel > 5.6) {
+    $evalSpecials = \%specials;
+    return $exec;
+  }
+
+  # featurelevel <= 5.6 only:
+  # The character % will be replaced with the received event,
+  #     e.g. with on or off or measured-temp: 21.7 (Celsius)
+  # The character @ will be replaced with the device name.
+  # To use % or @ in the text itself, use the double mode (%% or @@).
+
+  my $re = join("|", keys %specials); # Found the $syntax, skip the rest
   $re =~ s/%//g;
   if($exec =~ m/\$($re)\b/) {
     $evalSpecials = \%specials;
     return $exec;
   }
 
-  $exec =~ s/%%/____/g if($featurelevel <= 5.6);
-
+  $exec =~ s/%%/____/g;
 
   # perform macro substitution
   my $extsyntax= 0;
@@ -2891,18 +3009,14 @@ EvalSpecials($%)
     $extsyntax+= ($exec =~ s/$special/$specials{$special}/g);
   }
 
-  if($featurelevel <= 5.6) {
-    if(!$extsyntax) {
-      $exec =~ s/%/$specials{"%EVENT"}/g;
-    }
-    $exec =~ s/____/%/g;
+  if(!$extsyntax) {
+    $exec =~ s/%/$specials{"%EVENT"}/g;
   }
+  $exec =~ s/____/%/g;
 
-  if($featurelevel <= 5.6) {
-    $exec =~ s/@@/____/g;
-    $exec =~ s/@/$specials{"%NAME"}/g;
-    $exec =~ s/____/@/g;
-  }
+  $exec =~ s/@@/____/g;
+  $exec =~ s/@/$specials{"%NAME"}/g;
+  $exec =~ s/____/@/g;
 
   return $exec;
 }
@@ -3721,6 +3835,12 @@ readingsBeginUpdate($)
   my ($hash)= @_;
   my $name = $hash->{NAME};
   
+  if(!$name) {
+    Log 1, "ERROR: empty name in readingsBeginUpdate";
+    stacktrace();
+    return;
+  }
+
   # get timestamp
   my $now = gettimeofday();
   my $fmtDateTime = FmtDateTime($now);
@@ -3944,9 +4064,8 @@ readingsBulkUpdate($$$@)
         } else {
           $hash->{".attreocr-threshold$reading"} = $value;
         }
-      } else {
-        $value = $ov;
       }
+      $value = $ov;
     }
 
     # determine if an event should be created:
@@ -4009,7 +4128,7 @@ readingsBulkUpdate($$$@)
       # If no event-aggregator attribute, then remove stale series if any.
       delete $readings->{".ts"};
     }
-  }  
+  }
   
   
   setReadingsVal($hash, $reading, $value, $hash->{".updateTimestamp"}); 
@@ -4197,18 +4316,20 @@ createNtfyHash()
   my @ntfyList = sort { $defs{$a}{NTFY_ORDER} cmp $defs{$b}{NTFY_ORDER} }
                  grep { $defs{$_}{NTFY_ORDER} } keys %defs;
   foreach my $d (@ntfyList) {
-    my $nd = $defs{$d}{NOTIFYDEV};
-    #Log 1, "Created notify class for $nd / $d" if($nd);
-    $ntfyHash{$nd} = [] if($nd && !defined($ntfyHash{$nd}));
+    if($defs{$d}{NOTIFYDEV}) {
+      foreach my $nd (split(",",$defs{$d}{NOTIFYDEV})) {
+        $ntfyHash{$nd} = [] if($nd && !defined($ntfyHash{$nd}));
+      }
+    }
   }
   $ntfyHash{"*"} = [];
   foreach my $d (@ntfyList) {
-    my $nd = $defs{$d}{NOTIFYDEV};
-    if($nd) {
-      push @{$ntfyHash{$nd}}, $d;
-
+    if($defs{$d}{NOTIFYDEV}) {
+      foreach my $nd (split(",",$defs{$d}{NOTIFYDEV})) {
+        push @{$ntfyHash{$nd}}, $d;
+      }
     } else {
-      foreach $nd (keys %ntfyHash) {
+      foreach my $nd (keys %ntfyHash) {
         push @{$ntfyHash{$nd}}, $d;
       }
     }
@@ -4420,6 +4541,66 @@ Each($$;$)      # can be used e.g. in at, Forum #40022
   $defs{$dev}{EACH_INDEX} = $idx+1;
 
   return $arr[$idx];
+}
+
+##################
+# Return 1 if Authorized, else 0
+# Note: AuthorizeFn's returning 1 are not stackable.
+sub
+Authorized($$$)
+{
+  my ($cl, $type, $arg) = @_;
+
+  return 1 if(!$init_done || !$cl || !$cl->{SNAME}); # Safeguarding
+  RefreshAuthList() if($auth_refresh);
+  my $sname = $cl->{SNAME};
+  my $verbose = AttrVal($sname, "verbose", 1); # Speedup?
+
+  foreach my $a (@authorize) {
+    my $r = CallFn($a, "AuthorizeFn", $defs{$a}, $cl, $type, $arg);
+    if($verbose >= 4) {
+      Log3 $sname, 4, "authorize $sname/$type/$arg: $a returned ".
+          ($r == 0 ? "dont care" : $r == 1 ? "allowed" : "prohibited");
+    }
+    return 1 if($r == 1);
+    return 0 if($r == 2);
+  }
+  return 1;
+}
+
+##################
+# Return 0 if not needed, 1 if authenticated, 2 if authentication failed
+# Loop until one Authenticate is ok
+sub
+Authenticate($$)
+{
+  my ($cl, $arg) = @_;
+
+  return 1 if(!$init_done || !$cl || !$cl->{SNAME}); # Safeguarding
+  RefreshAuthList() if($auth_refresh);
+
+  my $needed = 0;
+  foreach my $a (@authenticate) {
+    my $r = CallFn($a, "AuthenticateFn", $defs{$a}, $cl, $arg);
+    $needed = $r if($r);
+    return $r if($r == 1);
+  }
+  return $needed;
+}
+
+sub
+RefreshAuthList()
+{
+  @authorize = ();
+  @authenticate = ();
+
+  foreach my $d (sort keys %defs) {
+    my $h = $defs{$d};
+    next if(!$h->{TYPE} || !$modules{$h->{TYPE}});
+    push @authorize, $d if($modules{$h->{TYPE}}{AuthorizeFn});
+    push @authenticate, $d if($modules{$h->{TYPE}}{AuthenticateFn});
+  }
+  $auth_refresh = 0;
 }
 
 1;

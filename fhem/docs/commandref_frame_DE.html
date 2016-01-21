@@ -38,6 +38,7 @@
       <a href="#attr">attr</a> &nbsp;
       <a href="#backup">backup</a> &nbsp;
       <a href="#CULflash">CULflash</a> &nbsp;
+      <a href="#cancel">cancel</a> &nbsp;
       <a href="#cmdalias">cmdalias</a> &nbsp;
       <a href="#configdb">configdb</a> &nbsp;
       <a href="#copy">copy</a> &nbsp;
@@ -92,6 +93,7 @@
   <b>Hilfs (Erweiterungs-) Module</b>
   <ul>
     <a href="#at">at</a> &nbsp;
+    <a href="#allowed">allowed</a> &nbsp;
     <a href="#autocreate">autocreate</a> &nbsp;
     <a href="#average">average</a> &nbsp;
     <a href="#Calendar">Calendar</a> &nbsp;
@@ -132,6 +134,7 @@
     <a href="#readingsHistory">readingsHistory</a> &nbsp;
     <a href="#readingsProxy">readingsProxy</a> &nbsp;
     <a href="#remotecontrol">remotecontrol</a> &nbsp;
+    <a href="#rssFeed">rssFeed</a> &nbsp;
     <a href="#RESIDENTS">RESIDENTS</a> &nbsp;
     <a href="#ROOMMATE">ROOMMATE</a> &nbsp;
     <a href="#SUNRISE_EL">SUNRISE_EL</a> &nbsp;
@@ -317,7 +320,10 @@ Zeilen erstreckende Befehle, indem man keine \ am Zeilenende eingeben muss.</p>
   <li>ein regul&auml;rer Ausdruck</li>
   <li>ein NAME=WERT Ausdruck, wo NAME ein "Internal" Wert wie TYPE ist, ein
       Reading-Name oder ein Attribut. WERT ist ein regul&auml;rer Ausdruck.
-      Um die Bedingung zu negieren, sollte NAME!=WERT verwendet werden.
+      Um die Bedingung zu negieren, muss NAME!=WERT verwendet werden.
+      Um die Suche einzugrenzen, kann man als Praefix i: f&uuml;r internal
+      Werte, r: f&uuml;r Reading-Namen und a: f&uuml;r Attribute verwenden,
+      siehe das Beispiel unten.
       </li>
   <li>Falls die Spezifikation von :FILTER=NAME=WERT gefolgt wird,
       dann wird die zuvor gefundene Liste durch diesen neuen Ausdruck
@@ -333,6 +339,7 @@ Zeilen erstreckende Befehle, indem man keine \ am Zeilenende eingeben muss.</p>
     <code>set room=kitchen:FILTER=STATE!=off off</code><br>
     <code>list disabled=</code><br>
     <code>list TYPE=FS20 STATE</code><br>
+    <code>list i:TYPE=FS20 STATE</code><br>
   </ul>
   Bemerkungen:
   <ul>
@@ -566,6 +573,7 @@ Ger&auml;t dokumentiert.
     <tr><td>max</td><td>the largest value encountered</td></tr>
     <tr><td>mean</td><td>the arithmetic mean of all values</td></tr>
     <tr><td>sd</td><td>the standard deviation from the mean</td></tr>
+    <tr><td>integral</td><td>the arithmetic sum (if not time-weighted) or integral area (if time-weighted) of all values</td></tr>
     </table>
     <p>
 
@@ -761,6 +769,14 @@ Die folgenden lokalen Attribute werden von mehreren Ger&auml;ten verwendet:
   </ul>
 </ul>
 
+<a name="cancel"></a>                        
+<h3>cancel</h3>                              
+<ul>                                         
+  <code>cancel [&lt;id&gt; [quiet]]</code>           
+  <br><br>                                   
+  Entfernt ein benanntes <a href="#sleep">sleep</a>.
+                                             
+</ul>                                        
 
 <a name="define"></a>
 <h3>define</h3>
@@ -1179,7 +1195,7 @@ Die folgenden lokalen Attribute werden von mehreren Ger&auml;ten verwendet:
   werden k&ouml;nnen.  Lesen Sie bitte den entsprechenden Abschnitt f&uuml;r
   das Ger&auml;t f&uuml;r Details durch.
   <br><br>
-  Ab featurelevel 5.7 ersetzt das set Befehl
+  Ab featurelevel 5.7 ersetzt das set und setreading Befehl
   <ul>
   <li>[device:reading] mit dem Wert des Readings f&uuml;r device, falls sowohl
     device, als auch Reading existiert, und nicht leer ist.</li>
@@ -1262,7 +1278,8 @@ Die folgenden lokalen Attribute werden von mehreren Ger&auml;ten verwendet:
   durchgef&uuml;hrt.
   <br>
   Siehe den Abschnitt &uuml;ber <a href="#devspec">Ger&auml;te-Spezifikation</a>
-  f&uuml;r Details der &lt;devspec&gt;.<br>
+  f&uuml;r Details der &lt;devspec&gt; und die Beschreibung des set Befehls
+  f&uuml;r Ersetzung.<br>
   <br>
   Beispiel:
   <ul>
@@ -1294,16 +1311,18 @@ Die folgenden lokalen Attribute werden von mehreren Ger&auml;ten verwendet:
 <a name="shutdown"></a>
 <h3>shutdown</h3>
 <ul>
-  <code>shutdown [restart]</code>
+  <code>shutdown [restart|exitValue]</code>
   <br><br>
   Der Befehl f&auml;hrt den Server herunter (nach dem sichern aller <a
   href="#statefile">Ger&auml;testati</a>). Er triggert das global:SHUTDOWN
   Ereignis.  Mit der optionalen Parameter restart startet FHEM danach neu.
+  exitValue ist bei bestimmten Start-programmen von n&oulm;ten.
   <br><br>
   Beispiel:
   <ul>
     <code>shutdown</code><br>
-    <code>shutdown restart</code>
+    <code>shutdown restart</code><br>
+    <code>shutdown 1</code>
   </ul>
 </ul>
 
@@ -1335,6 +1354,9 @@ Die folgenden lokalen Attribute werden von mehreren Ger&auml;ten verwendet:
   nachdem es die spezifizierte Zeitspanne gewartet hat. Die Einheit ist
   Sekunde, Millisekunden genau, da man Nachkommastellen spezifizieren
   kann.<br><br>
+
+  Ein sleep mit einer &lt;id&lt; ersetzt ein sleep mit der gleichen &lt;id&lt;
+  and can mit <a href="#cancel">cancel</a> entfernt werden.
 
   Falls sleep in at/notify/etc aufgerufen wurde, und die nachfolgenden
   Kommandos einen nicht leeren Text zur&uuml;ckgeliefert haben, dann wird

@@ -124,8 +124,13 @@ at_Define($$)
     return $ret if($ret);
 
   } else {
+    my $fmt = FmtDateTime($nt);
     $hash->{TRIGGERTIME} = $nt;
-    $hash->{TRIGGERTIME_FMT} = FmtDateTime($nt);
+    $hash->{TRIGGERTIME_FMT} = $fmt;
+    if($hash->{PERIODIC} eq "no") {      # Need for restart
+      $fmt =~ s/ /T/;
+      $hash->{DEF} = $fmt." ".$hash->{COMMAND};
+    }
     RemoveInternalTimer($hash);
     InternalTimer($nt, "at_Exec", $hash, 0);
     $hash->{NTM} = $ntm if($rel eq "+" || $fn);
@@ -174,7 +179,7 @@ at_Exec($)
   $data{AT_TRIGGERTIME} = $hash->{TRIGGERTIME} if($def =~ m/^\+/);
 
   if($count) {
-    $def =~ s/{\d+}/{$count}/ if($def =~ m/^\+?\*{\d+}/);  # Replace the count
+    $def =~ s/\{\d+\}/{$count}/ if($def =~ m/^\+?\*\{\d+\}/); # Replace count
     Log3 $name, 5, "redefine at command $name as $def";
 
     $data{AT_RECOMPUTE} = 1;             # Tell sunrise compute the next day
@@ -295,25 +300,7 @@ at_State($$$$)
 
   if($vt eq "state" && $val eq "inactive") {
     readingsSingleUpdate($hash, "state", "inactive", 1);
-    return undef;
   }
-
-  return undef if($hash->{DEF} !~ m/^\+\d/ ||
-                  $val !~ m/Next: (\d\d):(\d\d):(\d\d)/);
-
-  my ($h, $m, $s) = ($1, $2, $3);
-  my $then = ($h*60+$m)*60+$s;
-  my $now = time();
-  my @lt = localtime($now);
-  my $ntime = ($lt[2]*60+$lt[1])*60+$lt[0];
-  return undef if($ntime > $then); 
-
-  my $name = $hash->{NAME};
-  RemoveInternalTimer($hash);
-  InternalTimer($now+$then-$ntime, "at_Exec", $hash, 0);
-  $hash->{NTM} = "$h:$m:$s";
-  $hash->{STATE} = $val;
-  
   return undef;
 }
 
@@ -447,7 +434,7 @@ EOF
     define a13 at *07:00 set lamp1,lamp2 on-till {sunrise(+600)}
 
     # Switch the lamp off 2 minutes after sunrise each day
-    define a14 at +{sunrise(+120)} set lamp on
+    define a14 at *{sunrise(+120)} set lamp on
 
     # Switch lamp1 on at sunset, not before 18:00 and not after 21:00
     define a15 at *{sunset(0,"18:00","21:00")} set lamp1 on
@@ -613,7 +600,7 @@ EOF
     define a13 at *07:00 set lamp1,lamp2 on-till {sunrise(+600)}
 
     # Schalte lamp jeden Tag 2 Minuten nach Sonnenaufgang aus
-    define a14 at +{sunrise(+120)} set lamp on
+    define a14 at *{sunrise(+120)} set lamp on
 
     # Schalte lamp1 zum Sonnenuntergang ein, aber nicht vor 18:00 und nicht nach 21:00
     define a15 at *{sunset(0,"18:00","21:00")} set lamp1 on

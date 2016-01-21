@@ -28,7 +28,10 @@ sub HMLAN_relOvrLd($);
 sub HMLAN_condUpdate($$);
 sub HMLAN_getVerbLvl ($$$$);
 
-my %sets = ( "hmPairForSec" => "HomeMatic"
+my %sets = ( "open"         => ""
+            ,"close"        => ""
+            ,"reopen"       => ""
+            ,"hmPairForSec" => "HomeMatic"
             ,"hmPairSerial" => "HomeMatic"
             ,"reassignIDs"  => ""
 );
@@ -42,10 +45,6 @@ my %HMcond = ( 0  =>'ok'
               ,253=>'disconnected'
               ,254=>'Overload-released'
               ,255=>'init');
-
-#my %HM STATE= (  =>'opened'
-#                 =>'disconnected'
-#                 =>'overload');
 
 my $HMmlSlice = 12; # number of messageload slices per hour (10 = 6min)
 
@@ -251,28 +250,34 @@ sub HMLAN_Attr(@) {############################################################
   elsif($aName eq "logIDs"){
     if ($cmd eq "set"){
       if ($init_done){
-        my @ids = split",",$aVal;
-        my @idName;
-        if (grep /sys/,@ids){
-          push @idName,"sys";
-          $defs{$name}{helper}{log}{sys}=1;
+        if ($aVal){
+          my @ids = split",",$aVal;
+          my @idName;
+          if (grep /sys/,@ids){
+            push @idName,"sys";
+            $defs{$name}{helper}{log}{sys}=1;
+          }
+          else{
+            $defs{$name}{helper}{log}{sys}=0;
+          }
+          if (grep /all/,@ids){
+            push @idName,"all";
+            $defs{$name}{helper}{log}{all}=1;
+          }
+          else{
+            $defs{$name}{helper}{log}{all}=0;
+            $_=substr(CUL_HM_name2Id($_),0,6) foreach(grep !/^$/,@ids);
+            $_="" foreach(grep !/^[A-F0-9]{6}$/,@ids);
+            @ids = HMLAN_noDup(@ids);
+            push @idName,CUL_HM_id2Name($_) foreach(@ids);
+          }
+          $attr{$name}{$aName} = join(",",@idName);
+          @{$defs{$name}{helper}{log}{ids}}=grep !/^(sys|all)$/,@ids;
         }
         else{
-          $defs{$name}{helper}{log}{sys}=0;
+          $attr{$name}{$aName} = "";
+          @{$defs{$name}{helper}{log}{ids}}=();          
         }
-        if (grep /all/,@ids){
-          push @idName,"all";
-          $defs{$name}{helper}{log}{all}=1;
-        }
-        else{
-          $defs{$name}{helper}{log}{all}=0;
-          $_=substr(CUL_HM_name2Id($_),0,6) foreach(grep !/^$/,@ids);
-          $_="" foreach(grep !/^[A-F0-9]{6}$/,@ids);
-          @ids = HMLAN_noDup(@ids);
-          push @idName,CUL_HM_id2Name($_) foreach(@ids);
-        }
-        $attr{$name}{$aName} = join(",",@idName);
-        @{$defs{$name}{helper}{log}{ids}}=grep !/^(sys|all)$/,@ids;
       }
       else{
         $defs{$name}{helper}{attrPend} = 1;
@@ -401,7 +406,7 @@ sub HMLAN_Set($@) {############################################################
   my $name = shift @a;
   my $cmd = shift @a;
   my $arg = join("", @a);
-  if($cmd eq "hmPairForSec") { ####################################
+  if   ($cmd eq "hmPairForSec") { #################################
     $arg = 60    if(!$arg || $arg !~ m/^\d+$/);
     HMLAN_RemoveHMPair("hmPairForSec:$name");
     $hash->{hmPair} = 1;
@@ -421,10 +426,23 @@ sub HMLAN_Set($@) {############################################################
     $hash->{hmPairSerial} = $arg;
     InternalTimer(gettimeofday()+20, "HMLAN_RemoveHMPair", "hmPairForSec:".$name, 1);
   }
-  elsif($cmd eq "reassignIDs") { ##################################
+  elsif($cmd eq "reassignIDs")  { #################################
     return "set $name $cmd doesn't support parameter" if(scalar(@a));
     HMLAN_assignIDs($hash);
   }
+  elsif($cmd eq "reopen")       { #################################
+    DevIo_CloseDev($hash);
+    HMLAN_condUpdate($hash,253);#set disconnected
+    DevIo_OpenDev($hash, 0, "HMLAN_DoInit");
+  }
+  elsif($cmd eq "close")        { #################################
+    DevIo_CloseDev($hash);
+    HMLAN_condUpdate($hash,253);#set disconnected
+  }
+  elsif($cmd eq "open")         { #################################
+    DevIo_OpenDev($hash, 0, "HMLAN_DoInit");
+  }
+
   return ("",1);# no not generate trigger outof command
 }
 
@@ -473,6 +491,7 @@ sub HMLAN_ReadAnswer($$$) {# This is a direct read for commands like get
 
 sub HMLAN_Write($$$) {#########################################################
   my ($hash,$fn,$msg) = @_;
+  return if(!defined $msg);
   if (defined($fn) && $fn eq "cmd"){
     HMLAN_SimpleWrite($hash,$msg);
     return;
@@ -516,6 +535,7 @@ sub HMLAN_Write($$$) {#########################################################
     if ($modules{CUL_HM}{defptr}{$dst} &&
         $modules{CUL_HM}{defptr}{$dst}{helper}{io}{newChn} ){
       HMLAN_SimpleWrite($hash,$modules{CUL_HM}{defptr}{$dst}{helper}{io}{newChn});
+      $hash->{helper}{ids}{$dst}{cfg}  = $modules{CUL_HM}{defptr}{$dst}{helper}{io}{newChn};
       $hash->{helper}{ids}{$dst}{name} = CUL_HM_id2Name($dst);
       $hash->{helper}{assIdCnt} = scalar(keys %{$hash->{helper}{ids}});
       $hash->{assignedIDsCnt} = $hash->{helper}{assIdCnt}
@@ -722,7 +742,6 @@ sub HMLAN_Parse($$) {##########################################################
 
     if ($letter eq 'R' && $hash->{helper}{ids}{$src}{flg}){
       $hash->{helper}{ids}{$src}{flg} = 0 if($dst ne "000000"); #release send-holdoff
-
       if ($hash->{helper}{ids}{$src}{msg}){                #send delayed msg if any
         Log3 $hash, HMLAN_getVerbLvl ($hash,$src,$dst,"5")
                   ,"HMLAN_SdDly: $name $src";
@@ -841,10 +860,11 @@ sub HMLAN_SimpleWrite(@) {#####################################################
       my $chn = substr($msg,52,2);
       if (!$hDst->{chn} || $hDst->{chn} ne $chn){
         my $updt = $modules{CUL_HM}{defptr}{$dst}{helper}{io}{newChn};
-        if ($updt){
+        if ($updt && (!$hDst->{cfg} || $updt ne $hDst->{cfg})){
           Log3 $hash,  HMLAN_getVerbLvl($hash,$src,$dst,"5")
                   , 'HMLAN_Send:  '.$name.' S:'.$updt;
           syswrite($hash->{TCPDev}, $updt."\r\n")     if($hash->{TCPDev});
+          $hDst->{cfg} = $updt;
         }
       }
       $hDst->{chn} = $chn;
@@ -920,13 +940,26 @@ sub HMLAN_assignIDs($){
 sub HMLAN_writeAesKey($) {#####################################################
   my ($name) = @_;
   return if (!$name || !$defs{$name} || $defs{$name}{TYPE} ne "HMLAN");
+  my %keys = ();
   my $vccu = InternalVal($name,"owner_CCU",$name);
-  $vccu = $name if(!AttrVal($vccu,"hmKey",""));#General if keys are not in vccu
+  $vccu = $name if(!AttrVal($vccu,"hmKey",""));
   foreach my $i (1..3){
      my ($kNo,$k) = split(":",AttrVal($vccu,"hmKey".($i== 1?"":$i),""));
-     HMLAN_SimpleWrite($defs{$name}, "Y0$i,".($k?"$kNo,$k":"00,"));
-   }
- }
+     if (defined($kNo) && defined($k)) {
+       $keys{$kNo} = $k;
+     }
+  }
+  my  @kNos = reverse(sort(keys(%keys)));
+  foreach my $i (1..3){
+    my $k;
+    my $kNo;
+    if (defined($kNos[$i-1])) {
+      $kNo = $kNos[$i-1];
+      $k = $keys{$kNo};
+    }
+    HMLAN_SimpleWrite($defs{$name}, "Y0$i,".($k?"$kNo,$k":"00,"));
+  }
+}
 
 sub HMLAN_KeepAlive($) {#######################################################
   my($in ) = shift;
@@ -1041,11 +1074,15 @@ sub HMLAN_condUpdate($$) {#####################################################
   $hash->{helper}{cnd}{$HMcnd} = 0 if (!$hash->{helper}{cnd} || 
                                        !$hash->{helper}{cnd}{$HMcnd});
   $hash->{helper}{cnd}{$HMcnd}++;
+  readingsBeginUpdate($hash);
   if ($HMcnd == 4){#HMLAN needs a rest. Supress all sends exept keep alive
-    readingsSingleUpdate($hash,"state","overload",1);
+    readingsBulkUpdate($hash,"state","overload");
   }
-  else{
-    readingsSingleUpdate($hash,"state","opened",1)
+  elsif ($HMcnd == 251 || $HMcnd == 253){#HMLAN dummy/disconnected
+    readingsBulkUpdate($hash,"state","disconnected");
+  }
+  else{# revert from overload
+    readingsBulkUpdate($hash,"state","opened")
           if (InternalVal($name,"STATE","") eq "overload");
   }
 
@@ -1055,14 +1092,13 @@ sub HMLAN_condUpdate($$) {#####################################################
   $txt .= $HMcond{$_}.":".$hash->{helper}{cnd}{$_}." "
                             foreach (keys%{$hash->{helper}{cnd}});
 
-  readingsBeginUpdate($hash);
   readingsBulkUpdate($hash,"cond",$HMcndTxt);
   readingsBulkUpdate($hash,"Xmit-Events",$txt);
   readingsBulkUpdate($hash,"prot_".$HMcndTxt,"last");
 
   $hashQ->{HMcndN} = $HMcnd;
 
-  if ($HMcnd == 4 || $HMcnd == 253) {#transmission down
+  if ($HMcnd == 4 || $HMcnd == 251|| $HMcnd == 253 || $HMcnd == 255) {#transmission down
     $hashQ->{answerPend} = 0;
     @{$hashQ->{apIDs}} = ();       #clear Q-status
     $hash->{XmitOpen} = 0;         #deny transmit
@@ -1070,11 +1106,6 @@ sub HMLAN_condUpdate($$) {#####################################################
         if (   $HMcnd == 253
             && $hash->{helper}{k}{Start}
             &&(gettimeofday() - 29) > $hash->{helper}{k}{Start});
-  }
-  elsif ($HMcnd == 255) {#reset counter after init
-    $hashQ->{answerPend} = 0;
-    @{$hashQ->{apIDs}} = ();       #clear Q-status
-    $hash->{XmitOpen} = 0;         #deny transmit
   }
   else{
     $hash->{XmitOpen} = ($hashQ->{answerPend} < $hashQ->{hmLanQlen})?"1":"2";#allow transmit

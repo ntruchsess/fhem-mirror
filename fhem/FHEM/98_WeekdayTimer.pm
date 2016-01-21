@@ -140,8 +140,11 @@ sub WeekdayTimer_Define($$) {
   $hash->{helper}{daysRegExp}   =~ s/\!/\\\!/g; 
 
   WeekdayTimer_GlobalDaylistSpec ($hash, \@a);
-   
-  my @switchingtimes       = WeekdayTimer_gatherSwitchingTimes (\@a);
+
+  $hash->{NAME}            = $name;
+  $hash->{DEVICE}          = $device;
+  
+  my @switchingtimes       = WeekdayTimer_gatherSwitchingTimes ($hash, \@a);
   my $conditionOrCommand   = join (" ", @a);
 
   # test if device is defined
@@ -150,9 +153,6 @@ sub WeekdayTimer_Define($$) {
   # wenn keine switchintime angegeben ist, dann Fehler
   Log3 ($hash, 3, "[$name] no valid Switchingtime found in <$conditionOrCommand>, check first parameter")  if (@switchingtimes == 0);
 
-  $hash->{TYPE}           = $type;  
-  $hash->{NAME}           = $name;
-  $hash->{DEVICE}         = $device;
   $hash->{STILLDONETIME}  = 0;
   $hash->{SWITCHINGTIMES} = \@switchingtimes;
   $attr{$name}{verbose}   = 5 if (!defined $attr{$name}{verbose} && $name =~ m/^tst.*/ );
@@ -160,6 +160,7 @@ sub WeekdayTimer_Define($$) {
 
   $modules{$hash->{TYPE}}{defptr}{$hash->{NAME}} = $hash;
   
+  $hash->{CONDITION}  = ""; $hash->{COMMAND}    = "";
   if($conditionOrCommand =~  m/^\(.*\)$/g) {         #condition (*)
      $hash->{CONDITION} = $conditionOrCommand;
   } elsif(length($conditionOrCommand) > 0 ) {
@@ -177,7 +178,6 @@ sub WeekdayTimer_Define($$) {
 sub WeekdayTimer_Profile($) {   
   my $hash = shift;
   
-  my $nochZuAendern  = 0;  #  $d
   my $language =   $hash->{LANGUAGE};
   my %longDays = %{$hash->{longDays}}; 
   
@@ -194,12 +194,8 @@ sub WeekdayTimer_Profile($) {
      foreach  my $d (@{$tage}) {
 
         my    @listeDerTage = ($d);
-        push (@listeDerTage, (0, 6) ) if ($d==7); # sa,so   ($we)
-        push (@listeDerTage, (1..5) ) if ($d==8); # mo-fr
+        push  (@listeDerTage, WeekdayTimer_getListeDerTage($d, $time)) if ($d>=7);
         
-        # alle Tage prüfen hash anlegen mit d>1, d=>0 
-        # wenn 0, dann nur auf Feiertag prüfen
-
         map { my $day = $_; 
            my $dayOfEchteZeit = $day;
               $dayOfEchteZeit = ($wday>=1&&$wday<=5) ? 6 : $wday  if ($day==7); # ggf. Samstag $wday ~~ [1..5]  
@@ -236,12 +232,45 @@ sub WeekdayTimer_Profile($) {
        Log3 $hash, 4,  "[$hash->{NAME}] $profiltext ($profilKey)";  
   }
 
-  #Log 3, $hash->{NAME}  ."--->\n".   Dumper $hash->{profile};
-  #Log 3, $hash->{NAME}  ."--->\n".   Dumper $hash->{profile_IDX};
-  
   # für logProxy umhaengen
   $hash->{helper}{SWITCHINGTIME} = $hash->{profile};
   delete $hash->{profile};
+}
+################################################################################   
+sub WeekdayTimer_getListeDerTage($$) {
+  my ($d, $time) = @_;
+
+  my %hdays=();
+  @hdays{(0, 6)} = undef  if ($d==7); # sa,so   ( $we)
+  @hdays{(1..5)} = undef  if ($d==8); # mo-fr   (!$we)
+  
+  my $wday;
+  my $now = time();
+  my ($sec,$min,$hour,$mday,$mon,$year,$nowWday,$yday,$isdst) = localtime($now);
+  
+  my @realativeWdays  = (0..6);  
+  for (my $i=0;$i<=6;$i++) {
+
+     my $relativeDay = $i-$nowWday;
+    #Log 3, "relativeDay------------>$relativeDay";
+     my ($stunde, $minute, $sekunde) = split (":",$time);   
+        
+     my $echteZeit = WeekdayTimer_zeitErmitteln ($now, $stunde, $minute, $sekunde, $relativeDay);
+    #Log 3, "echteZeit---$i---->>>$relativeDay<<<----->".FmtDateTime($echteZeit);
+     ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime($echteZeit);
+     my $h2we = $attr{global}{holiday2we};
+     if($h2we) {
+        my $ergebnis = fhem("get $h2we ".sprintf("%02d-%02d",$mon+1,$mday),1);
+        if ($ergebnis ne "none") {
+          #Log 3, "ergebnis-------$i----->$ergebnis";
+          $hdays{$i} = undef   if ($d==7); #  $we Tag aufnehmen
+          delete $hdays{$i}    if ($d==8); # !$we Tag herausnehmen
+        }
+     }
+  }  
+    
+  #Log 3, "result------------>" . join (" ", sort keys %hdays);
+  return keys %hdays;
 }
 ################################################################################   
 sub WeekdayTimer_SwitchingTime($$) {
@@ -374,8 +403,10 @@ sub WeekdayTimer_zeitErmitteln  ($$$$$) {
 }
 ################################################################################
 sub WeekdayTimer_gatherSwitchingTimes {
-  my $a = shift;
+  my $hash = shift;
+  my $a    = shift;
 
+  my $name = $hash->{NAME};
   my @switchingtimes = ();
   my $conditionOrCommand;
   
@@ -383,18 +414,53 @@ sub WeekdayTimer_gatherSwitchingTimes {
   while (@$a > 0) {
 
     #pruefen auf Angabe eines Schaltpunktes
-    my $element = shift @$a;
+    my $element = "";
+    my @restoreElements = ();
+E:  while (@$a > 0) {
+      
+       my $actualElement = shift @$a;
+       push @restoreElements, $actualElement; 
+       $element = $element . $actualElement . " ";
+       Log3 $hash, 5, "[$name] $element - trying to accept as a switchtime";
+       
+       # prüfen ob Anführungszeichen paarig sind
+       my @quotes = ('"', "'" ); 
+       foreach my $quote (@quotes){
+          my $balancedSign = eval "((\$element =~ tr/$quote//))";         
+          if ($balancedSign % 2) { # ungerade Anzahl quotes, dann verlängern
+            Log3 $hash, 5, "[$name] $element - unbalanced quotes: $balancedSign $quote found";
+            next E;
+          }
+       }
+
+       # prüfen ob öffnende/schliessende Klammern paarig sind
+       my %signs = ('('=>')', '{'=>'}'); 
+       foreach my $signOpened (keys(%signs)) {
+          my $signClosed  = $signs{$signOpened};
+          my $balancedSign = eval "((\$element =~ tr/$signOpened//) - (\$element =~ tr/$signClosed//))";         
+          if ($balancedSign) { # öffnende/schließende Klammern nicht gleich, dann verlängern
+            Log3 $hash, 5, "[$name] $element - unbalanced brackets $signOpened$signClosed:$balancedSign";
+            next E;
+          }
+       }
+       last;
+    }
+    
+    # ein space am Ende wieder abschneiden
+    $element = substr ($element, 0, length($element)-1);
     my @t = split(/\|/, $element);
     my $anzahl = @t;
     if ( $anzahl >= 2 && $anzahl <= 3) {
+      Log3 $hash, 4, "[$name] $element - accepted";
       push(@switchingtimes, $element);
     } else {
-      unshift @$a, $element; 
+      Log3 $hash, 4, "[$name] $element - NOT accepted, must be command or condition";
+      unshift @$a, @restoreElements; 
       last;
     }
   }
   return (@switchingtimes);
-}    
+}
 ################################################################################
 sub WeekdayTimer_Language {
   my ($hash, $a) = @_;
@@ -504,7 +570,11 @@ sub WeekdayTimer_SetTimer($) {
         if (!defined $hash->{SETTIMERATMIDNIGHT} && $isActiveTimer);
      
      if ($secondsToSwitch>-5) {
-        Log3 $hash, 4, "[$name] setTimer - timer seems to be active today: ".join("",@$tage)."|$time|$para" if($isActiveTimer);
+        if($isActiveTimer) {           
+           Log3 $hash, 4, "[$name] setTimer - timer seems to be active today: ".join("",@$tage)."|$time|$para";
+        } else {   
+           Log3 $hash, 4, "[$name] setTimer - timer seems to be NOT active today: ".join("",@$tage)."|$time|$para ". $hash->{CONDITION};
+        }   
         myInternalTimer ("$idx", $timToSwitch, "$hash->{TYPE}_Update", $hash, 0);
      }
   }
@@ -518,6 +588,8 @@ sub WeekdayTimer_SetTimer($) {
      
   readingsSingleUpdate ($hash,  "nextUpdate", FmtDateTime($nextTime), 1);
   readingsSingleUpdate ($hash,  "nextValue",  $nextParameter,         1);  
+  readingsSingleUpdate ($hash,  "currValue",  $aktParameter,          1); # HB  
+
   
   if ($switchInThePast) {  
      # Fensterkontakte abfragen - wenn einer im Status closed, dann Schaltung um 60 Sekunden verzögern
@@ -527,7 +599,7 @@ sub WeekdayTimer_SetTimer($) {
      
      myInternalTimer ("$aktIdx", $aktTime, "$hash->{TYPE}_Update", $hash, 0);
      my $active = 1;
-     if (defined $hash->{CONDITION}) {
+     if ($hash->{CONDITION} gt "") {
         $active = AnalyzeCommandChain(undef, "{".$hash->{CONDITION}."}");
      }
      readingsSingleUpdate ($hash,  "state", $aktParameter, 1) if ($active);
@@ -645,6 +717,7 @@ sub WeekdayTimer_Update($) {
   readingsBeginUpdate($hash);
   readingsBulkUpdate ($hash,  "nextUpdate", FmtDateTime($nextTime));
   readingsBulkUpdate ($hash,  "nextValue",  $nextParameter);
+  readingsBulkUpdate ($hash,  "currValue",  $aktParameter); # HB
   readingsBulkUpdate ($hash,  "state",      $newParam )   if($activeTimer);
   readingsEndUpdate  ($hash,  defined($hash->{LOCAL} ? 0 : 1));
 
@@ -655,14 +728,17 @@ sub WeekdayTimer_Update($) {
 sub WeekdayTimer_isAnActiveTimer ($$$) {
   my ($hash, $tage, $newParam)  = @_;
   
+  my $name = $hash->{NAME};
   my %specials   = ( "%NAME" => $hash->{DEVICE}, "%EVENT" => $newParam);
   
   my $condition  = WeekdayTimer_Condition ($hash, $tage);
   my $tageAsHash = WeekdayTimer_tageAsHash($hash, $tage);
   my $xPression  = "{".$tageAsHash.";;".$condition ."}";
      $xPression  = EvalSpecials($xPression, %specials);  
+  Log3 $hash, 5, "[$name] condition: $xPression";
   
   my $ret = AnalyzeCommandChain(undef, $xPression);
+  Log3 $hash, 5, "[$name] result of condition:$ret";
   return  $ret;
 }
 ################################################################################
@@ -718,16 +794,30 @@ sub WeekdayTimer_FensterOffen ($$$) {
   my ($hash, $event, $time) = @_;
   my $name = $hash->{NAME};
   
-  my $verzoegerteAusfuehrungCond = AttrVal($hash->{NAME}, "delayedExecutionCond", "0");
-
-  my %specials= (
-         "%HEATING_CONTROL"  => $hash->{NAME},
-         "%WEEKDAYTIMER"     => $hash->{NAME},
-         "%NAME"             => $hash->{DEVICE},
-         "%EVENT"            => $event
+  my %specials = (
+         '%HEATING_CONTROL'  => $hash->{NAME},
+         '%WEEKDAYTIMER'     => $hash->{NAME},
+         '%NAME'             => $hash->{DEVICE},
+         '%EVENT'            => $event,
+         '%TIME'             => $hash->{profil}{$time}{TIME},
+         '$HEATING_CONTROL'  => $hash->{NAME},
+         '$WEEKDAYTIMER'     => $hash->{NAME},
+         '$NAME'             => $hash->{DEVICE},
+         '$EVENT'            => $event,
+         '$TIME'             => $hash->{profil}{$time}{TIME},
   );
-  $verzoegerteAusfuehrungCond = EvalSpecials($verzoegerteAusfuehrungCond, %specials);
+  
+  my $verzoegerteAusfuehrungCond = AttrVal($hash->{NAME}, "delayedExecutionCond", "0");
+  #$verzoegerteAusfuehrungCond    = 'xxx(%WEEKDAYTIMER,%NAME,%HEATING_CONTROL,$WEEKDAYTIMER,$EVENT,$NAME,$HEATING_CONTROL)';
+  
+  map { my $key =  $_; $key =~ s/\$/\\\$/g;
+        my $val = $specials{$_}; 
+        $verzoegerteAusfuehrungCond =~ s/$key/$val/g 
+      } keys %specials;
+  Log3 $hash, 5, "[$name] delayedExecutionCond:$verzoegerteAusfuehrungCond";
+  
   my $verzoegerteAusfuehrung = eval($verzoegerteAusfuehrungCond);
+  Log3 $hash, 5, "[$name] result of delayedExecutionCond:$verzoegerteAusfuehrung";
   
   if ($verzoegerteAusfuehrung) {
      if (!defined($hash->{VERZOEGRUNG})) {
@@ -741,6 +831,7 @@ sub WeekdayTimer_FensterOffen ($$$) {
   
   my %contacts =  ( "CUL_FHTTK"       => { "READING" => "Window",          "STATUS" => "(Open)",        "MODEL" => "r" },
                     "CUL_HM"          => { "READING" => "state",           "STATUS" => "(open|tilted)", "MODEL" => "r" },
+                    "EnOcean"         => { "READING" => "state",           "STATUS" => "(open)",        "MODEL" => "r" },
                     "MAX"             => { "READING" => "state",           "STATUS" => "(open.*)",      "MODEL" => "r" },
                     "WeekdayTimer"    => { "READING" => "delayedExecution","STATUS" => "^1\$",          "MODEL" => "a" },
                     "Heating_Control" => { "READING" => "delayedExecution","STATUS" => "^1\$",          "MODEL" => "a" }
@@ -810,8 +901,8 @@ sub WeekdayTimer_Device_Schalten($$$) {
   #modifier des Zieldevices auswaehlen
   my $setModifier = WeekdayTimer_isHeizung($hash);
   
-  $command = "set @ " . $setModifier . " %";
-  $command = $hash->{COMMAND}   if (defined $hash->{COMMAND});
+  $command = 'set $NAME ' . $setModifier . ' $EVENT';
+  $command = $hash->{COMMAND}   if ($hash->{COMMAND} gt "");
 
   my $activeTimer = 1;
   
@@ -825,7 +916,9 @@ sub WeekdayTimer_Device_Schalten($$$) {
   Log3 $hash, 4, "[$name] aktParam:$aktParam newParam:$newParam - is $disabled_txt disabled";
 
   #Kommando ausführen
-  if ($command && !$disabled && $aktParam ne $newParam && $activeTimer) {
+  if ($command && !$disabled && $activeTimer 
+    && $aktParam ne $newParam 
+    ) {
     $newParam =~ s/:/ /g;
     
     my %specials = ( "%NAME" => $hash->{DEVICE}, "%EVENT" => $newParam);
@@ -850,7 +943,7 @@ sub WeekdayTimer_Condition($$) {
   my ($hash, $tage)  = @_;
   
   my $condition  = "( ";
-  $condition .= (defined $hash->{CONDITION}) ? $hash->{CONDITION}  : 1 ; 
+  $condition .= ($hash->{CONDITION} gt "") ? $hash->{CONDITION}  : 1 ; 
   $condition .= " && " . WeekdayTimer_TageAsCondition($tage);
   $condition .= ")";
   
@@ -978,60 +1071,19 @@ sub WeekdayTimer_SetAllParms() {            # {WeekdayTimer_SetAllParms()}
       by the well-known Block with {}.<br>
       Note: if a command is defined only this command is executed. In case of executing
       a "set desired-temp" command, you must define the hole commandpart explicitly by yourself.<br>
-  <!-- -------------------------------------------------------------------------- -->
-  <!----------------------------------------------------------------------------- -->
-  <!-- -------------------------------------------------------------------------- -->
-      <li>in the command section you can access the event:
-      <ul>
-        <li>The variable $EVENT will contain the complete event, e.g.
-          <code>measured-temp: 21.7 (Celsius)</code></li>
-        <li>$EVTPART0,$EVTPART1,$EVTPART2,etc contain the space separated event
-          parts (e.g. <code>$EVTPART0="measured-temp:", $EVTPART1="21.7",
-          $EVTPART2="(Celsius)"</code>. This data is available as a local
-          variable in perl, as environment variable for shell scripts, and will
-          be textually replaced for FHEM commands.</li>
-        <li>$NAME contains the device to send the event, e.g.
-          <code>myFht</code></li>
-       </ul></li>
-
-      <li>Note: the following is deprecated and will be removed in a future
-        release. The described replacement is attempted if none of the above
-        variables ($NAME/$EVENT/etc) found in the command.
-      <ul>
-        <li>The character <code>%</code> will be replaced with the received
-        event, e.g. with <code>on</code> or <code>off</code> or
-        <code>measured-temp: 21.7 (Celsius)</code><br> It is advisable to put
-        the <code>%</code> into double quotes, else the shell may get a syntax
-        error.</li>
-
-        <li>The character <code>@</code> will be replaced with the device
-        name.</li>
-
-        <li>To use % or @ in the text itself, use the double mode (%% or
-        @@).</li>
-
-        <li>Instead of <code>%</code> and <code>@</code>, the parameters
-        <code>%EVENT</code> (same as <code>%</code>), <code>%NAME</code> (same
-        as <code>@</code>) and <code>%TYPE</code> (contains the device type,
-        e.g.  <code>FHT</code>) can be used. The space separated event "parts"
-        are available as %EVTPART0, %EVTPART1, etc.  A single <code>%</code>
-        looses its special meaning if any of these parameters appears in the
-        definition.</li>
-      </ul></li>
-  <!-- -------------------------------------------------------------------------- -->
   <!----------------------------------------------------------------------------- -->
   <!-- -------------------------------------------------------------------------- -->
       The following parameter are replaced:<br>
         <ol>
-          <li>@ => the device to switch</li>
-          <li>% => the new temperature</li>
+          <li>$NAME  => the device to switch</li>
+          <li>$EVENT => the new temperature</li>
         </ol>
     </ul>
     <p>
     <ul><b>condition</b><br>
-      if a condition is defined you must declared this with () and a valid perl-code.<br>
+      if a condition is defined you must declare this with () and a valid perl-code.<br>
       The return value must be boolean.<br>
-      The parameter @ and % will be interpreted.
+      The parameters $NAME and $EVENT will be interpreted.
     </ul>
     <p>
     <b>Example:</b>
@@ -1040,7 +1092,7 @@ sub WeekdayTimer_SetAllParms() {            # {WeekdayTimer_SetAllParms()}
         Mo-Fr are setting the shutter at 05:20 to <b>up</b>, and at 20:30 <b>down</b>.<p>
 
         <code>define heatingBath WeekdayTimer bath 07:00|16 Mo,Tu,Th-Fr|16:00|18.5 20:00|eco
-          {fhem("set dummy on"); fhem("set @ desired-temp %");}</code><br>
+          {fhem("set dummy on"); fhem("set $NAME desired-temp $EVENT");}</code><br>
         At the given times and weekdays only(!) the command will be executed.<p>
 
         <code>define dimmer WeekdayTimer livingRoom Sa-Su,We|07:00|dim30% Sa-Su,We|21:00|dim90% (ReadingsVal("WeAreThere", "state", "no") eq "yes")</code><br>
@@ -1105,9 +1157,9 @@ sub WeekdayTimer_SetAllParms() {            # {WeekdayTimer_SetAllParms()}
     <br><br>
     <b>Example:</b>    
     <pre>
-    attr wd delayedExecutionCond isDelayed("%HEATING_CONTROL","%WEEKDAYTIMER","%TIME","%NAME","%EVENT")  
+    attr wd delayedExecutionCond isDelayed("$HEATING_CONTROL","$WEEKDAYTIMER","$TIME","$NAME","$EVENT")  
     </pre>
-    the parameter %WEEKDAYTIMER(timer name) %TIME %NAME(device name) %EVENT are replaced at runtime by the correct value.
+    the parameter $WEEKDAYTIMER(timer name) $TIME $NAME(device name) $EVENT are replaced at runtime by the correct value.
     
     <br><br>
     <b>Example of a function:</b>    

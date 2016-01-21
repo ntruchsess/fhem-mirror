@@ -1,6 +1,6 @@
 ########################################################################################
 #
-# SONOSPLAYER.pm (c) by Reiner Leins, August 2015 
+# SONOSPLAYER.pm (c) by Reiner Leins, December 2015 
 # rleins at lmsoft dot de
 #
 # $Id$
@@ -45,6 +45,11 @@ use strict;
 use warnings;
 use URI::Escape;
 use Thread::Queue;
+use Encode;
+use Scalar::Util qw(reftype looks_like_number);
+
+# SmartMatch-Fehlermeldung unterdrücken...
+no if $] >= 5.017011, warnings => 'experimental::smartmatch';
 
 require 'HttpUtils.pm';
 require $attr{global}{modpath}.'/FHEM/00_SONOS.pm';
@@ -56,6 +61,8 @@ sub SONOSPLAYER_Log($$$);
 ########################################################################################
 # Variable Definitions
 ########################################################################################
+my @possibleRoomIcons = qw(bathroom library office foyer dining tvroom hallway garage garden guestroom den bedroom kitchen portable media family pool masterbedroom playroom patio living);
+
 my %gets = (
 	'CurrentTrackPosition' => '',
 	'Playlists' => '',
@@ -65,7 +72,8 @@ my %gets = (
 	'Radios' => '',
 	'RadiosWithCovers' => '',
 	'Alarm' => 'ID',
-	'EthernetPortStatus' => 'PortNum',
+	'EthernetPortStatus' => 'PortNum(0..3)',
+	'SupportLinks' => '',
 	'PossibleRoomIcons' => '',
 	'SearchlistCategories' => ''
 );
@@ -76,70 +84,79 @@ my %sets = (
 	'Stop' => '',
 	'Next' => '',
 	'Previous' => '',
-	'LoadPlaylist' => 'playlistname',
-	'StartPlaylist' => 'playlistname',
+	'LoadPlaylist' => 'playlistname [ClearPlaylist]',
+	'StartPlaylist' => 'playlistname [ClearPlaylist]',
 	'SavePlaylist' => 'playlistname',
 	'DeletePlaylist' => 'playlistname',
+	'DeleteFromQueue' => 'PerlNumberListOfIndizies',
 	'CurrentPlaylist' => '',
 	'EmptyPlaylist' => '',
-	'StartFavourite' => 'favouritename',
+	'LoadFavourite' => 'favouritename',
+	'StartFavourite' => 'favouritename [NoStart]',
 	'LoadRadio' => 'radioname',
 	'StartRadio' => 'radioname',
-	'PlayURI' => 'songURI',
-	'PlayURITemp' => 'songURI',
+	'PlayURI' => 'songURI [Volume]',
+	'PlayURITemp' => 'songURI [Volume]',
 	'AddURIToQueue' => 'songURI',
-	'Speak' => 'volume language text',
+	'Speak' => 'volume(0..100) language text',
 	'OutputFixed' => 'state',
 	'Mute' => 'state',
 	'Shuffle' => 'state',
 	'Repeat' => 'state',
+	'RepeatOne' => 'state',
 	'CrossfadeMode' => 'state',
 	'LEDState' => 'state',
 	'MuteT' => '',
 	'ShuffleT' => '',
 	'RepeatT' => '',
+	'RepeatOneT' => '',
 	'VolumeD' => '',
 	'VolumeU' => '',
-	'Volume' => 'volumelevel',
-	'VolumeSave' => 'volumelevel',
+	'Volume' => 'volumelevel(0..100) [RampType]',
+	'VolumeSave' => 'volumelevel(0..100)',
 	'VolumeRestore' => '',
-	'Balance' => 'balancevalue',
+	'Balance' => 'balancevalue(-100..100)',
 	'Loudness' => 'state',
-	'Bass' => 'basslevel',
-	'Treble' => 'treblelevel',	
+	'Bass' => 'basslevel(0..100)',
+	'Treble' => 'treblelevel(0..100)',	
 	'CurrentTrackPosition' => 'timeposition',
 	'Track' => 'tracknumber|Random',
 	'currentTrack' => 'tracknumber',
 	'Alarm' => 'create|update|delete ID valueHash',
-	'SnoozeAlarm' => 'time',
-	'DailyIndexRefreshTime' => 'timestamp',
-	'SleepTimer' => 'time',
+	'SnoozeAlarm' => 'timestring|seconds',
+	'DailyIndexRefreshTime' => 'timestring',
+	'SleepTimer' => 'timestring|seconds',
 	'AddMember' => 'member_devicename',
 	'RemoveMember' => 'member_devicename',
-	'GroupVolume' => 'volumelevel',
+	'MakeStandaloneGroup' => '',
+	'GroupVolume' => 'volumelevel(0..100)',
 	'GroupVolumeD' => '',
 	'GroupVolumeU' => '',
 	'SnapshotGroupVolume' => '',
 	'GroupMute' => 'state',
-	'CreateStereoPair' => 'RightPlayer',
+	'CreateStereoPair' => 'RightPlayerDevice',
 	'SeparateStereoPair' => '',
 	'Reboot' => '',
 	'Wifi' => 'state',
 	'Name' => 'roomName',
-	'RoomIcon' => 'iconName',
+	'RoomIcon' => 'iconName('.join(',', @possibleRoomIcons).')',
 	# 'JumpToChapter' => 'groupname chaptername', 
-	'LoadSearchlist' => 'category categoryElem titleFilter/albumFilter/artistFilter maxElems',
-	'StartSearchlist' => 'category categoryElem titleFilter/albumFilter/artistFilter maxElems',
+	'LoadSearchlist' => 'category categoryElem [titleFilter/albumFilter/artistFilter] [maxElems]',
+	'StartSearchlist' => 'category categoryElem [titleFilter/albumFilter/artistFilter] [maxElems]',
 	'ResetAttributesToDefault' => 'deleteOtherAttributes',
 	'ExportSonosBibliothek' => 'filename',
+	'TruePlay' => 'state',
 	'SurroundEnable' => 'state',
-	'SurroundLevel' => 'surroundlevel', #-15..15
+	'SurroundLevel' => 'surroundlevel(-15..15)', #-15..15
 	'SubEnable' => 'state',
-	'SubGain' => 'gainlevel', #-15..15
-	'AudioDelay' => 'delaylevel' #0..5
+	'SubGain' => 'gainlevel(-15..15)', #-15..15
+	'SubPolarity' => 'polarity(0..2)', #0..2
+	'AudioDelay' => 'delaylevel(0..5)', #0..5
+	'AudioDelayLeftRear' => 'delaylevel(0{>3m},1{>0.6m&<3m},2{<0.6m})', #0..2
+	'AudioDelayRightRear' => 'delaylevel(0{>3m},1{>0.6m&<3m},2{<0.6m})', #0..2
+	'NightMode' => 'state',
+	'DialogLevel' => 'state'
 );
-
-my @possibleRoomIcons = qw(bathroom library office foyer dining tvroom hallway garage garden guestroom den bedroom kitchen portable media family pool masterbedroom playroom patio living);
 
 ########################################################################################
 #
@@ -158,6 +175,7 @@ sub SONOSPLAYER_Initialize ($) {
 	$hash->{SetFn} = "SONOSPLAYER_Set";
 	$hash->{StateFn} = "SONOSPLAYER_State";
 	$hash->{NotifyFn} = 'SONOSPLAYER_Notify';
+	$hash->{AttrFn}  = 'SONOSPLAYER_Attribute';
 	
 	$hash->{AttrList} = "disable:1,0 generateVolumeSlider:1,0 generateVolumeEvent:1,0 generateSomethingChangedEvent:1,0 generateInfoSummarize1 generateInfoSummarize2 generateInfoSummarize3 generateInfoSummarize4 stateVariable:TransportState,NumberOfTracks,Track,TrackURI,TrackDuration,TrackProvider,Title,Artist,Album,OriginalTrackNumber,AlbumArtist,Sender,SenderCurrent,SenderInfo,StreamAudio,NormalAudio,AlbumArtURI,nextTrackDuration,nextTrackProvider,nextTrackURI,nextAlbumArtURI,nextTitle,nextArtist,nextAlbum,nextAlbumArtist,nextOriginalTrackNumber,Volume,Mute,OutputFixed,Shuffle,Repeat,CrossfadeMode,Balance,HeadphoneConnected,SleepTimer,Presence,RoomName,SaveRoomName,PlayerType,Location,SoftwareRevision,SerialNum,InfoSummarize1,InfoSummarize2,InfoSummarize3,InfoSummarize4 model minVolume maxVolume minVolumeHeadphone maxVolumeHeadphone VolumeStep getAlarms:1,0 buttonEvents ".$readingFnAttributes;
 	
@@ -194,6 +212,33 @@ sub SONOSPLAYER_Define ($$) {
 	readingsSingleUpdate($hash, "state", 'initialized', 1);
 	
 	return undef; 
+}
+
+########################################################################################
+#
+#  SONOSPLAYER_Attribute - Implements AttrFn function 
+#
+########################################################################################
+sub SONOSPLAYER_Attribute($$$@) {
+	my ($mode, $devName, $attrName, $attrValue) = @_;
+	
+	if ($mode eq 'set') {
+		if ($attrName =~ m/^(min|max)Volume(|Headphone)$/) {
+			my $hash = SONOS_getDeviceDefHash($devName);
+			
+			SONOS_DoWork($hash->{UDN}, 'setMinMaxVolumes', $attrName, $attrValue);
+		}
+	} elsif ($mode eq 'del') {
+		if ($attrName =~ m/^minVolume(|Headphone)$/) {
+			my $hash = SONOS_getDeviceDefHash($devName);
+			
+			SONOS_DoWork($hash->{UDN}, 'setMinMaxVolumes', $attrName, 0);
+		} elsif ($attrName =~ m/^maxVolume(|Headphone)$/) {
+			my $hash = SONOS_getDeviceDefHash($devName);
+			
+			SONOS_DoWork($hash->{UDN}, 'setMinMaxVolumes', $attrName, 100);
+		} 
+	}
 }
 
 #######################################################################################
@@ -284,7 +329,7 @@ sub SONOSPLAYER_Get($@) {
 	return "SONOSPLAYER: Get with unknown argument $a[1], choose one of ".join(" ", sort keys %gets) if(!$found);
 	
 	# some arguments needs parameter(s), some not
-	return "SONOSPLAYER: $a[1] needs parameter(s): ".$gets{$reading} if (scalar(split(',', $gets{$reading})) > scalar(@a) - 2);
+	return "SONOSPLAYER: $a[1] needs parameter(s): ".$gets{$reading} if (SONOSPLAYER_CountRequiredParameters($gets{$reading}) > scalar(@a) - 2);
 	
 	# getter
 	if (lc($reading) eq 'currenttrackposition') {
@@ -314,6 +359,11 @@ sub SONOSPLAYER_Get($@) {
 		my $statusPage = GetFileFromURL($url);
 		return (($1 == 0) ? 'Inactive' : 'Active') if ($statusPage =~ m/<Port port='$portNum'><Link>(\d+)<\/Link><Speed>.*?<\/Speed><\/Port>/i);
 		return 'Inactive';
+	} elsif (lc($reading) eq 'supportlinks') {
+		my $playerurl = ReadingsVal($name, 'location', '');
+		$playerurl =~ s/(^http:\/\/.*?)\/.*/$1/;
+		
+		return '<a href="'.$playerurl.'/support/review" target="_blank">Support Review</a><br /><a href="'.$playerurl.'/status" target="_blank">Status</a>';
 	} elsif (lc($reading) eq 'alarm') {
 		my $id = $a[2];
 		
@@ -355,18 +405,35 @@ sub SONOSPLAYER_Set($@) {
 				$key = $key.':slider,0,1,100' if ($key eq 'Treble');
 				$key = $key.':slider,0,1,100' if ($key eq 'Bass');
 				$key = $key.':slider,-100,1,100' if ($key eq 'Balance');
-				$key = $key.':slider,1,1,'.ReadingsVal($hash->{NAME}, 'numberOfTracks', 0) if ($key eq 'currentTrack');
+				$key = $key.':slider,-15,1,15' if ($key eq 'SubGain');
+				$key = $key.':slider,-15,1,15' if ($key eq 'SurroundLevel');
+				$key = $key.':slider,1,1,'.ReadingsVal($hash->{NAME}, 'numberOfTracks', 0) if (($key eq 'currentTrack') || ($key eq 'track'));
 			}
+			
+			$key = $key.':0,1,2' if ($key eq 'SubPolarity');
+			$key = $key.':0,1,2,3,4,5' if ($key eq 'AudioDelay');
+			$key = $key.':0,1,2' if ($key eq 'AudioDelayLeftRear');
+			$key = $key.':0,1,2' if ($key eq 'AudioDelayRightRear');
 			
 			# On/Off einsetzen; Da das jeweilige Reading dazu 0,1 enthalten wird, auch mit 0,1 arbeiten, damit die Vorauswahl passt
-			$key = $key.':0,1' if ((lc($key) eq 'crossfademode') || (lc($key) eq 'groupmute') || (lc($key) eq 'ledstate') || (lc($key) eq 'loudness') || (lc($key) eq 'mute') || (lc($key) eq 'outputfixed')  || (lc($key) eq 'resetattributestodefault')  || (lc($key) eq 'repeat') || (lc($key) eq 'shuffle'));
+			$key = $key.':0,1' if ((lc($key) eq 'crossfademode') 
+								|| (lc($key) eq 'groupmute') 
+								|| (lc($key) eq 'ledstate') 
+								|| (lc($key) eq 'loudness') 
+								|| (lc($key) eq 'mute') 
+								|| (lc($key) eq 'trueplay') 
+								|| (lc($key) eq 'dialoglevel') 
+								|| (lc($key) eq 'nightmode') 
+								|| (lc($key) eq 'subenable') 
+								|| (lc($key) eq 'surroundenable') 
+								|| (lc($key) eq 'outputfixed')  
+								|| (lc($key) eq 'resetattributestodefault')  
+								|| (lc($key) eq 'repeat') 
+								|| (lc($key) eq 'repeatone') 
+								|| (lc($key) eq 'shuffle'));
 			
 			# Iconauswahl einsetzen
-			if (lc($key) eq 'roomicon') {
-				my $icons = SONOSPLAYER_Get($hash, ($hash->{NAME}, 'PossibleRoomIcons'));
-				$icons =~ s/ //g;
-				$key = $key.':'.$icons;
-			}
+			$key = $key.':'.join(',', @possibleRoomIcons) if (lc($key) eq 'roomicon');
 			
 			# Playerauswahl einsetzen
 			my @playerNames = ();
@@ -382,10 +449,10 @@ sub SONOSPLAYER_Set($@) {
 		}
 		
 		my $sonosDev = SONOS_getDeviceDefHash(undef);
-		$sets{Speak1} = 'volume language text' if (AttrVal($sonosDev->{NAME}, 'Speak1', '') ne '');
-		$sets{Speak2} = 'volume language text' if (AttrVal($sonosDev->{NAME}, 'Speak2', '') ne '');
-		$sets{Speak3} = 'volume language text' if (AttrVal($sonosDev->{NAME}, 'Speak3', '') ne '');
-		$sets{Speak4} = 'volume language text' if (AttrVal($sonosDev->{NAME}, 'Speak4', '') ne '');
+		$sets{Speak1} = 'volume(0..100) language text' if (AttrVal($sonosDev->{NAME}, 'Speak1', '') ne '');
+		$sets{Speak2} = 'volume(0..100) language text' if (AttrVal($sonosDev->{NAME}, 'Speak2', '') ne '');
+		$sets{Speak3} = 'volume(0..100) language text' if (AttrVal($sonosDev->{NAME}, 'Speak3', '') ne '');
+		$sets{Speak4} = 'volume(0..100) language text' if (AttrVal($sonosDev->{NAME}, 'Speak4', '') ne '');
 		
 		# for the ?-selector: which values are possible
 		if($a[1] eq '?') {
@@ -395,8 +462,6 @@ sub SONOSPLAYER_Set($@) {
 			}
 			return "Unknown argument, choose one of ".join(" ", @newSets);
 		}
-	
-		#return join(" ", sort keys %setcopy);
 	}
 	
 	# check argument
@@ -411,7 +476,7 @@ sub SONOSPLAYER_Set($@) {
 	return "SONOSPLAYER: Set with unknown argument $a[1], choose one of ".join(" ", sort keys %sets) if(!$found);
 	 
 	# some arguments needs parameter(s), some not
-	return "SONOSPLAYER: $a[1] needs parameter(s): ".$sets{$a[1]} if (scalar(split(',', $sets{$a[1]})) > scalar(@a) - 2);
+	return "SONOSPLAYER: $a[1] needs parameter(s): ".$sets{$a[1]} if (SONOSPLAYER_CountRequiredParameters($sets{$a[1]}) > scalar(@a) - 2);
 	     
 	# define vars
 	my $key = $a[1];
@@ -472,34 +537,31 @@ sub SONOSPLAYER_Set($@) {
 	} elsif (lc($key) eq 'treble') {
 		SONOS_DoWork($udn, 'setTreble', $value);
 	} elsif (lc($key) eq 'surroundenable') {
-		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
-		$udn = $hash->{UDN};
-	
 		SONOS_DoWork($udn, 'setEQ', 'SurroundEnable', SONOS_ConvertWordToNum($value));
 	} elsif (lc($key) eq 'surroundlevel') {
-		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
-		$udn = $hash->{UDN};
-	
 		SONOS_DoWork($udn, 'setEQ', 'SurroundLevel', $value);
+	} elsif (lc($key) eq 'trueplay') {	
+		SONOS_DoWork($udn, 'setTruePlay', SONOS_ConvertWordToNum($value));
 	} elsif (lc($key) eq 'subenable') {
-		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
-		$udn = $hash->{UDN};
-	
 		SONOS_DoWork($udn, 'setEQ', 'SubEnable', SONOS_ConvertWordToNum($value));
 	} elsif (lc($key) eq 'subgain') {
-		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
-		$udn = $hash->{UDN};
-	
 		SONOS_DoWork($udn, 'setEQ', 'SubGain', $value);
+	} elsif (lc($key) eq 'subpolarity') {
+		SONOS_DoWork($udn, 'setEQ', 'SubPolarity', $value);
 	} elsif (lc($key) eq 'audiodelay') {
-		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
-		$udn = $hash->{UDN};
-	
 		SONOS_DoWork($udn, 'setEQ', 'AudioDelay', $value);
+	} elsif (lc($key) eq 'audiodelayleftrear') {
+		SONOS_DoWork($udn, 'setEQ', 'AudioDelayLeftRear', $value);
+	} elsif (lc($key) eq 'audiodelayrightrear') {
+		SONOS_DoWork($udn, 'setEQ', 'AudioDelayRightRear', $value);
+	} elsif (lc($key) eq 'nightmode') {
+		SONOS_DoWork($udn, 'setEQ', 'NightMode', SONOS_ConvertWordToNum($value));
+	} elsif (lc($key) eq 'dialoglevel') {
+		SONOS_DoWork($udn, 'setEQ', 'DialogLevel', SONOS_ConvertWordToNum($value));
 	} elsif (lc($key) eq 'groupmute') {
 		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
 		$udn = $hash->{UDN};
-	
+		
 		SONOS_DoWork($udn, 'setGroupMute', $value);
 	} elsif (lc($key) eq 'outputfixed') {
 		SONOS_DoWork($udn, 'setOutputFixed', $value);
@@ -510,7 +572,7 @@ sub SONOSPLAYER_Set($@) {
 	} elsif (lc($key) eq 'shuffle') {
 		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
 		$udn = $hash->{UDN};
-	
+		
 		SONOS_DoWork($udn, 'setShuffle', $value);
 	} elsif (lc($key) eq 'shufflet') {
 		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
@@ -527,6 +589,16 @@ sub SONOSPLAYER_Set($@) {
 		$udn = $hash->{UDN};
 	
 		SONOS_DoWork($udn, 'setRepeat', '~~');
+	} elsif (lc($key) eq 'repeatone') {
+		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
+		$udn = $hash->{UDN};
+	
+		SONOS_DoWork($udn, 'setRepeatOne', $value);
+	} elsif (lc($key) eq 'repeatonet') {
+		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
+		$udn = $hash->{UDN};
+	
+		SONOS_DoWork($udn, 'setRepeatOne', '~~');
 	} elsif (lc($key) eq 'crossfademode') {
 		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
 		$udn = $hash->{UDN};
@@ -575,6 +647,11 @@ sub SONOSPLAYER_Set($@) {
 	
 		SONOS_DoWork($udn, 'loadRadio', $value);
 		SONOS_DoWork($udn, 'play');
+	} elsif (lc($key) eq 'loadfavourite') {
+		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
+		$udn = $hash->{UDN};
+	
+		SONOS_DoWork($udn, 'startFavourite', $value, 'NoStart');
 	} elsif (lc($key) eq 'startfavourite') {
 		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
 		$udn = $hash->{UDN};
@@ -625,6 +702,13 @@ sub SONOSPLAYER_Set($@) {
 		}
 	} elsif (lc($key) eq 'deleteplaylist') {
 		SONOS_DoWork($udn, 'deletePlaylist', $value);
+	} elsif (lc($key) eq 'deletefromqueue') {
+		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
+		$udn = $hash->{UDN};
+		
+		$value =~ s/ //g;
+		
+		SONOS_DoWork($udn, 'deleteFromQueue', uri_escape($value));
 	} elsif (lc($key) eq 'currentplaylist') {
 		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
 		$udn = $hash->{UDN};
@@ -698,8 +782,10 @@ sub SONOSPLAYER_Set($@) {
 			# Hier die komplette restliche Zeile in den Text-Parameter packen, da damit auch Leerzeichen möglich sind
 			my $text = '';
 			for(my $i = 4; $i < @a; $i++) {
-				$text .= ' '.$a[$i];
+				$text .= ' ' if ($i > 4);
+				$text .= $a[$i];
 			}
+			$text = decode('utf8', $text);
 		
 			SONOS_DoWork($udn, lc($key), $value, $value2, $text);
 		}
@@ -707,13 +793,17 @@ sub SONOSPLAYER_Set($@) {
 		# Hier die komplette restliche Zeile in den zweiten Parameter packen, da damit auch Leerzeichen möglich sind
 		my $text = '';
 		for(my $i = 4; $i < @a; $i++) {
-			$text .= ' '.$a[$i];
+			$text .= ' ' if ($i > 4);
+			$text .= $a[$i];
 		}
+		$text = decode('utf8', $text);
 		
 		SONOS_DoWork($udn, 'setAlarm', $value, $value2, $text);
 	} elsif (lc($key) eq 'snoozealarm') {
 		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
 		$udn = $hash->{UDN};
+		
+		$value = SONOS_ConvertSecondsToTime($value) if (looks_like_number($value));
 		
 		SONOS_DoWork($udn, 'setSnoozeAlarm', $value);
 	} elsif (lc($key) eq 'dailyindexrefreshtime') {
@@ -721,6 +811,8 @@ sub SONOSPLAYER_Set($@) {
 	} elsif (lc($key) eq 'sleeptimer') {
 		$hash = SONOSPLAYER_GetRealTargetPlayerHash($hash);
 		$udn = $hash->{UDN};
+		
+		$value = SONOS_ConvertSecondsToTime($value) if (looks_like_number($value));
 		
 		SONOS_DoWork($udn, 'setSleepTimer', $value);
 	} elsif (lc($key) eq 'addmember') {
@@ -755,6 +847,8 @@ sub SONOSPLAYER_Set($@) {
 			
 			return undef;
 		}
+	} elsif (lc($key) eq 'makestandalonegroup') {
+		SONOS_DoWork($udn, 'makeStandaloneGroup');
 	} elsif (lc($key) eq 'createstereopair') {
 		my $rightPlayer = InternalVal($value, 'UDN', '');
 		return 'RightPlayer not found!' if (!$rightPlayer);
@@ -812,8 +906,10 @@ sub SONOSPLAYER_Set($@) {
 		# Hier die komplette restliche Zeile in den Parameter packen, da damit auch Leerzeichen möglich sind
 		my $text = '';
 		for(my $i = 2; $i < @a; $i++) {
-			$text .= ' '.$a[$i];
+			$text .= ' ' if ($i > 2);
+			$text .= $a[$i];
 		}
+		$text = decode('utf8', $text);
 		
 		SONOS_DoWork($udn, 'setName', $text);
 	} elsif (lc($key) eq 'roomicon') {
@@ -835,6 +931,22 @@ sub SONOSPLAYER_Set($@) {
 	}
 	
 	return (undef, 1);
+}
+
+########################################################################################
+#
+#  SONOSPLAYER_CountRequiredParameters - Counta all required parameters in the given string
+#
+########################################################################################
+sub SONOSPLAYER_CountRequiredParameters($) {
+	my ($params) = @_;
+	
+	my $result = 0;
+	for my $elem (split(' ', $params)) {
+		$result++ if ($elem !~ m/\[.*\]/);
+	}
+	
+	return $result;
 }
 
 ########################################################################################
@@ -998,15 +1110,30 @@ sub SONOSPLAYER_Log($$$) {
 <li><a name="SONOSPLAYER_setter_Alarm">
 <b><code>Alarm (Create|Update|Delete) &lt;ID&gt; &lt;Datahash&gt;</code></b></a>
 <br />Can be used for working on alarms:<ul><li><b>Create:</b> Creates an alarm-entry with the given datahash.</li><li><b>Update:</b> Updates the alarm-entry with the given id and datahash.</li><li><b>Delete:</b> Deletes the alarm-entry with the given id.</li></ul><br /><b>The Datahash:</b><br />The Format is a perl-hash and is interpreted with the eval-function.<br />e.g.: { Repeat =&gt; 1 }<br /><br />The following entries are allowed/neccessary:<ul><li>StartTime</li><li>Duration</li><li>Recurrence_Once</li><li>Recurrence_Monday</li><li>Recurrence_Tuesday</li><li>Recurrence_Wednesday</li><li>Recurrence_Thursday</li><li>Recurrence_Friday</li><li>Recurrence_Saturday</li><li>Recurrence_Sunday</li><li>Enabled</li><li>ProgramURI</li><li>ProgramMetaData</li><li>Shuffle</li><li>Repeat</li><li>Volume</li><li>IncludeLinkedZones</li></ul><br />e.g.:<ul><li>set Sonos_Wohnzimmer Alarm Create 0 { Enabled =&gt; 1, Volume =&gt; 35, StartTime =&gt; '00:00:00', Duration =&gt; '00:15:00', Repeat =&gt; 0, Shuffle =&gt; 0, ProgramURI =&gt; 'x-rincon-buzzer:0', ProgramMetaData =&gt; '', Recurrence_Once =&gt; 0, Recurrence_Monday =&gt; 1, Recurrence_Tuesday =&gt; 1, Recurrence_Wednesday =&gt; 1, Recurrence_Thursday =&gt; 1, Recurrence_Friday =&gt; 1, Recurrence_Saturday =&gt; 0, Recurrence_Sunday =&gt; 0, IncludeLinkedZones =&gt; 0 }</li><li>set Sonos_Wohnzimmer Alarm Update 17 { Shuffle =&gt; 1 }</li><li>set Sonos_Wohnzimmer Alarm Delete 17 {}</li></ul></li>
+<li><a name="SONOSPLAYER_setter_AudioDelay">
+<b><code>AudioDelay &lt;Level&gt;</code></b></a>
+<br /> Sets the audiodelay of the player to the given value. The value can range from 0 to 5.</li>
+<li><a name="SONOSPLAYER_setter_AudioDelayLeftRear">
+<b><code>AudioDelayLeftRear &lt;Level&gt;</code></b></a>
+<br /> Sets the audiodelayleftrear of the player to the given value. The value can range from 0 to 2. The values has the following meanings: 0: >3m, 1: >0.6m und <3m, 2: <0.6m</li>
+<li><a name="SONOSPLAYER_setter_AudioDelayRightRear">
+<b><code>AudioDelayRightRear &lt;Level&gt;</code></b></a>
+<br /> Sets the audiodelayrightrear of the player to the given value. The value can range from 0 to 2. The values has the following meanings: 0: >3m, 1: >0.6m und <3m, 2: <0.6m</li>
 <li><a name="SONOSPLAYER_setter_DailyIndexRefreshTime">
-<b><code>DailyIndexRefreshTime &lt;time&gt;</code></b></a>
+<b><code>DailyIndexRefreshTime &lt;Timestring&gt;</code></b></a>
 <br />Sets the current DailyIndexRefreshTime for the whole bunch of Zoneplayers.</li>
+<li><a name="SONOSPLAYER_setter_DialogLevel">
+<b><code>DialogLevel &lt;State&gt;</code></b></a>
+<br /> Sets the dialoglevel for playbar-systems.</li>
 <li><a name="SONOSPLAYER_setter_ExportSonosBibliothek">
 <b><code>ExportSonosBibliothek &lt;filename&gt;</code></b></a>
 <br />Exports a file with a textual representation of a structure- and titlehash of the complete Sonos-Bibliothek. Warning: Will use a large amount of CPU-Time and RAM!</li>
 <li><a name="SONOSPLAYER_setter_Name">
 <b><code>Name &lt;Zonename&gt;</code></b></a>
 <br />Sets the Name for this Zone</li>
+<li><a name="SONOSPLAYER_setter_NightMode">
+<b><code>NightMode &lt;State&gt;</code></b></a>
+<br /> Sets the nightmode for playbar-systems.</li>
 <li><a name="SONOSPLAYER_setter_OutputFixed">
 <b><code>OutputFixed &lt;State&gt;</code></b></a>
 <br /> Sets the outputfixed-state. Retrieves the new state as the result.</li>
@@ -1020,8 +1147,26 @@ sub SONOSPLAYER_Log($$$) {
 <b><code>RoomIcon &lt;Iconname&gt;</code></b></a>
 <br />Sets the Icon for this Zone</li>
 <li><a name="SONOSPLAYER_setter_SnoozeAlarm">
-<b><code>SnoozeAlarm &lt;Time&gt;</code></b></a>
+<b><code>SnoozeAlarm &lt;Timestring|Seconds&gt;</code></b></a>
 <br />Snoozes a currently playing alarm for the given time</li>
+<li><a name="SONOSPLAYER_setter_SubEnable">
+<b><code>SubEnable &lt;State&gt;</code></b></a>
+<br /> Sets the substate for sub-systems.</li>
+<li><a name="SONOSPLAYER_setter_SubGain">
+<b><code>SubGain &lt;Level&gt;</code></b></a>
+<br /> Sets the sub-gain for sub-systems. The value can range from -15 to 15.</li>
+<li><a name="SONOSPLAYER_setter_SubPolarity">
+<b><code>SubPolarity &lt;Level&gt;</code></b></a>
+<br /> Sets the sub-polarity for sub-systems. The value can range from 0 to 2.</li>
+<li><a name="SONOSPLAYER_setter_SurroundEnable">
+<b><code>SurroundEnable &lt;State&gt;</code></b></a>
+<br /> Sets the surround-state for surround-systems (like playbars).</li>
+<li><a name="SONOSPLAYER_setter_SurroundLevel">
+<b><code>SurroundLevel &lt;Level&gt;</code></b></a>
+<br /> Sets the surround-level for surround-systems (like playbars). The value can range from -15 to 15.</li>
+<li><a name="SONOSPLAYER_setter_TruePlay">
+<b><code>TruePlay &lt;State&gt;</code></b></a>
+<br />Sets the TruePlay-State of the given player.</li>
 <li><a name="SONOSPLAYER_setter_Wifi">
 <b><code>Wifi &lt;State&gt;</code></b></a>
 <br />Sets the WiFi-State of the given Player. Can be 'off', 'persist-off' or 'on'.</li>
@@ -1071,9 +1216,6 @@ sub SONOSPLAYER_Log($$$) {
 <br /> Sets the track with the given tracknumber as the current title. If the tracknumber is the word <code>Random</code> a random track will be selected.</li>
 </ul></li>
 <li><b>Playing Settings</b><ul>
-<li><a name="SONOSPLAYER_setter_AudioDelay">
-<b><code>AudioDelay &lt;Level&gt;</code></b></a>
-<br /> Sets the audiodelay of the playbar to the given value. The value can range from 0 to 5. Retrieves the new audiodelay as the result.</li>
 <li><a name="SONOSPLAYER_setter_Balance">
 <b><code>Balance &lt;BalanceValue&gt;</code></b></a>
 <br /> Sets the balance to the given value. The value can range from -100 (full left) to 100 (full right). Retrieves the new balancevalue as the result.</li>
@@ -1098,6 +1240,12 @@ sub SONOSPLAYER_Log($$$) {
 <li><a name="SONOSPLAYER_setter_Repeat">
 <b><code>Repeat &lt;State&gt;</code></b></a>
 <br /> Sets the repeat-state. Retrieves the new state as the result.</li>
+<li><a name="SONOSPLAYER_setter_RepeatOne">
+<b><code>RepeatOne &lt;State&gt;</code></b></a>
+<br /> Sets the repeatOne-state. Retrieves the new state as the result.</li>
+<li><a name="SONOSPLAYER_setter_RepeatOneT">
+<b><code>RepeatOneT</code></b></a>
+<br /> Toggles the repeatOne-state. Retrieves the new state as the result.</li>
 <li><a name="SONOSPLAYER_setter_RepeatT">
 <b><code>RepeatT</code></b></a>
 <br /> Toggles the repeat-state. Retrieves the new state as the result.</li>
@@ -1108,20 +1256,8 @@ sub SONOSPLAYER_Log($$$) {
 <b><code>ShuffleT</code></b></a>
 <br /> Toggles the shuffle-state. Retrieves the new state as the result.</li>
 <li><a name="SONOSPLAYER_setter_SleepTimer">
-<b><code>SleepTimer &lt;Time&gt;</code></b></a>
+<b><code>SleepTimer &lt;Timestring|Seconds&gt;</code></b></a>
 <br /> Sets the Sleeptimer to the given Time. It must be in the full format of "HH:MM:SS". Deactivate with "00:00:00" or "off".</li>
-<li><a name="SONOSPLAYER_setter_SubEnable">
-<b><code>SubEnable &lt;State&gt;</code></b></a>
-<br /> Sets the substate for sub-systems. Retrieves the new state as the result.</li>
-<li><a name="SONOSPLAYER_setter_SubGain">
-<b><code>SubGain &lt;Level&gt;</code></b></a>
-<br /> Sets the sub-gain for sub-systems. The value can range from -15 to 15. Retrieves the new gainlevel as the result.</li>
-<li><a name="SONOSPLAYER_setter_SurroundEnable">
-<b><code>SurroundEnable &lt;State&gt;</code></b></a>
-<br /> Sets the surround-state for surround-systems (like playbars). Retrieves the new state as the result.</li>
-<li><a name="SONOSPLAYER_setter_SurroundLevel">
-<b><code>SurroundLevel &lt;Level&gt;</code></b></a>
-<br /> Sets the surround-level for surround-systems (like playbars). The value can range from -15 to 15. Retrieves the new level as the result.</li>
 <li><a name="SONOSPLAYER_setter_Treble">
 <b><code>Treble &lt;TrebleValue&gt;</code></b></a>
 <br /> Sets the treble to the given value. The value can range from -10 to 10. Retrieves the new treblevalue as the result.</li>
@@ -1148,12 +1284,18 @@ sub SONOSPLAYER_Log($$$) {
 <li><a name="SONOSPLAYER_setter_CurrentPlaylist">
 <b><code>CurrentPlaylist</code></b></a>
 <br /> Sets the current playing to the current queue, but doesn't start playing (e.g. after hearing of a radiostream, where the current playlist still exists but is currently "not in use")</li>
+<li><a name="SONOSPLAYER_setter_DeleteFromQueue">
+<b><code>DeleteFromQueue <index_of_elems></code></b></a>
+<br /> Deletes the elements from the current queue with the given indices. You can use the ususal perl-array-formats like "1..12,17,20..22". The indices reference to the position in the current view of the list (this usually differs between the normal playmode and the shuffleplaymode).</li>
 <li><a name="SONOSPLAYER_setter_DeletePlaylist">
 <b><code>DeletePlaylist</code></b></a>
 <br /> Deletes the Sonos-Playlist with the given name. According to the possibilities of the playlistname have a close look at LoadPlaylist.</li>
 <li><a name="SONOSPLAYER_setter_EmptyPlaylist">
 <b><code>EmptyPlaylist</code></b></a>
 <br /> Clears the current queue</li>
+<li><a name="SONOSPLAYER_setter_LoadFavourite">
+<b><code>LoadFavourite &lt;Favouritename&gt;</code></b></a>
+<br /> Loads the named sonos-favorite. The parameter should be URL-encoded for proper naming of lists with special characters.<br />Additionally it's possible to use a regular expression as the name. The first hit will be used. The format is e.g. <code>/meine.hits/</code>.</li>
 <li><a name="SONOSPLAYER_setter_LoadPlaylist">
 <b><code>LoadPlaylist &lt;Playlistname|Fhem-Devicename&gt; [EmptyQueueBeforeImport]</code></b></a>
 <br /> Loads the named playlist to the current playing queue. The parameter should be URL-encoded for proper naming of lists with special characters. The Playlistnamen can be an Fhem-Devicename, then the current playlist of this referenced player will be copied. The Playlistname can also be a filename and then must be startet with 'file:' (e.g. 'file:c:/Test.m3u')<br />If EmptyQueueBeforeImport is given and set to 1, the queue will be emptied before the import process. If not given, the parameter will be interpreted as 1.<br />Additionally it's possible to use a regular expression as the name. The first hit will be used. The format is e.g. <code>/hits.2014/</code>.</li>
@@ -1161,7 +1303,7 @@ sub SONOSPLAYER_Log($$$) {
 <b><code>LoadRadio &lt;Radiostationname&gt;</code></b></a>
 <br /> Loads the named radiostation (favorite). The current queue will not be touched but deactivated. The parameter should be URL-encoded for proper naming of lists with special characters.<br />Additionally it's possible to use a regular expression as the name. The first hit will be used. The format is e.g. <code>/radio/</code>.</li>
 <li><a name="SONOSPLAYER_setter_LoadSearchlist">
-<b><code>LoadSearchlist &lt;Categoryname&gt; &lt;CategoryElement&gt; [[TitlefilterRegEx]/[AlbumfilterRegEx]/[ArtistfilterRegEx] [maxElem]]</code></b></a>
+<b><code>LoadSearchlist &lt;Categoryname&gt; &lt;CategoryElement&gt; [[TitlefilterRegEx]/[AlbumfilterRegEx]/[ArtistfilterRegEx] [[*]maxElem[+|-]]]</code></b></a>
 <br /> Loads titles from the Sonos-Bibliothek into the current playlist according to the given category and filtervalues. Please consult the (german) Wiki for detailed informations.</li>
 <li><a name="SONOSPLAYER_setter_SavePlaylist">
 <b><code>SavePlaylist &lt;Playlistname&gt;</code></b></a>
@@ -1186,6 +1328,9 @@ sub SONOSPLAYER_Log($$$) {
 <li><a name="SONOSPLAYER_setter_GroupVolumeU">
 <b><code>GroupVolumeU</code></b></a>
 <br /> Turns the group volume by volumeStep-ticks up.</li>
+<li><a name="SONOSPLAYER_setter_MakeStandaloneGroup">
+<b><code>MakeStandaloneGroup</code></b></a>
+<br />Makes this Player a standalone group.</li>
 <li><a name="SONOSPLAYER_setter_RemoveMember">
 <b><code>RemoveMember &lt;devicename&gt;</code></b></a>
 <br />Removes the given device, so that they both are not longer a group. The current playing of the current device goes on normally. The cutted device stops his playing and has no current playlist anymore (since Sonos Version 4.2 the old playlist will be restored).</li>
@@ -1197,7 +1342,6 @@ sub SONOSPLAYER_Log($$$) {
 <br /> Save the current volume-relation of all players of the same group. It's neccessary for the use of "GroupVolume" and is stored until the next call of "SnapshotGroupVolume".</li>
 </ul></li>
 </ul>
-<br />
 <a name="SONOSPLAYERget"></a> 
 <h4>Get</h4>
 <ul>
@@ -1211,6 +1355,9 @@ sub SONOSPLAYER_Log($$$) {
 <li><a name="SONOSPLAYER_getter_PossibleRoomIcons">
 <b><code>PossibleRoomIcons</code></b></a>
 <br /> Retreives a list of all possible Roomiconnames for the use with "set RoomIcon".</li>
+<li><a name="SONOSPLAYER_getter_SupportLinks">
+<b><code>SupportLinks</code></b></a>
+<br /> Shows a list with direct links to the player-support-sites.</li>
 </ul></li>
 <li><b>Lists</b><ul>
 <li><a name="SONOSPLAYER_getter_Favourites">
@@ -1241,7 +1388,6 @@ sub SONOSPLAYER_Log($$$) {
 <br /> Retrieves the current timeposition inside a title</li>
 </ul></li>
 </ul>
-<br />
 <a name="SONOSPLAYERattr"></a>
 <h4>Attributes</h4>
 '''Attention'''<br />The attributes can only be used after a restart of fhem, because it must be initially transfered to the subprocess.
@@ -1270,7 +1416,7 @@ sub SONOSPLAYER_Log($$$) {
 <li><a name="SONOSPLAYER_attribut_generateInfoSummarize4"><b><code>generateInfoSummarize4 &lt;string&gt;</code></b>
 </a><br /> Generates the reading 'InfoSummarize4' with the given format. More Information on this in the examples-section.</li>
 <li><a name="SONOSPLAYER_attribut_stateVariable"><b><code>stateVariable &lt;string&gt;</code></b>
-</a><br /> One of (TransportState,NumberOfTracks,Track,TrackURI,TrackDuration,Title,Artist,Album,OriginalTrackNumber,AlbumArtist,<br />Sender,SenderCurrent,SenderInfo,StreamAudio,NormalAudio,AlbumArtURI,nextTrackDuration,nextTrackURI,nextAlbumArtURI,<br />nextTitle,nextArtist,nextAlbum,nextAlbumArtist,nextOriginalTrackNumber,Volume,Mute,Shuffle,Repeat,CrossfadeMode,Balance,<br />HeadphoneConnected,SleepTimer,Presence,RoomName,SaveRoomName,PlayerType,Location,SoftwareRevision,SerialNum,InfoSummarize1,<br />InfoSummarize2,InfoSummarize3,InfoSummarize4). Defines, which variable has to be copied to the content of the state-variable.</li>
+</a><br /> One of (TransportState,NumberOfTracks,Track,TrackURI,TrackDuration,Title,Artist,Album,OriginalTrackNumber,AlbumArtist,<br />Sender,SenderCurrent,SenderInfo,StreamAudio,NormalAudio,AlbumArtURI,nextTrackDuration,nextTrackURI,nextAlbumArtURI,<br />nextTitle,nextArtist,nextAlbum,nextAlbumArtist,nextOriginalTrackNumber,Volume,Mute,Shuffle,Repeat,RepeatOne,CrossfadeMode,Balance,<br />HeadphoneConnected,SleepTimer,Presence,RoomName,SaveRoomName,PlayerType,Location,SoftwareRevision,SerialNum,InfoSummarize1,<br />InfoSummarize2,InfoSummarize3,InfoSummarize4). Defines, which variable has to be copied to the content of the state-variable.</li>
 </ul></li>
 <li><b>Controloptions</b><ul>
 <li><a name="SONOSPLAYER_attribut_maxVolume"><b><code>maxVolume &lt;int&gt;</code></b>
@@ -1295,7 +1441,7 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <li><a name="SONOSPLAYER_examples_InfoSummarize">Format of InfoSummarize:</a><br />
 <code>infoSummarizeX := &lt;NormalAudio&gt;:summarizeElem:&lt;/NormalAudio&gt; &lt;StreamAudio&gt;:summarizeElem:&lt;/StreamAudio&gt;|:summarizeElem:</code><br />
 <code>:summarizeElem: := &lt;:variable:[ prefix=":text:"][ suffix=":text:"][ instead=":text:"][ ifempty=":text:"]/[ emptyVal=":text:"]&gt;</code><br />
-<code>:variable: := TransportState|NumberOfTracks|Track|TrackURI|TrackDuration|Title|Artist|Album|OriginalTrackNumber|AlbumArtist|<br />Sender|SenderCurrent|SenderInfo|StreamAudio|NormalAudio|AlbumArtURI|nextTrackDuration|nextTrackURI|nextAlbumArtURI|<br />nextTitle|nextArtist|nextAlbum|nextAlbumArtist|nextOriginalTrackNumber|Volume|Mute|Shuffle|Repeat|CrossfadeMode|Balance|<br />HeadphoneConnected|SleepTimer|Presence|RoomName|SaveRoomName|PlayerType|Location|SoftwareRevision|SerialNum|InfoSummarize1|<br />InfoSummarize2|InfoSummarize3|InfoSummarize4</code><br />
+<code>:variable: := TransportState|NumberOfTracks|Track|TrackURI|TrackDuration|Title|Artist|Album|OriginalTrackNumber|AlbumArtist|<br />Sender|SenderCurrent|SenderInfo|StreamAudio|NormalAudio|AlbumArtURI|nextTrackDuration|nextTrackURI|nextAlbumArtURI|<br />nextTitle|nextArtist|nextAlbum|nextAlbumArtist|nextOriginalTrackNumber|Volume|Mute|Shuffle|Repeat|RepeatOne|CrossfadeMode|Balance|<br />HeadphoneConnected|SleepTimer|Presence|RoomName|SaveRoomName|PlayerType|Location|SoftwareRevision|SerialNum|InfoSummarize1|<br />InfoSummarize2|InfoSummarize3|InfoSummarize4</code><br />
 <code>:text: := [Any text without double-quotes]</code><br /></li>
 </ul>
 
@@ -1324,15 +1470,30 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <li><a name="SONOSPLAYER_setter_Alarm">
 <b><code>Alarm (Create|Update|Delete) &lt;ID&gt; &lt;Datahash&gt;</code></b></a>
 <br />Diese Anweisung wird für die Bearbeitung der Alarme verwendet:<ul><li><b>Create:</b> Erzeugt einen neuen Alarm-Eintrag mit den übergebenen Hash-Daten.</li><li><b>Update:</b> Aktualisiert den Alarm mit der übergebenen ID und den angegebenen Hash-Daten.</li><li><b>Delete:</b> Löscht den Alarm-Eintrag mit der übergebenen ID.</li></ul><br /><b>Die Hash-Daten:</b><br />Das Format ist ein Perl-Hash und wird mittels der eval-Funktion interpretiert.<br />e.g.: { Repeat =&gt; 1 }<br /><br />Die folgenden Schlüssel sind zulässig/notwendig:<ul><li>StartTime</li><li>Duration</li><li>Recurrence_Once</li><li>Recurrence_Monday</li><li>Recurrence_Tuesday</li><li>Recurrence_Wednesday</li><li>Recurrence_Thursday</li><li>Recurrence_Friday</li><li>Recurrence_Saturday</li><li>Recurrence_Sunday</li><li>Enabled</li><li>ProgramURI</li><li>ProgramMetaData</li><li>Shuffle</li><li>Repeat</li><li>Volume</li><li>IncludeLinkedZones</li></ul><br />z.B.:<ul><li>set Sonos_Wohnzimmer Alarm Create 0 { Enabled =&gt; 1, Volume =&gt; 35, StartTime =&gt; '00:00:00', Duration =&gt; '00:15:00', Repeat =&gt; 0, Shuffle =&gt; 0, ProgramURI =&gt; 'x-rincon-buzzer:0', ProgramMetaData =&gt; '', Recurrence_Once =&gt; 0, Recurrence_Monday =&gt; 1, Recurrence_Tuesday =&gt; 1, Recurrence_Wednesday =&gt; 1, Recurrence_Thursday =&gt; 1, Recurrence_Friday =&gt; 1, Recurrence_Saturday =&gt; 0, Recurrence_Sunday =&gt; 0, IncludeLinkedZones =&gt; 0 }</li><li>set Sonos_Wohnzimmer Alarm Update 17 { Shuffle =&gt; 1 }</li><li>set Sonos_Wohnzimmer Alarm Delete 17 {}</li></ul></li>
+<li><a name="SONOSPLAYER_setter_AudioDelay">
+<b><code>AudioDelay &lt;Level&gt;</code></b></a>
+<br /> Setzt den AudioDelay der Playbar auf den angegebenen Wert. Der Wert kann zwischen 0 und 5 liegen.</li>
+<li><a name="SONOSPLAYER_setter_AudioDelayLeftRear">
+<b><code>AudioDelayLeftRear &lt;Level&gt;</code></b></a>
+<br /> Setzt den AudioDelayLeftRear des Players auf den angegebenen Wert. Der Wert kann zwischen 0 und 2 liegen. Wobei die Werte folgende Bedeutung haben: 0: >3m, 1: >0.6m und <3m, 2: <0.6m</li>
+<li><a name="SONOSPLAYER_setter_AudioDelayRightRear">
+<b><code>AudioDelayRightRear &lt;Level&gt;</code></b></a>
+<br /> Setzt den AudioDelayRightRear des Players auf den angegebenen Wert. Der Wert kann zwischen 0 und 2 liegen. Wobei die Werte folgende Bedeutung haben: 0: >3m, 1: >0.6m und <3m, 2: <0.6m</li>
 <li><a name="SONOSPLAYER_setter_DailyIndexRefreshTime">
-<b><code>DailyIndexRefreshTime &lt;time&gt;</code></b></a>
+<b><code>DailyIndexRefreshTime &lt;Timestring&gt;</code></b></a>
 <br />Setzt die aktuell gültige DailyIndexRefreshTime für alle Zoneplayer.</li>
+<li><a name="SONOSPLAYER_setter_DialogLevel">
+<b><code>DialogLevel &lt;State&gt;</code></b></a>
+<br /> Legt den Zustand der Sprachverbesserung der Playbar fest.</li>
 <li><a name="SONOSPLAYER_setter_ExportSonosBibliothek">
 <b><code>ExportSonosBibliothek &lt;filename&gt;</code></b></a>
 <br />Exportiert eine Datei mit der textuellen Darstellung eines Struktur- und Titelhashs, das die komplette Navigationsstruktur aus der Sonos-Bibliothek abbildet. Achtung: Benötigt eine große Menge CPU-Zeit und Arbeitsspeicher für die Ausführung!</li>
 <li><a name="SONOSPLAYER_setter_Name">
 <b><code>Name &lt;Zonename&gt;</code></b></a>
 <br />Legt den Namen der Zone fest.</li>
+<li><a name="SONOSPLAYER_setter_NightMode">
+<b><code>NightMode &lt;State&gt;</code></b></a>
+<br /> Legt den Zustand des Nachtsounds der Playbar fest.</li>
 <li><a name="SONOSPLAYER_setter_OutputFixed">
 <b><code>OutputFixed &lt;State&gt;</code></b></a>
 <br /> Setzt den angegebenen OutputFixed-Zustand. Liefert den aktuell gültigen OutputFixed-Zustand.</li>
@@ -1346,8 +1507,26 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <b><code>RoomIcon &lt;Iconname&gt;</code></b></a>
 <br />Legt das Icon für die Zone fest</li>
 <li><a name="SONOSPLAYER_setter_SnoozeAlarm">
-<b><code>SnoozeAlarm &lt;Time&gt;</code></b></a>
+<b><code>SnoozeAlarm &lt;Timestring|Seconds&gt;</code></b></a>
 <br />Unterbricht eine laufende Alarmwiedergabe für den übergebenen Zeitraum.</li>
+<li><a name="SONOSPLAYER_setter_SubEnable">
+<b><code>SubEnable &lt;State&gt;</code></b></a>
+<br /> Legt den Zustand des Sub-Zustands fest.</li>
+<li><a name="SONOSPLAYER_setter_SubGain">
+<b><code>SubGain &lt;Level&gt;</code></b></a>
+<br /> Setzt den SubGain auf den angegebenen Wert. Der Wert kann zwischen -15 und 15 liegen.</li>
+<li><a name="SONOSPLAYER_setter_SubPolarity">
+<b><code>SubPolarity &lt;Level&gt;</code></b></a>
+<br /> Setzt den SubPolarity auf den angegebenen Wert. Der Wert kann zwischen 0 und 2 liegen.</li>
+<li><a name="SONOSPLAYER_setter_SurroundEnable">
+<b><code>SurroundEnable &lt;State&gt;</code></b></a>
+<br />Setzt den SurroundEnable-Zustand.</li>
+<li><a name="SONOSPLAYER_setter_SurroundLevel">
+<b><code>SurroundLevel &lt;Level&gt;</code></b></a>
+<br /> Setzt den Surroundlevel auf den angegebenen Wert. Der Wert kann zwischen -15 und 15 liegen.</li>
+<li><a name="SONOSPLAYER_setter_TruePlay">
+<b><code>TruePlay &lt;State&gt;</code></b></a>
+<br />Setzt den TruePlay-Zustand.</li>
 <li><a name="SONOSPLAYER_setter_Wifi">
 <b><code>Wifi &lt;State&gt;</code></b></a>
 <br />Setzt den WiFi-Zustand des Players. Kann 'off', 'persist-off' oder 'on' sein.</li>
@@ -1397,9 +1576,6 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <br /> Aktiviert den angebenen Titel der aktuellen Abspielliste. Wenn als Tracknummer der Wert <code>Random</code> angegeben wird, dann wird eine zufällige Trackposition ausgewählt.</li>
 </ul></li>
 <li><b>Einstellungen zum Abspielen</b><ul>
-<li><a name="SONOSPLAYER_setter_AudioDelay">
-<b><code>AudioDelay &lt;Level&gt;</code></b></a>
-<br /> Setzt den AudioDelay der Playbar auf den angegebenen Wert. Der Wert kann zwischen 0 und 5 liegen. Gibt das wirklich eingestellte AudioDelay als Ergebnis zurück.</li>
 <li><a name="SONOSPLAYER_setter_Balance">
 <b><code>Balance &lt;BalanceValue&gt;</code></b></a>
 <br /> Setzt die Balance auf den angegebenen Wert. Der Wert kann zwischen -100 (voll links) bis 100 (voll rechts) sein. Gibt die wirklich eingestellte Balance als Ergebnis zurück.</li>
@@ -1424,6 +1600,12 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <li><a name="SONOSPLAYER_setter_Repeat">
 <b><code>Repeat &lt;State&gt;</code></b></a>
 <br /> Legt den Zustand des Repeat-Zustands fest. Liefert den aktuell gültigen Repeat-Zustand.</li>
+<li><a name="SONOSPLAYER_setter_RepeatOne">
+<b><code>RepeatOne &lt;State&gt;</code></b></a>
+<br /> Legt den Zustand des RepeatOne-Zustands fest. Liefert den aktuell gültigen RepeatOne-Zustand.</li>
+<li><a name="SONOSPLAYER_setter_RepeatOneT">
+<b><code>RepeatOneT</code></b></a>
+<br /> Schaltet den Zustand des RepeatOne-Zustands um. Liefert den aktuell gültigen RepeatOne-Zustand.</li>
 <li><a name="SONOSPLAYER_setter_RepeatT">
 <b><code>RepeatT</code></b></a>
 <br /> Schaltet den Zustand des Repeat-Zustands um. Liefert den aktuell gültigen Repeat-Zustand.</li>
@@ -1434,20 +1616,8 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <b><code>ShuffleT</code></b></a>
 <br /> Schaltet den Zustand des Shuffle-Zustands um. Liefert den aktuell gültigen Shuffle-Zustand.</li>
 <li><a name="SONOSPLAYER_setter_SleepTimer">
-<b><code>SleepTimer &lt;Time&gt;</code></b></a>
+<b><code>SleepTimer &lt;Timestring|Seconds&gt;</code></b></a>
 <br /> Legt den aktuellen SleepTimer fest. Der Wert muss ein kompletter Zeitstempel sein (HH:MM:SS). Zum Deaktivieren darf der Zeitstempel nur Nullen enthalten oder das Wort 'off'.</li>
-<li><a name="SONOSPLAYER_setter_SubEnable">
-<b><code>SubEnable &lt;State&gt;</code></b></a>
-<br /> Legt den Zustand des Sub-Zustands fest. Liefert den aktuell gültigen Sub-Zustand.</li>
-<li><a name="SONOSPLAYER_setter_SubGain">
-<b><code>SubGain &lt;Level&gt;</code></b></a>
-<br /> Setzt den SubGain auf den angegebenen Wert. Der Wert kann zwischen -15 und 15 liegen. Gibt den wirklich eingestellten SubGain als Ergebnis zurück.</li>
-<li><a name="SONOSPLAYER_setter_SurroundEnable">
-<b><code>SurroundEnable &lt;State&gt;</code></b></a>
-<br /> Legt den Zustand des Surround-Zustands fest. Liefert den aktuell gültigen Surround-Zustand.</li>
-<li><a name="SONOSPLAYER_setter_SurroundLevel">
-<b><code>SurroundLevel &lt;Level&gt;</code></b></a>
-<br /> Setzt den Surroundlevel auf den angegebenen Wert. Der Wert kann zwischen -15 und 15 liegen. Gibt den wirklich eingestellten SurroundLevel als Ergebnis zurück.</li>
 <li><a name="SONOSPLAYER_setter_Treble">
 <b><code>Treble &lt;TrebleValue&gt;</code></b></a>
 <br /> Setzt den Treblelevel auf den angegebenen Wert. Der Wert kann zwischen -10 bis 10 sein. Gibt den wirklich eingestellten Treblelevel als Ergebnis zurück.</li>
@@ -1474,12 +1644,18 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <li><a name="SONOSPLAYER_setter_CurrentPlaylist">
 <b><code>CurrentPlaylist</code></b></a>
 <br /> Setzt den Abspielmodus auf die aktuelle Abspielliste, startet aber keine Wiedergabe (z.B. nach dem Hören eines Radiostreams, wo die aktuelle Abspielliste noch existiert, aber gerade "nicht verwendet" wird)</li>
+<li><a name="SONOSPLAYER_setter_DeleteFromQueue">
+<b><code>DeleteFromQueue <index_of_elems></code></b></a>
+<br /> Löscht die angegebenen Elemente aus der aktuellen Abspielliste. Die Angabe erfolgt über die Indizies der Titel. Es können die bei Perl-Array-üblichen Formate verwendet werden: "1..12,17,20..22". Die Indizies beziehen sich auf die aktuell angezeigte Reihenfolge (diese unterscheidet sich zwischen der normalen Abspielweise und dem Shufflemodus).</li>
 <li><a name="SONOSPLAYER_setter_DeletePlaylist">
 <b><code>DeletePlaylist</code></b></a>
 <br /> Löscht die bezeichnete Playliste. Zum möglichen Format des Playlistenamen unter LoadPlaylist nachsehen.</li>
 <li><a name="SONOSPLAYER_setter_EmptyPlaylist">
 <b><code>EmptyPlaylist</code></b></a>
 <br /> Leert die aktuelle Abspielliste</li>
+<li><a name="SONOSPLAYER_setter_LoadFavourite">
+<b><code>LoadFavourite &lt;FavouriteName&gt;</code></b></a>
+<br /> Lädt den angegebenen Favoriten. Der Name bezeichnet einen Eintrag in der Sonos-Favoritenliste. Der Parameter sollte/kann URL-Encoded werden um auch Spezialzeichen zu ermöglichen.<br />Zusätzlich kann ein regulärer Ausdruck für den Namen verwendet werden. Der erste Treffer wird verwendet. Das Format ist z.B. <code>/meine.hits/</code>.</li>
 <li><a name="SONOSPLAYER_setter_LoadPlaylist">
 <b><code>LoadPlaylist &lt;Playlistname|Fhem-Devicename&gt; [EmptyQueueBeforeImport]</code></b></a>
 <br /> Lädt die angegebene Playlist in die aktuelle Abspielliste. Der Parameter sollte/kann URL-Encoded werden um auch Spezialzeichen zu ermöglichen. Der Playlistname kann ein Fhem-Sonosplayer-Devicename sein, dann wird dessen aktuelle Abpielliste kopiert. Der Playlistname kann aber auch ein Dateiname sein. Dann muss dieser mit 'file:' beginnen (z.B. 'file:c:/Test.m3u).<br />Wenn der Parameter EmptyQueueBeforeImport mit ''1'' angegeben wirde, wird die aktuelle Abspielliste vor dem Import geleert. Standardmäßig wird hier ''1'' angenommen.<br />Zusätzlich kann ein regulärer Ausdruck für den Namen verwendet werden. Der erste Treffer wird verwendet. Das Format ist z.B. <code>/hits.2014/</code>.</li>
@@ -1487,7 +1663,7 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <b><code>LoadRadio &lt;Radiostationname&gt;</code></b></a>
 <br /> Startet den angegebenen Radiostream. Der Name bezeichnet einen Sender in der Radiofavoritenliste. Die aktuelle Abspielliste wird nicht verändert. Der Parameter sollte/kann URL-Encoded werden um auch Spezialzeichen zu ermöglichen.<br />Zusätzlich kann ein regulärer Ausdruck für den Namen verwendet werden. Der erste Treffer wird verwendet. Das Format ist z.B. <code>/radio/</code>.</li>
 <li><a name="SONOSPLAYER_setter_LoadSearchlist">
-<b><code>LoadSearchlist &lt;Kategoriename&gt; &lt;KategorieElement&gt; [[TitelfilterRegEx]/[AlbumfilterRegEx]/[ArtistfilterRegEx] [maxElem]]</code></b></a>
+<b><code>LoadSearchlist &lt;Kategoriename&gt; &lt;KategorieElement&gt; [[TitelfilterRegEx]/[AlbumfilterRegEx]/[ArtistfilterRegEx] [[*]maxElem[+|-]]]</code></b></a>
 <br /> Lädt Titel nach diversen Kriterien in die aktuelle Abspielliste. Nähere Beschreibung bitte im Wiki nachlesen.</li>
 <li><a name="SONOSPLAYER_setter_SavePlaylist">
 <b><code>SavePlaylist &lt;Playlistname&gt;</code></b></a>
@@ -1512,6 +1688,9 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <li><a name="SONOSPLAYER_setter_GroupVolumeU">
 <b><code>GroupVolumeU</code></b></a>
 <br /> Erhöht die aktuelle Gruppenlautstärke um volumeStep-Einheiten.</li>
+<li><a name="SONOSPLAYER_setter_MakeStandaloneGroup">
+<b><code>MakeStandaloneGroup</code></b></a>
+<br />Macht diesen Player zu seiner eigenen Gruppe.</li>
 <li><a name="SONOSPLAYER_setter_RemoveMember">
 <b><code>RemoveMember &lt;devicename&gt;</code></b></a>
 <br />Entfernt dem Device das übergebene Device, sodass die beiden keine Gruppe mehr bilden. Die Wiedergabe des aktuellen Devices läuft normal weiter. Das abgetrennte Device stoppt seine Wiedergabe, und hat keine aktuelle Abspielliste mehr (seit Sonos Version 4.2 hat der Player wieder die Playliste von vorher aktiv).</li>
@@ -1523,7 +1702,6 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <br /> Legt das Lautstärkeverhältnis der aktuellen Player der Gruppe für folgende '''GroupVolume'''-Aufrufe fest. Dieses festgelegte Verhältnis wird bis zum nächsten Aufruf von '''SnapshotGroupVolume''' beibehalten.</li>
 </ul></li>
 </ul>
-<br />
 <a name="SONOSPLAYERget"></a> 
 <h4>Get</h4>
 <ul>
@@ -1537,6 +1715,9 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <li><a name="SONOSPLAYER_getter_PossibleRoomIcons">
 <b><code>PossibleRoomIcons</code></b></a>
 <br /> Liefert eine Liste aller möglichen RoomIcon-Bezeichnungen zurück.</li>
+<li><a name="SONOSPLAYER_getter_SupportLinks">
+<b><code>SupportLinks</code></b></a>
+<br /> Ausnahmefall. Diese Get-Anweisung liefert eine Liste mit passenden Links zu den Supportseiten des Player.</li>
 </ul></li>
 <li><b>Listen</b><ul>
 <li><a name="SONOSPLAYER_getter_Favourites">
@@ -1567,7 +1748,6 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <br /> Liefert die aktuelle Position innerhalb des Titels.</li>
 </ul></li>
 </ul>
-<br />
 <a name="SONOSPLAYERattr"></a>
 <h4>Attribute</h4>
 '''Hinweis'''<br />Die Attribute werden erst bei einem Neustart von Fhem verwendet, da diese dem SubProzess initial zur Verfügung gestellt werden müssen.
@@ -1596,7 +1776,7 @@ Here an event is defined, where in time of 2 seconds the Mute-Button has to be p
 <li><a name="SONOSPLAYER_attribut_generateInfoSummarize4"><b><code>generateInfoSummarize4 &lt;string&gt;</code></b>
 </a><br /> Erzeugt das Reading 'InfoSummarize4' mit dem angegebenen Format. Mehr Informationen dazu im Bereich Beispiele.</li>
 <li><a name="SONOSPLAYER_attribut_stateVariable"><b><code>stateVariable &lt;string&gt;</code></b>
-</a><br /> One of (TransportState,NumberOfTracks,Track,TrackURI,TrackDuration,Title,Artist,Album,OriginalTrackNumber,AlbumArtist,<br />Sender,SenderCurrent,SenderInfo,StreamAudio,NormalAudio,AlbumArtURI,nextTrackDuration,nextTrackURI,nextAlbumArtURI,<br />nextTitle,nextArtist,nextAlbum,nextAlbumArtist,nextOriginalTrackNumber,Volume,Mute,Shuffle,Repeat,CrossfadeMode,Balance,<br />HeadphoneConnected,SleepTimer,Presence,RoomName,SaveRoomName,PlayerType,Location,SoftwareRevision,SerialNum,InfoSummarize1,I<br />nfoSummarize2,InfoSummarize3,InfoSummarize4). Gibt an, welche Variable in das Reading <code>state</code> kopiert werden soll.</li>
+</a><br /> One of (TransportState,NumberOfTracks,Track,TrackURI,TrackDuration,Title,Artist,Album,OriginalTrackNumber,AlbumArtist,<br />Sender,SenderCurrent,SenderInfo,StreamAudio,NormalAudio,AlbumArtURI,nextTrackDuration,nextTrackURI,nextAlbumArtURI,<br />nextTitle,nextArtist,nextAlbum,nextAlbumArtist,nextOriginalTrackNumber,Volume,Mute,Shuffle,Repeat,RepeatOne,CrossfadeMode,Balance,<br />HeadphoneConnected,SleepTimer,Presence,RoomName,SaveRoomName,PlayerType,Location,SoftwareRevision,SerialNum,InfoSummarize1,I<br />nfoSummarize2,InfoSummarize3,InfoSummarize4). Gibt an, welche Variable in das Reading <code>state</code> kopiert werden soll.</li>
 </ul></li>
 <li><b>Steueroptionen</b><ul>
 <li><a name="SONOSPLAYER_attribut_maxVolume"><b><code>maxVolume &lt;int&gt;</code></b>
@@ -1621,7 +1801,7 @@ Hier wird definiert, dass ein Event erzeugt werden soll, wenn innerhalb von 2 Se
 <li><a name="SONOSPLAYER_examples_InfoSummarize">Format von InfoSummarize:</a><br />
 <code>infoSummarizeX := &lt;NormalAudio&gt;:summarizeElem:&lt;/NormalAudio&gt; &lt;StreamAudio&gt;:summarizeElem:&lt;/StreamAudio&gt;|:summarizeElem:</code><br />
 <code>:summarizeElem: := &lt;:variable:[ prefix=":text:"][ suffix=":text:"][ instead=":text:"][ ifempty=":text:"]/[ emptyVal=":text:"]&gt;</code><br />
-<code>:variable: := TransportState|NumberOfTracks|Track|TrackURI|TrackDuration|Title|Artist|Album|OriginalTrackNumber|AlbumArtist|<br />Sender|SenderCurrent|SenderInfo|StreamAudio|NormalAudio|AlbumArtURI|nextTrackDuration|nextTrackURI|nextAlbumArtURI|<br />nextTitle|nextArtist|nextAlbum|nextAlbumArtist|nextOriginalTrackNumber|Volume|Mute|Shuffle|Repeat|CrossfadeMode|Balance|<br />HeadphoneConnected|SleepTimer|Presence|RoomName|SaveRoomName|PlayerType|Location|SoftwareRevision|SerialNum|InfoSummarize1|<br />InfoSummarize2|InfoSummarize3|InfoSummarize4</code><br />
+<code>:variable: := TransportState|NumberOfTracks|Track|TrackURI|TrackDuration|Title|Artist|Album|OriginalTrackNumber|AlbumArtist|<br />Sender|SenderCurrent|SenderInfo|StreamAudio|NormalAudio|AlbumArtURI|nextTrackDuration|nextTrackURI|nextAlbumArtURI|<br />nextTitle|nextArtist|nextAlbum|nextAlbumArtist|nextOriginalTrackNumber|Volume|Mute|Shuffle|Repeat|RepeatOne|CrossfadeMode|Balance|<br />HeadphoneConnected|SleepTimer|Presence|RoomName|SaveRoomName|PlayerType|Location|SoftwareRevision|SerialNum|InfoSummarize1|<br />InfoSummarize2|InfoSummarize3|InfoSummarize4</code><br />
 <code>:text: := [Jeder beliebige Text ohne doppelte Anführungszeichen]</code><br /></li>
 </ul>
 

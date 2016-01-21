@@ -22,20 +22,6 @@
 #     You should have received a copy of the GNU General Public License
 #     along with fhem.  If not, see <http://www.gnu.org/licenses/>.
 #
-#
-# Version: 1.2.1
-#
-# Major Version History:
-# - 1.2.0 - 2015-03-11
-# -- add RESIDENTStoolkit support
-#
-# - 1.1.0 - 2014-04-07
-# -- new readings in computer readable format (*_cr)
-# -- format of readings durTimer readings changed from minutes to HH:MM:ss
-#
-# - 1.0.0 - 2014-02-08
-# -- First release
-#
 ##############################################################################
 
 package main;
@@ -62,7 +48,7 @@ sub ROOMMATE_Initialize($) {
     $hash->{NotifyFn} = "ROOMMATE_Notify";
     $hash->{UndefFn}  = "ROOMMATE_Undefine";
     $hash->{AttrList} =
-"rr_locationHome rr_locationWayhome rr_locationUnderway rr_autoGoneAfter:12,16,24,26,28,30,36,48,60 rr_showAllStates:0,1 rr_realname:group,alias rr_states:multiple-strict,home,gotosleep,asleep,awoken,absent,gone rr_locations rr_moods rr_moodDefault rr_moodSleepy rr_passPresenceTo rr_noDuration:0,1 rr_wakeupDevice "
+"rr_locationHome rr_locationWayhome rr_locationUnderway rr_autoGoneAfter:12,16,24,26,28,30,36,48,60 rr_showAllStates:0,1 rr_realname:group,alias rr_states:multiple-strict,home,gotosleep,asleep,awoken,absent,gone rr_locations rr_moods rr_moodDefault rr_moodSleepy rr_passPresenceTo rr_noDuration:0,1 rr_wakeupDevice rr_geofenceUUIDs "
       . $readingFnAttributes;
 }
 
@@ -133,6 +119,9 @@ sub ROOMMATE_Define($$) {
         $modified = 0;
     }
 
+    # set reverse pointer
+    $modules{ROOMMATE}{defptr}{$name} = \$hash;
+
     readingsBeginUpdate($hash);
 
     # set default settings on first define
@@ -156,7 +145,7 @@ sub ROOMMATE_Define($$) {
 
     # trigger for modified objects
     unless ( $modified == 0 ) {
-        readingsBulkUpdate( $hash, "state", $hash->{READINGS}{state}{VAL} );
+        readingsBulkUpdate( $hash, "state", ReadingsVal( $name, "state", "" ) );
     }
 
     readingsEndUpdate( $hash, 1 );
@@ -174,7 +163,9 @@ sub ROOMMATE_Define($$) {
     }
     elsif ( $modules{dummy}{AttrFn} ne "RESIDENTStk_AttrFnDummy" ) {
         Log3 $name, 4,
-"RESIDENTStk $name: concurrent AttrFn already defined for dummy module (".$modules{dummy}{AttrFn}."). Some attribute based functions like auto-creations will not be available.";
+"RESIDENTStk $name: concurrent AttrFn already defined for dummy module ("
+          . $modules{dummy}{AttrFn}
+          . "). Some attribute based functions like auto-creations will not be available.";
     }
 
     return undef;
@@ -202,6 +193,9 @@ sub ROOMMATE_Undefine($$) {
             }
         }
     }
+
+    # release reverse pointer
+    delete $modules{ROOMMATE}{defptr}{$name};
 
     return undef;
 }
@@ -267,24 +261,12 @@ sub ROOMMATE_Notify($$) {
 ###################################
 sub ROOMMATE_Set($@) {
     my ( $hash, @a ) = @_;
-    my $name = $hash->{NAME};
-    my $state =
-      ( defined( $hash->{READINGS}{state}{VAL} ) )
-      ? $hash->{READINGS}{state}{VAL}
-      : "initialized";
-    my $presence =
-      ( defined( $hash->{READINGS}{presence}{VAL} ) )
-      ? $hash->{READINGS}{presence}{VAL}
-      : "undefined";
-    my $mood =
-      ( defined( $hash->{READINGS}{mood}{VAL} ) )
-      ? $hash->{READINGS}{mood}{VAL}
-      : "-";
-    my $location =
-      ( defined( $hash->{READINGS}{location}{VAL} ) )
-      ? $hash->{READINGS}{location}{VAL}
-      : "undefined";
-    my $silent = 0;
+    my $name     = $hash->{NAME};
+    my $state    = ReadingsVal( $name, "state", "initialized" );
+    my $presence = ReadingsVal( $name, "presence", "undefined" );
+    my $mood     = ReadingsVal( $name, "mood", "-" );
+    my $location = ReadingsVal( $name, "location", "undefined" );
+    my $silent   = 0;
 
     Log3 $name, 5, "ROOMMATE $name: called function ROOMMATE_Set()";
 
@@ -449,21 +431,22 @@ sub ROOMMATE_Set($@) {
 
             # if prior state was asleep, update sleep statistics
             if ( $state eq "asleep"
-                && defined( $hash->{READINGS}{lastSleep}{VAL} ) )
+                && ReadingsVal( $name, "lastSleep", "" ) ne "" )
             {
                 readingsBulkUpdate( $hash, "lastAwake", $datetime );
                 readingsBulkUpdate(
                     $hash,
                     "lastDurSleep",
                     RESIDENTStk_TimeDiff(
-                        $datetime, $hash->{READINGS}{lastSleep}{VAL}
+                        $datetime, ReadingsVal( $name, "lastSleep", "" )
                     )
                 );
                 readingsBulkUpdate(
                     $hash,
                     "lastDurSleep_cr",
                     RESIDENTStk_TimeDiff(
-                        $datetime, $hash->{READINGS}{lastSleep}{VAL}, "min"
+                        $datetime, ReadingsVal( $name, "lastSleep", "" ),
+                        "min"
                     )
                 );
             }
@@ -504,16 +487,16 @@ sub ROOMMATE_Set($@) {
 
                 # update location
                 my @location_home =
-                  ( defined( $attr{$name}{"rr_locationHome"} ) )
-                  ? split( ' ', $attr{$name}{"rr_locationHome"} )
-                  : ("home");
+                  split( ' ', AttrVal( $name, "rr_locationHome", "home" ) );
                 my @location_underway =
-                  ( defined( $attr{$name}{"rr_locationUnderway"} ) )
-                  ? split( ' ', $attr{$name}{"rr_locationUnderway"} )
-                  : ("underway");
+                  split( ' ',
+                    AttrVal( $name, "rr_locationUnderway", "underway" ) );
+                my @location_wayhome =
+                  split( ' ',
+                    AttrVal( $name, "rr_locationWayhome", "wayhome" ) );
                 my $searchstring = quotemeta($location);
 
-                if ( $newpresence eq "present" ) {
+                if ( !$silent && $newpresence eq "present" ) {
                     if ( !grep( m/^$searchstring$/, @location_home )
                         && $location ne $location_home[0] )
                     {
@@ -525,7 +508,8 @@ sub ROOMMATE_Set($@) {
                     }
                 }
                 else {
-                    if ( !grep( m/^$searchstring$/, @location_underway )
+                    if (   !$silent
+                        && !grep( m/^$searchstring$/, @location_underway )
                         && $location ne $location_underway[0] )
                     {
                         Log3 $name, 4,
@@ -537,9 +521,7 @@ sub ROOMMATE_Set($@) {
                 }
 
                 # reset wayhome
-                if ( !defined( $hash->{READINGS}{wayhome}{VAL} )
-                    || $hash->{READINGS}{wayhome}{VAL} ne "0" )
-                {
+                if ( ReadingsVal( $name, "wayhome", 1 ) > 0 ) {
                     readingsBulkUpdate( $hash, "wayhome", "0" );
                 }
 
@@ -548,14 +530,13 @@ sub ROOMMATE_Set($@) {
                     readingsBulkUpdate( $hash, "lastArrival", $datetime );
 
                     # absence duration
-                    if ( defined( $hash->{READINGS}{lastDeparture}{VAL} )
-                        && $hash->{READINGS}{lastDeparture}{VAL} ne "-" )
-                    {
+                    if ( ReadingsVal( $name, "lastDeparture", "-" ) ne "-" ) {
                         readingsBulkUpdate(
                             $hash,
                             "lastDurAbsence",
                             RESIDENTStk_TimeDiff(
-                                $datetime, $hash->{READINGS}{lastDeparture}{VAL}
+                                $datetime,
+                                ReadingsVal( $name, "lastDeparture", "-" )
                             )
                         );
                         readingsBulkUpdate(
@@ -563,7 +544,8 @@ sub ROOMMATE_Set($@) {
                             "lastDurAbsence_cr",
                             RESIDENTStk_TimeDiff(
                                 $datetime,
-                                $hash->{READINGS}{lastDeparture}{VAL}, "min"
+                                ReadingsVal( $name, "lastDeparture", "-" ),
+                                "min"
                             )
                         );
                     }
@@ -572,22 +554,21 @@ sub ROOMMATE_Set($@) {
                     readingsBulkUpdate( $hash, "lastDeparture", $datetime );
 
                     # presence duration
-                    if ( defined( $hash->{READINGS}{lastArrival}{VAL} )
-                        && $hash->{READINGS}{lastArrival}{VAL} ne "-" )
-                    {
+                    if ( ReadingsVal( $name, "lastArrival", "-" ) ne "-" ) {
                         readingsBulkUpdate(
                             $hash,
                             "lastDurPresence",
                             RESIDENTStk_TimeDiff(
-                                $datetime, $hash->{READINGS}{lastArrival}{VAL}
+                                $datetime,
+                                ReadingsVal( $name, "lastArrival", "-" )
                             )
                         );
                         readingsBulkUpdate(
                             $hash,
                             "lastDurPresence_cr",
                             RESIDENTStk_TimeDiff(
-                                $datetime, $hash->{READINGS}{lastArrival}{VAL},
-                                "min"
+                                $datetime,
+                                ReadingsVal( $name, "lastArrival", "-" ), "min"
                             )
                         );
                     }
@@ -607,9 +588,8 @@ sub ROOMMATE_Set($@) {
                             && defined( $defs{$object}{TYPE} )
                             && (   $defs{$object}{TYPE} eq "ROOMMATE"
                                 || $defs{$object}{TYPE} eq "GUEST" )
-                            && defined( $defs{$object}{READINGS}{state}{VAL} )
-                            && $defs{$object}{READINGS}{state}{VAL} ne "gone"
-                            && $defs{$object}{READINGS}{state}{VAL} ne "none"
+                            && ReadingsVal( $object, "state", "" ) ne "gone"
+                            && ReadingsVal( $object, "state", "" ) ne "none"
                           )
                         {
                             fhem("set $object $newstate");
@@ -639,12 +619,12 @@ sub ROOMMATE_Set($@) {
             Log3 $name, 2, "ROOMMATE set $name mood " . $a[2] if ( !$silent );
             readingsBeginUpdate($hash) if ( !$silent );
 
-            if ( $a[2] eq "toggle" ) {
-                if ( defined( $hash->{READINGS}{lastMood}{VAL} ) ) {
-                    readingsBulkUpdate( $hash, "mood",
-                        $hash->{READINGS}{lastMood}{VAL} );
-                    readingsBulkUpdate( $hash, "lastMood", $mood );
-                }
+            if ( $a[2] eq "toggle"
+                && ReadingsVal( $name, "lastMood", "" ) ne "" )
+            {
+                readingsBulkUpdate( $hash, "mood",
+                    ReadingsVal( $name, "lastMood", "" ) );
+                readingsBulkUpdate( $hash, "lastMood", $mood );
             }
             elsif ( $mood ne $a[2] ) {
                 readingsBulkUpdate( $hash, "lastMood", $mood )
@@ -672,19 +652,13 @@ sub ROOMMATE_Set($@) {
 
                 # read attributes
                 my @location_home =
-                  ( defined( $attr{$name}{"rr_locationHome"} ) )
-                  ? split( ' ', $attr{$name}{"rr_locationHome"} )
-                  : ("home");
-
+                  split( ' ', AttrVal( $name, "rr_locationHome", "home" ) );
                 my @location_underway =
-                  ( defined( $attr{$name}{"rr_locationUnderway"} ) )
-                  ? split( ' ', $attr{$name}{"rr_locationUnderway"} )
-                  : ("underway");
-
+                  split( ' ',
+                    AttrVal( $name, "rr_locationUnderway", "underway" ) );
                 my @location_wayhome =
-                  ( defined( $attr{$name}{"rr_locationWayhome"} ) )
-                  ? split( ' ', $attr{$name}{"rr_locationWayhome"} )
-                  : ("wayhome");
+                  split( ' ',
+                    AttrVal( $name, "rr_locationWayhome", "wayhome" ) );
 
                 $searchstring = quotemeta($location);
                 readingsBulkUpdate( $hash, "lastLocation", $location )
@@ -706,8 +680,7 @@ sub ROOMMATE_Set($@) {
                     Log3 $name, 3,
                       "ROOMMATE $name: on way back home from $location";
                     readingsBulkUpdate( $hash, "wayhome", "1" )
-                      if ( !defined( $hash->{READINGS}{wayhome}{VAL} )
-                        || $hash->{READINGS}{wayhome}{VAL} ne "1" );
+                      if ( ReadingsVal( $name, "wayhome", "0" ) ne "1" );
                 }
 
                 readingsEndUpdate( $hash, 1 ) if ( !$silent );
@@ -777,7 +750,7 @@ sub ROOMMATE_Set($@) {
                     fhem
 "attr $wakeuptimerName comment Auto-created by ROOMMATE module for use with RESIDENTS Toolkit";
                     fhem
-"attr $wakeuptimerName devStateIcon OFF:general_aus\@red:reset running:general_an\@blue:stop .*:general_an\@green:nextRun%20OFF";
+"attr $wakeuptimerName devStateIcon OFF:general_aus\@red:reset running:general_an\@green:stop .*:general_an\@orange:nextRun%20OFF";
                     fhem "attr $wakeuptimerName group " . $attr{$name}{group}
                       if ( defined( $attr{$name}{group} ) );
                     fhem "attr $wakeuptimerName icon time_timer";
@@ -840,9 +813,7 @@ sub ROOMMATE_AutoGone($;$) {
 
     RESIDENTStk_RemoveInternalTimer( "AutoGone", $hash );
 
-    if ( defined( $hash->{READINGS}{state}{VAL} )
-        && $hash->{READINGS}{state}{VAL} eq "absent" )
-    {
+    if ( ReadingsVal( $name, "state", "home" ) eq "absent" ) {
         my ( $date, $time, $y, $m, $d, $hour, $min, $sec, $timestamp,
             $timeDiff );
         my $timestampNow = gettimeofday();
@@ -894,45 +865,33 @@ sub ROOMMATE_DurationTimer($;$) {
     {
 
         # presence timer
-        if ( defined( $hash->{READINGS}{presence}{VAL} )
-            && $hash->{READINGS}{presence}{VAL} eq "present" )
+        if (   ReadingsVal( $name, "presence", "absent" ) eq "present"
+            && ReadingsVal( $name, "lastArrival", "-" ) ne "-" )
         {
-            if ( defined( $hash->{READINGS}{lastArrival}{VAL} )
-                && $hash->{READINGS}{lastArrival}{VAL} ne "-" )
-            {
-                $durPresence =
-                  $timestampNow -
-                  RESIDENTStk_Datetime2Timestamp(
-                    $hash->{READINGS}{lastArrival}{VAL} );
-            }
+            $durPresence =
+              $timestampNow -
+              RESIDENTStk_Datetime2Timestamp(
+                ReadingsVal( $name, "lastArrival", "-" ) );
         }
 
         # absence timer
-        if ( defined( $hash->{READINGS}{presence}{VAL} )
-            && $hash->{READINGS}{presence}{VAL} eq "absent" )
+        if (   ReadingsVal( $name, "presence", "present" ) eq "absent"
+            && ReadingsVal( $name, "lastDeparture", "-" ) ne "-" )
         {
-            if ( defined( $hash->{READINGS}{lastDeparture}{VAL} )
-                && $hash->{READINGS}{lastDeparture}{VAL} ne "-" )
-            {
-                $durAbsence =
-                  $timestampNow -
-                  RESIDENTStk_Datetime2Timestamp(
-                    $hash->{READINGS}{lastDeparture}{VAL} );
-            }
+            $durAbsence =
+              $timestampNow -
+              RESIDENTStk_Datetime2Timestamp(
+                ReadingsVal( $name, "lastDeparture", "-" ) );
         }
 
         # sleep timer
-        if ( defined( $hash->{READINGS}{state}{VAL} )
-            && $hash->{READINGS}{state}{VAL} eq "asleep" )
+        if (   ReadingsVal( $name, "state", "home" ) eq "asleep"
+            && ReadingsVal( $name, "lastSleep", "-" ) ne "-" )
         {
-            if ( defined( $hash->{READINGS}{lastSleep}{VAL} )
-                && $hash->{READINGS}{lastSleep}{VAL} ne "-" )
-            {
-                $durSleep =
-                  $timestampNow -
-                  RESIDENTStk_Datetime2Timestamp(
-                    $hash->{READINGS}{lastSleep}{VAL} );
-            }
+            $durSleep =
+              $timestampNow -
+              RESIDENTStk_Datetime2Timestamp(
+                ReadingsVal( $name, "lastSleep", "-" ) );
         }
 
         my $durPresence_hr =
@@ -951,23 +910,20 @@ sub ROOMMATE_DurationTimer($;$) {
 
         readingsBeginUpdate($hash) if ( !$silent );
         readingsBulkUpdate( $hash, "durTimerPresence_cr", $durPresence_cr )
-          if ( !defined( $hash->{READINGS}{durTimerPresence_cr}{VAL} )
-            || $hash->{READINGS}{durTimerPresence_cr}{VAL} ne $durPresence_cr );
+          if ( ReadingsVal( $name, "durTimerPresence_cr", "" ) ne
+            $durPresence_cr );
         readingsBulkUpdate( $hash, "durTimerPresence", $durPresence_hr )
-          if ( !defined( $hash->{READINGS}{durTimerPresence}{VAL} )
-            || $hash->{READINGS}{durTimerPresence}{VAL} ne $durPresence_hr );
+          if (
+            ReadingsVal( $name, "durTimerPresence", "" ) ne $durPresence_hr );
         readingsBulkUpdate( $hash, "durTimerAbsence_cr", $durAbsence_cr )
-          if ( !defined( $hash->{READINGS}{durTimerAbsence_cr}{VAL} )
-            || $hash->{READINGS}{durTimerAbsence_cr}{VAL} ne $durAbsence_cr );
+          if (
+            ReadingsVal( $name, "durTimerAbsence_cr", "" ) ne $durAbsence_cr );
         readingsBulkUpdate( $hash, "durTimerAbsence", $durAbsence_hr )
-          if ( !defined( $hash->{READINGS}{durTimerAbsence}{VAL} )
-            || $hash->{READINGS}{durTimerAbsence}{VAL} ne $durAbsence_hr );
+          if ( ReadingsVal( $name, "durTimerAbsence", "" ) ne $durAbsence_hr );
         readingsBulkUpdate( $hash, "durTimerSleep_cr", $durSleep_cr )
-          if ( !defined( $hash->{READINGS}{durTimerSleep_cr}{VAL} )
-            || $hash->{READINGS}{durTimerSleep_cr}{VAL} ne $durSleep_cr );
+          if ( ReadingsVal( $name, "durTimerSleep_cr", "" ) ne $durSleep_cr );
         readingsBulkUpdate( $hash, "durTimerSleep", $durSleep_hr )
-          if ( !defined( $hash->{READINGS}{durTimerSleep}{VAL} )
-            || $hash->{READINGS}{durTimerSleep}{VAL} ne $durSleep_hr );
+          if ( ReadingsVal( $name, "durTimerSleep", "" ) ne $durSleep_hr );
         readingsEndUpdate( $hash, 1 ) if ( !$silent );
     }
 
@@ -975,6 +931,190 @@ sub ROOMMATE_DurationTimer($;$) {
         "ROOMMATE_DurationTimer", $hash, 1 );
 
     return undef;
+}
+
+###################################
+sub ROOMMATE_SetLocation($$$;$$$$$$) {
+    my ( $name, $location, $trigger, $id, $time, $lat, $long, $address,
+        $device ) = @_;
+    my $hash         = $defs{$name};
+    my $state        = ReadingsVal( $name, "state", "initialized" );
+    my $presence     = ReadingsVal( $name, "presence", "present" );
+    my $currLocation = ReadingsVal( $name, "location", "-" );
+    my $currWayhome  = ReadingsVal( $name, "wayhome", "0" );
+    my $currLat      = ReadingsVal( $name, "locationLat", "-" );
+    my $currLong     = ReadingsVal( $name, "locationLong", "-" );
+    my $currAddr     = ReadingsVal( $name, "locationAddr", "-" );
+    $id      = "-" if ( !$id      || $id eq "" );
+    $lat     = "-" if ( !$lat     || $lat eq "" );
+    $long    = "-" if ( !$long    || $long eq "" );
+    $address = "-" if ( !$address || $address eq "" );
+    $time    = ""  if ( !$time );
+    $device  = ""  if ( !$device );
+
+    Log3 $name, 5,
+"ROOMMATE $name: received location information: id=$id name=$location trig=$trigger date=$time lat=$lat long=$long address:$address device=$device";
+
+    my $searchstring;
+
+    readingsBeginUpdate($hash);
+
+    # read attributes
+    my @location_home =
+      split( ' ', AttrVal( $name, "rr_locationHome", "home" ) );
+    my @location_underway =
+      split( ' ', AttrVal( $name, "rr_locationUnderway", "underway" ) );
+    my @location_wayhome =
+      split( ' ', AttrVal( $name, "rr_locationWayhome", "wayhome" ) );
+
+    $searchstring = quotemeta($location);
+
+    # update locationPresence
+    readingsBulkUpdate( $hash, "locationPresence", "present" )
+      if ( $trigger == 1 );
+    readingsBulkUpdate( $hash, "locationPresence", "absent" )
+      if ( $trigger == 0 );
+
+    # check for implicit state change
+    #
+    my $stateChange = 0;
+    my $wayhome;
+
+    # home
+    if ( $location eq "home" || grep( m/^$searchstring$/, @location_home ) ) {
+        Log3 $name, 5, "ROOMMATE $name: received signal from home location";
+
+        # home
+        if (   $state ne "home"
+            && $state ne "gotosleep"
+            && $state ne "asleep"
+            && $state ne "awoken"
+            && $trigger eq "1" )
+        {
+            $stateChange = 1;
+        }
+
+        # absent
+        elsif ($state ne "gone"
+            && $state ne "none"
+            && $state ne "absent"
+            && $trigger eq "0" )
+        {
+            $stateChange = 2;
+        }
+
+    }
+
+    # underway
+    elsif ($location eq "underway"
+        || $location eq "wayhome"
+        || grep( m/^$searchstring$/, @location_underway )
+        || grep( m/^$searchstring$/, @location_wayhome ) )
+    {
+        Log3 $name, 5, "ROOMMATE $name: received signal from underway location";
+
+        # absent
+        $stateChange = 2
+          if ( $state ne "gone"
+            && $state ne "none"
+            && $state ne "absent" );
+    }
+
+    # wayhome
+    if (
+        $location eq "wayhome"
+        || ( grep( m/^$searchstring$/, @location_wayhome )
+            && $trigger eq "0" )
+      )
+    {
+        Log3 $name, 5, "ROOMMATE $name: wayhome signal received";
+
+        # wayhome=true
+        if (
+            (
+                   ( $location eq "wayhome" && $trigger eq "1" )
+                || ( $location ne "wayhome" && $trigger eq "0" )
+            )
+            && ReadingsVal( $name, "wayhome", "0" ) ne "1"
+          )
+        {
+            Log3 $name, 3, "ROOMMATE $name: on way back home from $location";
+            readingsBulkUpdate( $hash, "wayhome", "1" );
+            $wayhome = 1;
+        }
+
+        # wayhome=false
+        elsif ($location eq "wayhome"
+            && $trigger eq "0"
+            && ReadingsVal( $name, "wayhome", "0" ) ne "0" )
+        {
+            Log3 $name, 3,
+              "ROOMMATE $name: seems not to be on way back home anymore";
+            readingsBulkUpdate( $hash, "wayhome", "0" );
+            $wayhome = 1;
+        }
+
+    }
+
+    # activate wayhome tracing when reaching another location while wayhome=1
+    elsif ( $stateChange == 0 && $trigger == 1 && $currWayhome == 1 ) {
+        Log3 $name, 3,
+          "ROOMMATE $name: seems to stay at $location before coming home";
+        readingsBulkUpdate( $hash, "wayhome", "2" );
+        $wayhome = 1;
+    }
+
+    # revert wayhome during active wayhome tracing
+    elsif ( $stateChange == 0 && $trigger == 0 && $currWayhome == 2 ) {
+        Log3 $name, 3,
+          "ROOMMATE $name: finally on way back home from $location";
+        readingsBulkUpdate( $hash, "wayhome", "1" );
+        $wayhome = 1;
+    }
+
+    if ( $trigger == 1 ) {
+        Log3 $name, 5, "ROOMMATE $name: archiving last known location";
+        readingsBulkUpdate( $hash, "lastLocationLat",  $currLat );
+        readingsBulkUpdate( $hash, "lastLocationLong", $currLong );
+        readingsBulkUpdate( $hash, "lastLocationAddr", $currAddr );
+        readingsBulkUpdate( $hash, "lastLocation",     $currLocation );
+    }
+
+    if (   $wayhome
+        || $stateChange > 0
+        || ( $lat ne "-" && $long ne "-" ) )
+    {
+        Log3 $name, 5, "ROOMMATE $name: Using new lat/long/addr information";
+        readingsBulkUpdate( $hash, "locationLat",  $lat );
+        readingsBulkUpdate( $hash, "locationLong", $long );
+        readingsBulkUpdate( $hash, "locationAddr", $address );
+    }
+
+    else {
+        Log3 $name, 5,
+          "ROOMMATE $name: keeping last known lat/long/addr information";
+        readingsBulkUpdate( $hash, "locationLat",  $currLat );
+        readingsBulkUpdate( $hash, "locationLong", $currLong );
+        readingsBulkUpdate( $hash, "locationAddr", $currAddr );
+    }
+
+    readingsBulkUpdate( $hash, "location", $location )
+      if ( $location ne "wayhome" );
+
+    readingsEndUpdate( $hash, 1 );
+
+    # trigger state change
+    if ( $stateChange > 0 ) {
+        Log3 $name, 4,
+          "ROOMMATE $name: implicit state change caused by location "
+          . $location;
+
+        ROOMMATE_Set( $hash, $name, "silentSet", "state", "home" )
+          if $stateChange == 1;
+        ROOMMATE_Set( $hash, $name, "silentSet", "state", "absent" )
+          if $stateChange == 2;
+    }
+
 }
 
 ###################################
@@ -1000,12 +1140,14 @@ sub ROOMMATE_StartInternalTimers($$) {
     <div style="margin-left: 2em">
       <a name="ROOMMATEdefine" id="ROOMMATEdefine"></a> <b>Define</b>
       <div style="margin-left: 2em">
-        <code>define &lt;rr_FirstName&gt; ROOMMATE [&lt;device name of resident group&gt;]</code><br>
+        <code>define &lt;rr_FirstName&gt; ROOMMATE [&lt;device name(s) of resident group(s)&gt;]</code><br>
         <br>
-        Provides a special dummy device to represent a resident of your home.<br>
+        Provides a special virtual device to represent a resident of your home.<br>
         Based on the current state and other readings, you may trigger other actions within FHEM.<br>
         <br>
         Used by superior module <a href="#RESIDENTS">RESIDENTS</a> but may also be used stand-alone.<br>
+        <br />
+        Use comma separated list of resident device names for multi-membership (see example below).<br />
         <br>
         Example:<br>
         <div style="margin-left: 2em">
@@ -1144,6 +1286,9 @@ sub ROOMMATE_StartInternalTimers($$) {
         <ul>
           <li>
             <b>rr_autoGoneAfter</b> - hours after which state should be auto-set to 'gone' when current state is 'absent'; defaults to 36 hours
+          </li>
+          <li>
+            <b>rr_geofenceUUIDs</b> - comma separated list of device UUIDs updating their location via <a href="#GEOFANCY">GEOFANCY</a>. Avoids necessity for additional notify/DOIF/watchdog devices and can make GEOFANCY attribute <i>devAlias</i> obsolete. (using more than one UUID/device might not be a good idea as location my leap)
           </li>
           <li>
             <b>rr_locationHome</b> - locations matching these will be treated as being at home; first entry reflects default value to be used with state correlation; separate entries by space; defaults to 'home'
@@ -1295,12 +1440,14 @@ sub ROOMMATE_StartInternalTimers($$) {
     <div style="margin-left: 2em">
       <a name="ROOMMATEdefine" id="ROOMMATEdefine"></a> <b>Define</b>
       <div style="margin-left: 2em">
-        <code>define &lt;rr_FirstName&gt; ROOMMATE [&lt;Device Name der Bewohnergruppe&gt;]</code><br />
+        <code>define &lt;rr_FirstName&gt; ROOMMATE [&lt;Device Name(n) der Bewohnergruppe(n)&gt;]</code><br />
         <br />
-        Stellt ein spezielles Dummy Device bereit, welches einen Mitbewohner repräsentiert.<br />
+        Stellt ein spezielles virtuelles Device bereit, welches einen Mitbewohner repräsentiert.<br />
         Basierend auf dem aktuellen Status und anderen Readings können andere Aktionen innerhalb von FHEM angestoßen werden.<br />
         <br />
         Wird vom übergeordneten Modul <a href="#RESIDENTS">RESIDENTS</a> verwendet, kann aber auch einzeln benutzt werden.<br />
+        <br />
+        Bei Mitgliedschaft mehrerer Bewohnergruppen werden diese durch Komma getrennt angegeben (siehe Beispiel unten).<br />
         <br />
         Beispiele:<br />
         <div style="margin-left: 2em">
@@ -1311,7 +1458,7 @@ sub ROOMMATE_StartInternalTimers($$) {
           define rr_Manfred ROOMMATE rgr_Residents # um Mitglied der Gruppe rgr_Residents zu sein<br />
           <br />
           # Mitglied in mehreren Gruppen<br />
-          define rr_Manfred ROOMMATE rgr_Residents,rgr_Parents # um Mitglied den Gruppen rgr_Residents und rgr_Parents zu sein<br />
+          define rr_Manfred ROOMMATE rgr_Residents,rgr_Parents # um Mitglied der Gruppen rgr_Residents und rgr_Parents zu sein<br />
           <br />
           # Komplexe Familien Struktur<br />
           define rr_Manfred ROOMMATE rgr_Residents,rgr_Parents # Elternteil<br />
@@ -1439,6 +1586,9 @@ sub ROOMMATE_StartInternalTimers($$) {
         <ul>
           <li>
             <b>rr_autoGoneAfter</b> - Anzahl der Stunden, nach denen sich der Status automatisch auf 'gone' ändert, wenn der aktuellen Status 'absent' ist; Standard ist 36 Stunden
+          </li>
+          <li>
+            <b>rr_geofenceUUIDs</b> - Mit Komma getrennte Liste von Ger&auml;te UUIDs, die ihren Standort &uuml;ber <a href="#GEOFANCY">GEOFANCY</a> aktualisieren. Vermeidet zus&auml;tzliche notify/DOIF/watchdog Ger&auml;te und kann als Ersatz für das GEOFANCY attribute <i>devAlias</i> dienen. (hier ehr als eine UUID/Device zu hinterlegen ist eher keine gute Idee da die Lokation dann wom&ouml;glich anfängt zu springen)
           </li>
           <li>
             <b>rr_locationHome</b> - hiermit übereinstimmende Lokationen werden als zu Hause gewertet; der erste Eintrag wird für das Zusammenspiel bei Statusänderungen benutzt; mehrere Einträge durch Leerzeichen trennen; Standard ist 'home'

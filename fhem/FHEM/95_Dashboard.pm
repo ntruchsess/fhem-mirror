@@ -477,6 +477,9 @@ sub Dashboard_SummaryFN($$$$)
  
 	################################ 
 	################################
+
+	############################ Set FHEM url to avoid hardcoding it in javascript ############################ 
+	$ret .= "<script type='text/javascript'>var fhemUrl = '" . $FW_ME . "';</script>";
  
 	$ret .= "<div id=\"tabEdit\" class=\"dashboard-dialog-content dashboard-widget-content\" title=\"Dashboard-Tab\" style=\"display:none;\">\n";		
 	$ret .= "	<div id=\"dashboard-dialog-tabs\" class=\"dashboard dashboard_tabs\">\n";	
@@ -509,7 +512,7 @@ sub Dashboard_SummaryFN($$$$)
 	 $ret .= "<input type=\"$debugfield\" size=\"100%\" id=\"dashboard_jsdebug\" value=\"\">\n";
 	 $ret .= "</div></td></tr>\n"; 
 	 $ret .= "<tr><td><div id=\"dashboardtabs\" class=\"dashboard dashboard_tabs\" style=\"background: " . ($backgroundimage ? "url(/fhem/images/" . FW_iconPath($backgroundimage) . ")" : "") . " no-repeat !important;\">\n";  
-	 
+
 	 ########################### Dashboard Tab-Liste ##############################################
 	 $ret .= "	<ul id=\"dashboard_tabnav\" class=\"dashboard dashboard_tabnav dashboard_tabnav_".$showbuttonbar."\">\n";	   		
 	 for (my $i=0;$i<$tabcount;$i++){$ret .= "    <li class=\"dashboard dashboard_tab dashboard_tab_".$showbuttonbar."\"><a href=\"#dashboard_tab".$i."\">".trim($tabnames[$i])."</a></li>";}
@@ -817,7 +820,9 @@ sub BuildGroup
 		
 		$row++;		
 			
+                $extPage{group} = $groupname;
 		my ($allSets, $cmdlist, $txt) = FW_devState($d, $rf, \%extPage);
+		$allSets = FW_widgetOverride($d, $allSets);
 		
 	        ##############   Customize Result for Special Types #####################
 		my @txtarray = split(">", $txt);				
@@ -837,25 +842,31 @@ sub BuildGroup
 		###########################################################
 
 		###### Commands, slider, dropdown
-		if(!$FW_ss && $cmdlist) {
+		my $smallscreenCommands = AttrVal($FW_wname, "smallscreenCommands", "");
+		if((!$FW_ss || $smallscreenCommands) && $cmdlist) {	
+			my @a = split("[: ]", AttrVal($d, "cmdIcon", ""));
+			my %cmdIcon = @a;
 			foreach my $cmd (split(":", $cmdlist)) {
 				my $htmlTxt;
 				my @c = split(' ', $cmd);
-				if($allSets && $allSets =~ m/$c[0]:([^ ]*)/) {
+				if(int(@c) && $allSets && $allSets =~ m/\b$c[0]:([^ ]*)/) {
 					my $values = $1;
 					foreach my $fn (sort keys %{$data{webCmdFn}}) {
 						no strict "refs";
-						$htmlTxt = &{$data{webCmdFn}{$fn}}($FW_wname, $d, $FW_room, $cmd, $values);
+						$htmlTxt = &{$data{webCmdFn}{$fn}}($FW_wname,
+										   $d, $FW_room, $cmd, $values);
 						use strict "refs";
 						last if(defined($htmlTxt));
-					}
+				      	}	
 				}
 				if($htmlTxt) {
 					# add colspan to avoid squeezed table cells
 					$htmlTxt =~ s/<td>/<td colspan="10">/;
 					$ret .= $htmlTxt;
 				} else {
-					$ret .= FW_pH "cmd.$d=set $d $cmd$rf", $cmd, 1, "col3", 1;
+					my $nCmd = $cmdIcon{$cmd} ?
+                            				FW_makeImage($cmdIcon{$cmd},$cmd,"webCmd") : $cmd;
+					$ret .= FW_pH "cmd.$d=set $d $cmd$rf", $nCmd, 1, "col3", 1;
 				}
 			}
 		}
@@ -1088,7 +1099,7 @@ GetActiveTab ($)
 			devspec list of devices that should appear in the tab. The format is:<br/>
     			GROUPNAME:devspec1,devspec2,...,devspecN:ICONNAME</br/>
 			THe icon name is optional. Also the group name is optional. In case of missing group name, the matching devices are not grouped but shown as separate widgets without titles. For further details on the devspec format see:<br/>
-			<a href="http://192.168.20.20:8083/fhem/docs/commandref.html#devspec">Dev-Spec</a>
+			<a href="#devspec">Dev-Spec</a>
 		</li><br>		
 	  <a name="dashboard_tabXicon"></a>	
 		<li>dashboard_tabXicon<br>
@@ -1257,7 +1268,7 @@ GetActiveTab ($)
  			devspec Liste von Geräten, die im Tab angezeigt werden sollen. Das format ist:<br/>
     			GROUPNAME:devspec1,devspec2,...,devspecN:ICONNAME</br/>
 			Das Icon ist optional. Auch der Gruppenname muss nicht vorhanden sein. Im Falle dass dieser fehlt, werden die gefunden Geräte nicht gruppiert sondern als einzelne Widgets im Tab angezeigt. Für weitere Details bezüglich devspec:
-			<a href="http://192.168.20.20:8083/fhem/docs/commandref.html#devspec">Dev-Spec</a>
+			<a href="#devspec">Dev-Spec</a>
 		</li><br>		
 	  <a name="dashboard_tabXicon"></a>	
 		<li>dashboard_tabXicon<br>

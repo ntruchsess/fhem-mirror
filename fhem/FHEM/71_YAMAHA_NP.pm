@@ -5,16 +5,21 @@
 #     71_YAMAHA_NP.pm
 #
 #     An FHEM Perl module for controlling the Yamaha CD-Receiver CRX-N560(D)
-#     (aka MCR-N560D) via Ethernet connection.
-#     The module should also work with devices controlled by the
-#     Yamaha Network Player App for *OS and Andr*id
-#     (e.g. NP-S2000, CD-N500, CD-N301, R-N500, R-N301).
+#     (aka MCR-N560D) via Ethernet.
 #
-#     Copyright by Radoslaw Watroba
-#     (e-mail: ra666ack@googlemail.com)
+#     The module might also work with devices such as
+#     NP-S2000, CD-N500, CD-N301, R-N500, R-N301 controlled by the
+#     Yamaha Network Player App.
 #
-#     Inspired by the 71_YAMAHA_AVR module by Markus Bloch
-#     (e-mail: Notausstieg0309@googlemail.com)
+#     *OS:
+#     https://itunes.apple.com/us/app/network-player-controller-us/id467502483?mt=8
+#
+#     Andr*id:
+#     https://play.google.com/store/apps/details?id=com.yamaha.npcontroller
+#
+#     Copyright by Radoslaw Watroba (ra666ack@googlemail.com)
+#
+#     (Inspired by Markus Bloch and the module 71_YAMAHA_AVR)
 #
 #     This file is part of fhem.
 #
@@ -207,6 +212,7 @@ sub YAMAHA_NP_Set
                  "tunerPresetDAB:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30 ".
                  "tunerPresetFM:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30 ".
                  "timerHour:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 ".
+                 "tunerFMFrequency ".
                  "timerMinute:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59 ";
       }
       else
@@ -240,6 +246,7 @@ sub YAMAHA_NP_Set
                  "playerListCursorUp:noArg ".
                  "tunerPresetFM:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30 ".
                  "timerHour:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 ".
+                 "tunerFMFrequency ".
                  "timerMinute:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59 ";
       }
       Log3 $name, 5, "Model: $model.";
@@ -247,6 +254,8 @@ sub YAMAHA_NP_Set
     
     Log3 $name, 5, "YAMAHA_NP ($name) - set ".join(" ", @a);
     
+	# Processing of incoming commands.
+	
     if($what eq "on")
     {
       YAMAHA_NP_SendCommand($hash, "<YAMAHA_AV cmd=\"PUT\"><System><Power_Control><Power>On</Power></Power_Control></System></YAMAHA_AV>" ,$what, "On");
@@ -283,17 +292,17 @@ sub YAMAHA_NP_Set
           }
           else
           {
-              return "No inputs are avaible. Please try an statusUpdate.";
+              return "No inputs avaible. Please try an statusRequest.";
           }
         }
         else
         {
-            return "input can only be used when device is powered on";
+            return "Switch device on first.";
         }
       }
       else
       {
-          return $inputs_piped eq "" ? "No inputs are available. Please try an statusUpdate." : "No input parameter was given";
+          return $inputs_piped eq "" ? "No inputs available. Please try an statusRequest first." : "No input parameter given.";
       }
     }      
     elsif($what eq "mute")
@@ -317,7 +326,7 @@ sub YAMAHA_NP_Set
         }
         else
         {
-            return "mute can only used when device is powered on";
+            return "Switch device on in order to mute it.";
         }
       }
     }
@@ -329,7 +338,7 @@ sub YAMAHA_NP_Set
       }
       else
       {
-        return "Dimmer value must be 1..3";
+        return "Dimmer value must be 1 .. 3";
       }
     }    
     elsif($what =~ /^(volumeStraight|volume|volumeUp|volumeDown)$/)
@@ -648,7 +657,7 @@ sub YAMAHA_NP_Set
     }
     elsif($what eq "timerVolume")
     {
-        # if lower than minimum VOLUMESTRAIGHTMIN or higher than max VOLUMESTRAIGHTMAX set target volume to the corresponding limts
+        # if lower than minimum VOLUMESTRAIGHTMIN or higher than max VOLUMESTRAIGHTMAX set target volume to the corresponding limits
         if($a[2] >=  $hash->{helper}{VOLUMESTRAIGHTMIN} and $a[2] <= $hash->{helper}{VOLUMESTRAIGHTMAX})
         {
           $hash->{helper}{timerVolume} = $a[2];
@@ -691,6 +700,48 @@ sub YAMAHA_NP_Set
         {
           return $usage;
         }
+    }
+    elsif($what eq "tunerFMFrequency")
+    {
+  		if(length($a[2]) <= 6 and length($a[2]) >= 5) 	# Check the string length (x)xx.xx
+  		{
+  			if ( $a[2] =~ /^[0-9,.E]+$/ )				# Check if value is numeric
+  			{
+  			  if(substr($a[2], -3, 1) eq '.')    # Check for decimal point
+          {
+    				if( $a[2] >= 87.50 and $a[2] <= 108.00)   # Check if within the value range
+    				{
+  					  my $lastDigit = substr($a[2], -1, 1);
+    					if(($lastDigit eq "0") or ($lastDigit eq "5"))
+    					{
+    						my $frequency = $a[2];
+    						$frequency =~ s/\.//; 			# Remove decimal point
+    						YAMAHA_NP_SendCommand($hash, "<YAMAHA_AV cmd=\"PUT\"><Tuner><Play_Control><Tuning><FM><Freq>".$frequency."<\/Freq><\/FM><\/Tuning><\/Play_Control><\/Tuner></YAMAHA_AV>", "tunerFMFrequency", $a[2]);
+    					}
+    					else
+    					{
+    						return "Last digit must be '0' or '5'";
+    					}
+    				}
+    				else
+    				{
+    				  return "Frequency value must be in the range 87.50 ... 108.00 of the format (x)xx.xx";	
+    				}			
+  			  }
+  			  else
+  			  {
+  				  return "Missing decimal point. Accepted format (x)xx.xx";            
+  			  }
+  			}
+  			else
+  			{
+  			  return "Frequency value must be numeric in the range 87.50 ... 108.00 of the format (x)xx.xx";
+  			}
+  		}
+  		else
+  		{
+  			return "Frequency length must be 5 or 6 characters e.g. 89.50 or 108.00";
+  		}
     }
     else
     {
@@ -1347,7 +1398,7 @@ sub YAMAHA_NP_ParseResponse
           readingsBulkUpdate($hash, "volume", YAMAHA_NP_volume_abs2rel($hash, $hash->{helper}{targetVolume}));
           # New "volume"value: The CRX-N560D cannot provide the current volume in time after a volume change.
           # Therefore updated locally.          
-          # Volume will be updated during the next timer loop.
+          # Volume will be updated during the next statusRequest timer loop.
         }
       }
       
@@ -1523,6 +1574,7 @@ sub YAMAHA_NP_html2txt
 1;
 
 =pod
+
 =begin html
 
 <a name="YAMAHA_NP"></a>
@@ -1645,6 +1697,7 @@ sub YAMAHA_NP_html2txt
         <li><b>presetUp</b>&nbsp;&nbsp;-&nbsp;&nbsp; tuner preset up.</li>
         <li><b>presetDown</b>&nbsp;&nbsp;-&nbsp;&nbsp; tuner preset down.</li>
       </ul>
+      <li><b>tunerFMFrequency</b> [87.50 ... 108.00] &nbsp;&nbsp;-&nbsp;&nbsp; Sets the FM frequency. The value must be 87.50 ... 108.00 including the decimal point ('.') with two digits after. Otherwise the value will be ignored.</li>
       <li><b>tunerPresetDAB</b> [1...30] &nbsp;&nbsp;-&nbsp;&nbsp; Sets the DAB preset.</li>
       <li><b>tunerPresetFM</b> [1...30] &nbsp;&nbsp;-&nbsp;&nbsp; Sets the FM preset.</li>
       <li><b>volume</b> [0...100] &nbsp;&nbsp;-&nbsp;&nbsp; set the volume level in &#037;</li>
@@ -1652,7 +1705,6 @@ sub YAMAHA_NP_html2txt
       <li><b>volumeUp</b> [&lt;VOL_MIN&gt;...&lt;VOL_MAX&gt;] &nbsp;&nbsp;-&nbsp;&nbsp; increases the volume by one device's absolute step. &lt;VOL_MIN&gt; and &lt;VOL_MAX&gt; are read and set from the device automatically.</li>
       <li><b>volumeDown</b> [&lt;VOL_MIN&gt;...&lt;VOL_MAX&gt;] &nbsp;&nbsp;-&nbsp;&nbsp; increases the volume by one device's absolute step. &lt;VOL_MIN&gt; and &lt;VOL_MAX&gt; are read and set from the device automatically.</li>
     </ul><br><br>
-
     A typical example is powering the device remotely and tuning the favourite radio station:<br><br>
     Add the following code into the <b>fhem.cfg</b> configuration file:<br><br><br>
     <ul>
@@ -1678,7 +1730,6 @@ sub YAMAHA_NP_html2txt
     </ul>
     <br><br>
     It's a good idea to insert a 'sleep' instruction between each fhem commands due to internal processing time of the network player. During that time the following commands might be ignored...<br><br>
-
     Now the function can be called by typing the following line in the FHEM command line or by the notify-definitions:<br><br>
     <ul>
       <code>
@@ -1778,7 +1829,9 @@ sub YAMAHA_NP_html2txt
     However, even if the standbyMode is set to "Eco" the device can be powered off. In that case it has to be switched on manually.<br>
     </ul><br>
 </ul>
+
 =end html
+
 =begin html_DE
 
 <a name="YAMAHA_NP"></a>
@@ -1894,6 +1947,7 @@ sub YAMAHA_NP_html2txt
         <li><b>presetUp</b>&nbsp;&nbsp;-&nbsp;&nbsp; Tuner Voreinstellung hoch.</li>
         <li><b>presetDown</b>&nbsp;&nbsp;-&nbsp;&nbsp; Tuner Voreinstellung runter.</li>
       </ul>
+      <li><b>tunerFMFrequency</b> [87.50 ... 108.00] &nbsp;&nbsp;-&nbsp;&nbsp; Setzt die FM Frequenz. Der Wert muss zwischen 87.50 ... 108.00 liegen und muss den Digitalpunkt beinhalten ('.') mit zwei Nachkommastellen.</li>
       <li><b>tunerPresetDAB</b> [1...30] &nbsp;&nbsp;-&nbsp;&nbsp; Setzt die DAB Voreinstellung.</li>
       <li><b>tunerPresetFM</b> [1...30] &nbsp;&nbsp;-&nbsp;&nbsp; Setzt die FM Voreinstellung.</li>
       <li><b>volume</b> [0...100] &nbsp;&nbsp;-&nbsp;&nbsp; Setzt den Lautst&auml;rkepegel in &#037;</li>
@@ -2024,5 +2078,7 @@ sub YAMAHA_NP_html2txt
     Das Abschalten funktioniert auch standbyMode "Normal" Modus.<br>
   </ul><br>
 </ul>
+
 =end html_DE
+
 =cut

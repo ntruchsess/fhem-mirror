@@ -31,6 +31,7 @@ use Time::HiRes qw(gettimeofday);
 use HttpUtils;
 use vars qw($FW_ss); 
 use Blocking;
+#use DateTime::Format::Strptime;  # Debian: libdatetime-format-strptime-perl
 
 #
 # uses the Yahoo! Weather API: http://developer.yahoo.com/weather/
@@ -162,6 +163,33 @@ my @iconlist = (
        'sunny', 'scatteredthunderstorms', 'scatteredthunderstorms', 'scatteredthunderstorms', 'scatteredshowers', 'heavysnow',
        'chance_of_snow', 'heavysnow', 'partly_cloudy', 'heavyrain', 'chance_of_snow', 'scatteredshowers');
 
+my @months= qw/Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec/;
+my %monthindex;
+@monthindex{@months} = (0..$#months);
+       
+sub Weather_ParseDateTime($) {
+
+    my ($value)= @_; ### "Fri, 13 Nov 2015 8:00 am CET"
+    
+    if($value =~ '^(\w{3}), (\d{1,2}) (\w{3}) (\d{4}) (\d{1,2}):(\d{2}) (\w{2}) (\w{3})$') {
+        my ($wd, $d, $mon, $y, $h, $n, $p, $tz)= ($1,$2,$3,$4,$5,$6,$7,$8);
+        # 12 AM= 0, 12 PM= 12
+        $h+=12 if($h==12); if($p eq "pm") { $h= ($h+12) % 24 } else { $h%= 12 };
+        my $m= $monthindex{$mon};
+        return undef unless defined($m);
+        #main::Debug "######  $value -> $wd $d $m $y $h:$n $tz";
+        # $mday= 1.. 
+        # $month= 0..11
+        # $year is year-1900
+        # we ignore the time zone as it probably never changes for a weather device an assume
+        # local time zone
+        return fhemTimeLocal(0, $n, $h, $d, $m, $y-1900);
+    } else {
+        return undef;
+    }
+}
+       
+       
 ###################################
 sub Weather_DebugCodes() {
 
@@ -328,11 +356,35 @@ sub Weather_RetrieveDataFinished($$$)
       %pressure_trend_txt_i18n= %pressure_trend_txt_en;
     }
 
+    $urlResult->{"readings"}->{"pubDateTs"}= 0;
+    $urlResult->{"readings"}->{"pubDateComment"}= "no pubDate received";
+    
     foreach my $l (split("<",$xml)) {
-      #Debug "DEBUG WEATHER: line=\"$l\"";
       next if($l eq "");                   # skip empty lines
+      
+      # pick the pubdate
+      if ($l =~ '^pubDate>(.*)$') {
+        my $value= $1;
+        ### pubDate  Fri, 13 Nov 2015 8:00 am CET
+        $urlResult->{"readings"}->{"pubDate"}= $value;
+        
+        my $ts= Weather_ParseDateTime($value);
+        if(defined($ts)) {
+            $urlResult->{"readings"}->{"pubDateTs"}= $ts;
+            $urlResult->{"readings"}->{"pubDateComment"}= "okay";
+        } else {
+            $urlResult->{"readings"}->{"pubDateTs"}= 0;
+            $urlResult->{"readings"}->{"pubDateComment"}= "could not parse pubDate $value";
+        } 
+        next;
+      }
+      
+      
       $l =~ s/(\/|\?)?>$//;                # strip off /> and >
       my ($tag,$value)= split(" ", $l, 2); # split tag data=..... at the first blank
+      
+      
+      # skip all but weather
       next if(!defined($tag) || ($tag !~ /^yweather:/));
       $fc= 0 if($tag eq "yweather:condition");
       $fc++ if($tag eq "yweather:forecast");
@@ -425,19 +477,33 @@ sub Weather_RetrieveDataFinished($$$)
   }
 
   if (exists($urlResult->{readings})) {
+  
+      my $ts1= $hash->{READINGS}{pubDateTs}{VAL};
+      my $ts2= $urlResult->{"readings"}->{"pubDateTs"};
+
       readingsBeginUpdate($hash);
-      while ( (my $key, my $value) = each %{$urlResult->{readings}} )
-      {
-        readingsBulkUpdate($hash, $key, $value);
-      }
+      readingsBulkUpdate($hash, "pubDateRemote", $urlResult->{"readings"}->{"pubDate"});
       
-      my $temperature= $hash->{READINGS}{temperature}{VAL};
-      my $humidity= $hash->{READINGS}{humidity}{VAL};
-      my $wind= $hash->{READINGS}{wind}{VAL};
-      my $pressure=  $hash->{READINGS}{pressure}{VAL};
-      my $val= "T: $temperature  H: $humidity  W: $wind  P: $pressure";
-      Log3 $hash, 4, "Weather ". $hash->{NAME} . ": $val";
-      readingsBulkUpdate($hash, "state", $val);
+      #main::Debug "ts1= $ts1, ts2= $ts2";
+        
+      if($ts1 && $ts2 && ($ts2< $ts1)) {
+        readingsBulkUpdate($hash, "validity", "stale");
+      } else {
+        readingsBulkUpdate($hash, "validity", "up-to-date");
+
+        while ( (my $key, my $value) = each %{$urlResult->{readings}} )
+        {
+            readingsBulkUpdate($hash, $key, $value);
+        }
+        
+        my $temperature= $hash->{READINGS}{temperature}{VAL};
+        my $humidity= $hash->{READINGS}{humidity}{VAL};
+        my $wind= $hash->{READINGS}{wind}{VAL};
+        my $pressure=  $hash->{READINGS}{pressure}{VAL};
+        my $val= "T: $temperature  H: $humidity  W: $wind  P: $pressure";
+        Log3 $hash, 4, "Weather ". $hash->{NAME} . ": $val";
+        readingsBulkUpdate($hash, "state", $val);
+      }
       readingsEndUpdate($hash, $doTrigger ? 1 : 0);
   }
 }
@@ -698,7 +764,7 @@ WeatherAsHtmlD($;$)
     <code>define &lt;name&gt; Weather &lt;location&gt; [&lt;interval&gt; [&lt;language&gt;]]</code><br>
     <br>
     Defines a virtual device for weather forecasts.<br><br>
-
+    
     A Weather device periodically gathers current and forecast weather conditions
     from the Yahoo Weather API.<br><br>
 
@@ -780,6 +846,14 @@ WeatherAsHtmlD($;$)
     <tr><td>wind_condition</td><td>wind direction and speed</td></tr>
     <tr><td>wind_direction</td><td>direction wind comes from in degrees (0 = north wind)</td></tr>
     <tr><td>wind_speed</td><td>same as wind</td></tr>
+    </table>
+    <br>
+    The following readings help to identify whether a workaround has kicked in to avoid the retrieval of
+    stale data from the remote server:
+    <table>
+    <tr><td>pubDate</td><td>publication time of forecast for current set of readings</td></tr>
+    <tr><td>pubDateRemote</td><td>publication time of forecast as seen on remote server</td></tr>
+    <tr><td>validity</td><td>stale, if publication time as seen on remote server is before that of current set of readings</td></tr>
     </table>
 
   </ul>
@@ -875,6 +949,14 @@ WeatherAsHtmlD($;$)
     <tr><td>wind_condition</td><td>Windrichtung und -geschwindigkeit</td></tr>
     <tr><td>wind_direction</td><td>Gradangabe der Windrichtung (0 = Nordwind)</td></tr>
     <tr><td>wind_speed</td><td>Windgeschwindigkeit in km/h (mit wind identisch)</td></tr>
+    </table>
+    <br>
+    Die folgenden Daten helfen zu identifizieren, ob ein Workaround angeschlagen hat, der die Verwendung von
+    veralteten Daten auf dem entfernten Server verhindert:
+    <table>
+    <tr><td>pubDate</td><td>Ver&ouml;ffentlichungszeitpunkt der Wettervorhersage in den aktuellen Daten (readings)</td></tr>
+    <tr><td>pubDateRemote</td><td>Ver&ouml;ffentlichungszeitpunkt der Wettervorhersage auf dem entfernten Server</td></tr>
+    <tr><td>validity</td><td>stale, wenn der Ver&ouml;ffentlichungszeitpunkt auf dem entfernten Server vor dem Zeitpunkt der aktuellen Daten (readings) liegt</td></tr>
     </table>
 
   </ul>

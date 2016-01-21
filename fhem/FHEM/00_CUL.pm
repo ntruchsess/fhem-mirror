@@ -40,6 +40,7 @@ my %sets = (
   "sens"      => "SlowRF",
   "led"       => "",
   "patable"   => "",
+  "ITClock"   => "SlowRF"
 );
 
 my @ampllist = (24, 27, 30, 33, 36, 38, 40, 42); # rAmpl(dB)
@@ -117,7 +118,7 @@ CUL_Initialize($)
   $hash->{AttrList}= "do_not_notify:1,0 dummy:1,0 " .
                      "showtime:1,0 model:CUL,CUN sendpool addvaltrigger ".
                      "rfmode:SlowRF,HomeMatic,MAX,WMBus_T,WMBus_S ".
-                     "hmId ".
+                     "hmId longids ".
                      "hmProtocolEvents:0_off,1_dump,2_dumpFull,3_dumpTrigger " .
                      $readingFnAttributes;
 
@@ -244,7 +245,7 @@ CUL_Set($@)
 
   return "\"set CUL\" needs at least one parameter" if(@a < 2);
   return "Unknown argument $a[1], choose one of " . join(" ", sort keys %sets)
-  	if(!defined($sets{$a[1]}));
+    if(!defined($sets{$a[1]}));
 
   my $name = shift @a;
   my $type = shift @a;
@@ -253,16 +254,16 @@ CUL_Set($@)
   return "This command is not valid in the current rfmode"
       if($sets{$type} && $sets{$type} ne AttrVal($name, "rfmode", "SlowRF"));
 
-  if($type eq "reopen") { ####################################
+  if($type eq "reopen") {
     CUL_Reopen($hash);
     
-  } elsif($type eq "hmPairForSec") { ####################################
+  } elsif($type eq "hmPairForSec") {
     return "Usage: set $name hmPairForSec <seconds_active>"
         if(!$arg || $arg !~ m/^\d+$/);
     $hash->{hmPair} = 1;
     InternalTimer(gettimeofday()+$arg, "CUL_RemoveHMPair", $hash, 1);
 
-  } elsif($type eq "hmPairSerial") { ################################
+  } elsif($type eq "hmPairSerial") {
     return "Usage: set $name hmPairSerial <10-character-serialnumber>"
         if(!$arg || $arg !~ m/^.{10}$/);
 
@@ -272,7 +273,7 @@ CUL_Set($@)
                     $hash->{HM_CMDNR}, $id, unpack('H*', $arg)));
     $hash->{hmPairSerial} = $arg;
 
-  } elsif($type eq "freq") { ######################################## MHz
+  } elsif($type eq "freq") {
 
     my $f = $arg/26*65536;
 
@@ -286,7 +287,7 @@ CUL_Set($@)
     CUL_SimpleWrite($hash, "W11$f0");
     CUL_WriteInit($hash);   # Will reprogram the CC1101
 
-  } elsif($type eq "bWidth") { ###################################### KHz
+  } elsif($type eq "bWidth") {
     my ($err, $ob);
     if(!IsDummy($hash->{NAME})) {
       CUL_SimpleWrite($hash, "C10");
@@ -310,8 +311,7 @@ GOTBW:
     CUL_SimpleWrite($hash, "W12$ob");
     CUL_WriteInit($hash);
 
-  } elsif($type eq "rAmpl") { ####################################### dB
-
+  } elsif($type eq "rAmpl") {
     return "a numerical value between 24 and 42 is expected"
         if($arg !~ m/^\d+$/ || $arg < 24 || $arg > 42);
     my ($v, $w);
@@ -324,8 +324,7 @@ GOTBW:
     CUL_SimpleWrite($hash, "W1D$v");
     CUL_WriteInit($hash);
 
-  } elsif($type eq "sens") { ######################################## dB
-
+  } elsif($type eq "sens") {
     return "a numerical value between 4 and 16 is expected"
         if($arg !~ m/^\d+$/ || $arg < 4 || $arg > 16);
     my $w = int($arg/4)*4;
@@ -334,8 +333,15 @@ GOTBW:
     CUL_SimpleWrite($hash, "W1F$v");
     CUL_WriteInit($hash);
 
-  } else { ###############################################  raw,led,patable
+  } elsif( $type eq "ITClock" ) {
+    my $clock = shift @a;
+    $clock=250 if($clock eq "");
+    return "argument $arg is not numeric" if($clock !~ /^\d+$/);
+    Log3 $name, 3, "set $name $type $clock";
+    $arg="ic$clock";
+    CUL_SimpleWrite($hash, $arg);
 
+  } else {
     return "Expecting a 0-padded hex number"
         if((length($arg)&1) == 1 && $type ne "raw");
     Log3 $name, 3, "set $name $type $arg";
@@ -1070,11 +1076,12 @@ CUL_Attr(@)
 
     Log3 $name, 2, "Switched $name rfmode to $aVal";
     delete $hash->{".clientArray"};
+
   } elsif($aName eq "hmId"){
-    if ($cmd eq "set"){
-	  return "wrong syntax: hmId must be 6-digit-hex-code (3 byte)"
-	       if ($aVal !~ m/^[A-F0-9]{6}$/i);
-	}
+    if($cmd eq "set") {
+      return "wrong syntax: hmId must be 6-digit-hex-code (3 byte)"
+        if($aVal !~ m/^[A-F0-9]{6}$/i);
+    }
   }
 
   return undef;
@@ -1180,7 +1187,8 @@ CUL_prefix($$$)
   <b>Set </b>
   <ul>
     <li>reopen<br>
-	Reopens the connection to the device and reinitializes it.</li><br>
+       Reopens the connection to the device and reinitializes it.
+       </li><br>
     <li>raw<br>
         Issue a CUL firmware command.  See the <a
         href="http://culfw.de/commandref.html">this</a> document
@@ -1228,6 +1236,9 @@ CUL_prefix($$$)
     <a name="hmPairForSec"></a>
     <li>led<br>
         Set the CUL led off (00), on (01) or blinking (02).
+        </li><br>
+    <li>ITClock</br>
+        Set the IT clock for Intertechno V1 protocol. Default 250.
         </li><br>
   </ul>
 
@@ -1339,6 +1350,28 @@ CUL_prefix($$$)
         </code>
         </ul>
         </li><br>
+    
+    <li><a name="longids">longids</a><br>
+        Comma separated list of device-types for CUL that should be handled 
+        using long IDs. This additional ID allows it to differentiate some 
+        weather sensors, if they are sending on the same channel. 
+        Therefore a random generated id is added. If you choose to use longids, 
+        then you'll have to define a different device after battery change.
+        Default is not to use long IDs.<br>
+        Modules which are using this functionality are for e.g. :
+        14_Hideki, 41_OREGON, 14_CUL_TCM97001, 14_SD_WS07.<br>
+
+        Examples:<br>
+        <ul><code>
+        # Do not use any long IDs for any devices (this is default):<br>
+        attr cul longids 0<br>
+        # Use long IDs for all devices:<br>
+        attr cul longids 1<br>
+        # Use longids for SD_WS07 devices.<br>
+        # Will generate devices names like SD_WS07_TH_3 for channel 3.<br>
+        attr cul longids SD_WS07
+        </code></ul>
+    </li><br>
         
     <li><a href="#readingFnAttributes">readingFnAttributes</a></li>
   </ul>
@@ -1442,7 +1475,8 @@ CUL_prefix($$$)
   <b>Set </b>
   <ul>
     <li>reopen<br>
-	&Ouml;ffnet die Verbindung zum Ger&auml;t neu und initialisiert es.</li><br>
+        &Ouml;ffnet die Verbindung zum Ger&auml;t neu und initialisiert es.
+        </li><br>
     <li>raw<br>
         Sendet einen CUL Firmware Befehl. Siehe auch
         <a href="http://culfw.de/commandref.html">hier</a> f&uuml;r
@@ -1501,6 +1535,9 @@ CUL_prefix($$$)
     <a name="hmPairForSec"></a>
     <li>led<br>
         Schaltet die LED des CUL: aus (00), an (01) oder blinkend (02).
+        </li><br>
+    <li>ITClock</br>
+        Setzt die IT clock f&uuml; Intertechno V1 Protokoll. Default 250.
         </li><br>
   </ul>
 
@@ -1621,6 +1658,29 @@ CUL_prefix($$$)
         </code>
         </ul>
         </li><br>
+
+    <li><a name="longids">longids</a><br>
+        Durch Kommata getrennte Liste von Device-Typen f&uuml;r Empfang von
+        langen IDs mit den CUL. Diese zus&auml;tzliche ID erlaubt es
+        Wettersensoren, welche auf dem gleichen Kanal senden zu unterscheiden.
+        Hierzu wird eine zuf&auml;llig generierte ID hinzugef&uuml;gt. Wenn Sie
+        longids verwenden, dann wird in den meisten F&auml;llen nach einem
+        Batteriewechsel ein neuer Sensor angelegt.
+        Standardm&auml;&szlig;ig werden keine langen IDs verwendet.<br>
+        Folgende Module verwenden diese Funktionalit&auml;t:
+        14_Hideki, 41_OREGON, 14_CUL_TCM97001, 14_SD_WS07.<br>
+        Beispiele:
+        <ul><code>
+        # Keine langen IDs verwenden (Default Einstellung):<br>
+        attr cul longids 0<br>
+        # Immer lange IDs verwenden:<br>
+        attr cul longids 1<br>
+        # Verwende lange IDs f&uuml;r SD_WS07 Devices.<br>
+        # Device Namen sehen z.B. so aus: SD_WS07_TH_3 for channel 3.<br>
+        attr cul longids SD_WS07
+        </code></ul>
+    </li><br>
+    
     <li><a href="#readingFnAttributes">readingFnAttributes</a></li>
   </ul>
   <br>

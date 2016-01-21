@@ -52,8 +52,8 @@ function
 FW_jqueryReadyFn()
 {
   FW_docReady = true;
-  FW_serverGenerated = document.body.getAttribute("generated");
-  if(document.body.getAttribute("longpoll"))
+  FW_serverGenerated = $("body").attr("generated");
+  if($("body").attr("longpoll"))
     setTimeout("FW_longpoll()", 100);
 
   $("a").each(function() { FW_replaceLink(this); })
@@ -146,12 +146,32 @@ FW_jqueryReadyFn()
     var input = $(this).find("input.maininput");
     if(!input.length)
       return;
-    $(this).on("submit", function() {
-      if($(input).val().match(/^\s*shutdown/)) {
-        FW_cmd(FW_root+"?XHR=1&cmd="+$(input).val());
+    $(this).on("submit", function(e) {
+      var val = $(input).val();
+      if(val.match(/^\s*shutdown/)) {
+        FW_cmd(FW_root+"?XHR=1&cmd="+val);
+        $(input).val("");
+        return false;
+
+      } else if(val.match(/^\s*get\s+/)) {
+        // make get use xhr instead of reload
+        //return true;
+        FW_cmd(FW_root+"?cmd="+val+"&XHR=1", function(data) {
+          if( !data.match( /^<html>.*<\/html>/ ) ) {
+            data = data.replace( '<', '&lt;' );
+            data = '<pre>'+data+'</pre>';
+          }
+          if( location.href.indexOf('?') === -1 )
+            $('#content').html(data);
+          else
+            FW_okDialog(data);
+        });
+
+        e.preventDefault();
         $(input).val("");
         return false;
       }
+
       return true;
     });
   });
@@ -215,7 +235,7 @@ log(txt)
 function
 addcsrf(arg)
 {
-  var csrf = document.body.getAttribute('fwcsrf');
+  var csrf = $("body").attr('fwcsrf');
   if(csrf && arg.indexOf('fwcsrf') < 0)
     arg += '&fwcsrf='+csrf;
   return arg;
@@ -226,6 +246,7 @@ FW_cmd(arg, callback)
 {
   log("FW_cmd:"+arg);
   arg = addcsrf(arg);
+  arg += '&fw_id='+$("body").attr('fw_id');
   var req = new XMLHttpRequest();
   req.open("POST", arg, true);
   req.send(null);
@@ -373,6 +394,7 @@ FW_replaceLink(el)
         if($(el).attr("target") == "_blank") {
           window.open(url, '_blank').focus();
         } else {
+          $(el).attr(href,'');
           location.href = attr;
         }
       });
@@ -509,7 +531,7 @@ FW_longpoll()
         filter="room="+room;
     }
   }
-  var iP = document.body.getAttribute("iconPath");
+  var iP = $("body").attr("iconPath");
   if(iP != null)
     filter = filter +";iconPath="+iP;
 
@@ -519,6 +541,7 @@ FW_longpoll()
 
   var query = location.pathname+"?XHR=1"+
               "&inform=type=status;filter="+filter+";since="+since+";fmt=JSON"+
+              '&fw_id='+$("body").attr('fw_id')+
               "&timestamp="+new Date().getTime();
   query = addcsrf(query);
   FW_pollConn.open("GET", query, true);
@@ -765,7 +788,13 @@ FW_createSlider(elName, devName, vArr, currVal, set, params, cmd)
   var min = parseFloat(vArr[1]);
   var stp = parseFloat(vArr[2]);
   var max = parseFloat(vArr[3]);
-  var flt = vArr[4];
+  var flt = (vArr.length == 5 && vArr[4] == "1");
+  var dp = 0; // decimal points for float
+  if(flt) {
+    var s = ""+stp;
+    if(s.indexOf(".") >= 0)
+      dp = s.substr(s.indexOf(".")+1).length;
+  }
   if(currVal != undefined)
     currVal = currVal.replace(/[^\d.\-]/g, "");
   currVal = (currVal==undefined || currVal=="") ?  min : parseFloat(currVal);
@@ -791,10 +820,11 @@ FW_createSlider(elName, devName, vArr, currVal, set, params, cmd)
       return;
     maxX = slider.offsetWidth-sh.offsetWidth;
     offX = (currVal-min)*maxX/(max-min);
-    sh.innerHTML = currVal;
+    var strVal = (flt ? currVal.toFixed(dp) : ""+parseInt(currVal));
+    sh.innerHTML = strVal
     sh.setAttribute('style', 'left:'+offX+'px;');
     if(elName)
-      slider.nextSibling.setAttribute('value', currVal);
+      slider.nextSibling.setAttribute('value', strVal);
   }
 
   $(newEl).keydown(function(e){
@@ -803,12 +833,13 @@ FW_createSlider(elName, devName, vArr, currVal, set, params, cmd)
     if(currVal < min) currVal = min;
     if(currVal > max) currVal = max;
     offX = (currVal-min)*maxX/(max-min);
-    sh.innerHTML = currVal;
+    var strVal = (flt ? currVal.toFixed(dp) : ""+parseInt(currVal));
+    sh.innerHTML = strVal;
     sh.setAttribute('style', 'left:'+offX+'px;');
     if(cmd)
-      cmd(currVal);
+      cmd(strVal);
     if(elName)
-      slider.nextSibling.setAttribute('value', currVal);
+      slider.nextSibling.setAttribute('value', strVal);
   });
 
   function
@@ -827,11 +858,14 @@ FW_createSlider(elName, devName, vArr, currVal, set, params, cmd)
     var oldFn1 = document.onmousemove, oldFn2 = document.onmouseup,
         oldFn3 = document.ontouchmove, oldFn4 = document.ontouchend;
 
+    e.stopPropagation();  // Dashboard fix
     lastX = e.clientX;  // Does not work on IE8
 
     function
     mouseMove(e)
     {
+      e.stopPropagation();  // Dashboard fix
+
       if(maxX == 0) // Forum #35846
         maxX = slider.offsetWidth-sh.offsetWidth;
       var diff = e.clientX-lastX; lastX = e.clientX;
@@ -839,8 +873,8 @@ FW_createSlider(elName, devName, vArr, currVal, set, params, cmd)
       if(offX < 0) offX = 0;
       if(offX > maxX) offX = maxX;
       val = offX/maxX * (max-min);
-      val = (flt ? Math.floor(val/stp)*stp :
-                   Math.floor(Math.floor(val/stp)*stp))+min;
+      val = flt ? (Math.floor(val/stp)*stp+min).toFixed(dp) :
+                  (Math.floor(Math.floor(val/stp)*stp)+min);
       sh.innerHTML = val;
       sh.setAttribute('style', 'left:'+offX+'px;');
     }
@@ -849,6 +883,7 @@ FW_createSlider(elName, devName, vArr, currVal, set, params, cmd)
 
     document.onmouseup = document.ontouchend = function(e)
     {
+      e.stopPropagation();  // Dashboard fix
       document.onmousemove = oldFn1; document.onmouseup  = oldFn2;
       document.ontouchmove = oldFn3; document.ontouchend = oldFn4;
       if(cmd)

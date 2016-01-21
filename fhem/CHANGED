@@ -1,5 +1,178 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on it.
+  - change:  FB_CALLMONITOR: reading "missed_call_line" will not be triggered
+                             anymore. Use internal_number instead, which
+                             contains the same content
+  - feature: FB_CALLMONITOR: new attribute answMachine-is-missed-call to
+                             treat incoming calls, which were taken by
+                             an answering machine, as "missed call"
+  - feature: 98_weekprofile: send profile to other weekprofile intance
+                             send profile to multible devices
+                             multi-select of devices in widget
+  - feature: new module 52_I2C_PCA9685.pm added (klausw)
+  - change:  98_weekprofile: create default profile if master device
+             has no week profile
+  - bugfix:  allowed without a validFor is invalid.
+  - feature: 98_weekprofile: detect profile changes in master device
+  - feature: 49_SSCam: Function "Get" for retrieval Camera-Readings added,
+                       Attributs pollcaminfoall, pollnologging  added,
+                       Function for Polling Cam-Infos added.
+  - bugfix:  89_HEATRONIC: fixed variable names
+  - feature: 89_HEATRONIC: new reading ch_error: error code of boiler
+  - change:  SYSMON: end of support for barcharts
+  - fix:     SYSMON: html
+  - feature: 98_weekprofile: new attribute 'widgetEditOnNewPage' to edit
+             weekprofile on new web page
+  - change:  89_HEATRONIC: new feature: set heating mode, set temperature
+             new reading ch_code
+  - bugfix:  FB_CALLMONITOR: empty phonebooks will be recognized correctly,
+             phonebook processing continues, when error occurs
+  - change:  FB_CALLMONITOR:  attr fritzbox-remote-phonebook-exclude allows
+             phonebook names additional to ID's
+  - bugfix:  95_Dashboard: fixed issue when using cmdIcon attribute
+                           for devices.
+  - feature: 71_PHILIPS_AUDIO: select presets and favorites by name.
+  - feature: 50_TelegramBot: alias for commands, new readings, 
+                             support for sending media files; plus fixes
+  - feature: 20_ROOMMATE,
+             20_GUEST: new attribute r*_geofenceUUIDs for direct GEOFANCY
+                       support as an alternative for notify/DOIF/watchdog
+                       clutter
+  - change:  98_GEOFANCY: attribute devAlias is now mandatory to have all
+                          readings created (improves security/stability)
+  - feature: configDB: rescue mode added, read forum #46538
+  - changed: 49_SSCam: documentation changed
+             HINT: use IP-Adresses instead of hostnames in SSCAM-Define! 
+  - bugfix:  FB_CALLLIST: fix not working longpoll update in FHEMWEB
+  - change:  FB_CALLLIST: saved list will be deleted from filesystem
+              when delete <name> is executed
+  - feature: allowed module added. allowedCommands, basicAuth, password,
+             globalpassword attributes moved to this module.
+  - bugfix:  YAMAHA_AVR: fixing not working volumeStraight set command
+  - change:  FB_CALLLIST: start call processing only when "event:" is triggered 
+             by corresponding FB_CALLMONITOR device.
+  - change:  FB_CALLMONITOR: default value for attr
+             fritzbox-remote-phonebook-via has been changed to "tr064"
+             (previous: "web") to ensure no problems with new Fritz!OS web
+             layout.  Besides TR-064 is official supported by AVM.
+  - feature: PHILIPS_AUDIO: Favorite station selection
+  - feature: YAMAHA_AVR: new set commands and readings for tuner control
+             - new set commands tunerFrequency,tunerPreset for
+               controlling tuner frequencies and selecting presets.
+             - new readings tunerFrequency,tunerFrequencyBand,
+               currentStationFrequency
+             - see commandref for details
+  - bugfix:  51_I2C_TSL2561: correct lux calculation floatArithmetics case
+  - feature: YAMAHA_AVR: add pointer to main zone in Internals for zone defs
+  - change:  YAMAHA_AVR: DSP based models use command queue of main zone
+             to execute commands for zone definitions 
+             (many thanks to dev0 for patience and support)
+  - bugfix:  YAMAHA_AVR: fix navigateListMenu for RX-Vx71 series models,
+             fix bass/treble missbehaviour for DSP based models
+  - feature: 98_weekprofile: new module to manage week profiles
+  - feature: 49_SSCam: function "enable" and "disable" for SS-Cams added
+  - change:  49_SSCam: changed timout of Http-calls to a higher value,
+                       commandref enhanced
+  - feature: 57_CALVIEW.pm: added new function for running terms
+  - change:  57_CALVIEW.pm: improved commandref
+  - feature: 98_update.pm: support multiple repositories (Forum #45121)
+  - change:  71_YAMAHA_NP: More secure FM frequency input 
+  - feature: FHEMWEB/Event Monitor: optional FHEM Log monitor.
+  - feature: 50_Telegrambot: multiple contacts for send etc/removed depreacted
+      messageTo,sendImageTo,sendPhotoTo/allowunknowncontacts
+  - bugfix:  70_PushNotifier: remove messages fron FHEM-logfile
+  - feature: 49_SSCam: function "snap" for taking snapshots added,
+  - bugfix:  49_SSCam: fixed a bug that functions may impact each other
+  - feature: 31_MilightDevice: Add restoreAtStart attribute so group devices
+      (slot 'A') do not restore state by default at startup
+  - bugfix: 30_MilightBridge/31_MilightDevice: Fix startup restore.  Fix crash
+      on invalid hostname.
+  - feature: YAMAHA_NP: Direct FM frequency setting.
+  - feature: 30_pilight_xyz: possibility to change IO-Device (IODEV)
+  - bugfix: YAMAHA_AVR: fixing not correctly volume smoothing
+  - change: 49_SSCam: turned completly to HttpUtils_NonblockingGet for 
+                       calling websites nonblocking, 
+                       LWP is not needed anymore, 
+                       use of InternalTimer instead of fhem(sleep),
+                       improve usage of verbose-modes
+  - change:  10_RESIDENTS.pm: Readings residentsTotalOwners* were renamed to
+                              residentsTotalRoommates*
+  - feature: CUL_MAX: allow multiple instances
+             Make sure that you set attr IODev on each MAX device
+             (pointing to its CUL_MAX) and set attr IODev on each CUL_MAX
+             (pointing to its CUL).
+  - feature: YAMAHA_AVR: several new features:
+             - new set command navigateMenuList for automatic menu navigation
+             - new set command/reading partyMode
+             - disabledForInterval attribute added
+             see details in commandref
+  - change: YAMAHA AVR: optimized HTTP request command queue to allow 
+            correct processing of concatenated set commands
+            (no sleep commands neccesary anymore)
+  - bugfix: 95_Dashboard: fixed local link in command ref
+  - bugfix: 10_IT: Ignore sending if dummy (Forum ID 44990)
+    feature: 10_IT: Add functionality for setting ITClock (Forum ID 44451)
+  - bugfix: 14_CUL_TCM97001: Fix creation of plots 
+  - updated: 74_AMAD: New Mijor Release 1.0.0
+                      Add Reading Android Version
+                      Add VoiceInput fo VoiceCommands
+                      Bug Fixes
+                      Call ReadingsVal from Automagic HTTP Request with Response
+  - feature: 89_rssFeed: New module to get data from rss news feeds 
+  - feature: FB_CALLMONITOR: added attribute disabledForIntervals to specify
+             specific time ranges, where FB_CALLMONITOR will be disabled
+             (see commandref for the exact syntax)
+  - changed: YAMAHA_AVR: added HTTP request queue, send only one request at the
+             same time. This increases command reliability and response
+             behaviour of the AV receiver.
+  - bugfix:  49_SSCam: avoid problems when running this module on 
+             windows systems
+  - feature: 14_CUL_TCM97001: Add redirect for Eurochron to SD_WS07 modul
+                              Add support for KW9010 sensor
+                              Change autocreate names
+  - feature: 14_CUL_REDIRECT: Add redirect for Oregon 3 protocol
+  - bugfix:  49_SSCam: avoid possible blocking situation of FHEM when a
+             recording is running
+  - bugfix:  49_SSCam: avoid messages "insufficient user privilege" even
+             though the user was set up properly
+  - bugfix:  70_PIONEERAVR: suppressed Smartmatch is experimental warnings
+  - feature: 30_pilight_temp add attributes offsetTemp and offsetHumidity to
+             correct temperature and humidity
+  - changed: PRESENCE/collectord: new collectord-1.5.deb package released
+  - changed: YAMAHA_BD: added HTTP request queue, send only one request at the
+             same time. This increases command reliability and response
+             behaviour of the player.
+  - changed: 55_GDS.pm: provide gdsAlertsHeadlines() instead of gdsHeadlines
+  - feature: TelegramBot: multiple enhancements and fixes V1.1 keyboards on
+             favorites and last command reduced logging:
+             pollingVerbose:0_None,1_Digest,2_Log yowsup compatibility commands
+             added writeStatefile on contact change cmdReturnEmptyResult - to
+             suppress empty results from command execution and more
+  - feature: 55_GDS: new command get <name> headlines [separator]
+  - bugfix:  YAMAHA_BD: fix power off events when player is turned on
+             via set command on
+  - bugfix:  95_Dashboard: fixed javascript bug causing tabs not to load
+  - feature: 36_DavisVantage.zip (author: "habeIchVergessen")
+             Receive Davis Vantage Weather Stations with JeeLink 
+             and the KeyValueProtocol module
+  - feature: new module 36_KeyValueProtocol
+  - bugfix:  95_Dashboard: the fhem root url is not hardcoded any more 
+                but read from the $FW_ME variable.
+		Fixed a problem that causes drag&drop being still activated
+		when the dashboard was locked. (resize/move)
+  - bugfix:  14_SD_WS07 - corrected syntax error and raised loglevels
+  - bugfix:  55_GDS.pm - correct wrong cumulation in alerts (1st try)
+  - feature: new module 10_DUOFERNSTICK and 30_DUOFERN added
+  - feature: 59_Weather: prevent retrieval of older forecasts than the
+             one previously retrieved
+  - fhem 5.7 released.
+  - IMPORTANT: featurelevel is now 5.7, rendering @ and % non-functional
+  
+- 2015-11-15 (5.6)
+  - change: 30_MilightBridge/31_MilightDevice: Allow to disable ping check.
+                            Add state "Initialized".
+  - feature: 50_HP1000: new module to support HP1000 weather station
+  - feature: new module 53_GHoma.pm added (klausw)
   - feature: 14_CUL_REDIRECT: Rename 14_CUL_OTHER to 14_CUL_REDIRECT
   - bugfix:  00_SIGNALduino:
               Firmware Update 3.1.8-HF2 fixes a possible crash
@@ -9,7 +182,7 @@
                       link to local commandref or fhem.de
   - bugfix:  70_XBMC: reworked RPC ID generation
   - feature: 70_XBMC: added openchannelid to switch TV channels
-  - bugfix:  74_AMAD: Bessere Variante zur HTTP Headeranalyse, Code aufgeräumt
+  - bugfix:  74_AMAD: Bessere Variante zur HTTP Headeranalyse, Code cleanup
   - bugfix:  74_AMAD: AMADCommBridge communication problem with automagic 1.29
   - feature: fhem_codemirror: Added DOIF autocomplete-keywords. Added feature
                               to autocomplete on any keypress.
@@ -24,7 +197,7 @@
   - bugfix:  74_AMAD: fix call statusRequest then screen off is set
                       fix change room then device modify
   - feature: 74_AMAD: insert first code parts of voice input
-  - change:  55_GDS.pm new version released, see forum „Announcements“ 
+  - change:  55_GDS.pm new version released, see forum Announcements
   - change:  fhem_codemirror.js: Enabled indentWithTabs by default
                                  Enabled autoCloseBrackets by default
                                  Disabled smartIndent by default
@@ -68,13 +241,13 @@
              several models
   - feature: PRESENCE: support for Solaris ping (mode: lan-ping)
   - feature: HUEbridge: added support for HUE scenes
-                          (get: scenes; set: savescene, modifyscene, scene)
-                        new unified syntax for multiple lights
-                          in group and scene commands
-                        don't query status after set: use bridge response instead
-                        added queryAfterSet attribute
+             (get: scenes; set: savescene, modifyscene, scene)
+             new unified syntax for multiple lights
+             in group and scene commands
+             don't query status after set: use bridge response instead
+             added queryAfterSet attribute
   - feature: HUEDevice: added support for HUE scenes (set: savescene, scene)
-                        new unified syntax for multiple lights in lights command
+             new unified syntax for multiple lights in lights command
   - feature: LightScene: support HUE scenes
                          added asyncDelay attribute
   - bugfix:  10_IT: Fix wrong V3 dimm/off code
@@ -1102,8 +1275,8 @@
              meter with a JeeLabs JeeLink as RF modem. The matching JeeNode
              sketch can be found in .../contrib/36_PCA301-pcaSerial.zip
              (by ohweh&justme1968)
-  - change:  PRESENCE: using ping command line utility to check presence on Windows
-             based machines.
+  - change:  PRESENCE: using ping command line utility to check presence
+             on Windows based machines.
   - feature: install FHEM as Windows service by T.E., see docs/HOWTO_Windows.txt
   - feature: new module 33_readingsGroup to display a collection of readings
              from one or more devices. this will replace weblink readings.

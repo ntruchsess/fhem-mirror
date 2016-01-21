@@ -33,7 +33,7 @@ use Time::HiRes qw(gettimeofday);
 use Time::Local 'timelocal_nocheck';
 
 sub RandomTimer_stopTimeReached($);
-sub schaltZeitenErmitteln ($$);
+sub RandomTimer_schaltZeitenErmitteln ($$);
 sub RandomTimer_setState($);
 
 sub RandomTimer_Initialize($)
@@ -104,8 +104,8 @@ sub RandomTimer_Define($$)
   $hash->{REL}            = $rel;
   $hash->{S_REP}          = $srep;
   $hash->{S_REL}          = $srel;
-  $hash->{COMMAND}        = "off";
-
+  $hash->{COMMAND}        = Value($hash->{DEVICE});
+  
   myRemoveInternalTimer("SetTimer", $hash);
   myInternalTimer      ("SetTimer", time()+1, "RandomTimer_SetTimer", $hash, 0);
 
@@ -123,7 +123,7 @@ sub RandomTimer_SetTimer($)
   
   $hash->{active} = 0;
 
-  schaltZeitenErmitteln($hash, $now);
+  RandomTimer_schaltZeitenErmitteln($hash, $now);
   RandomTimer_setState($hash);
   
   Log3 $hash, 4, "[".$hash->{NAME}."]" . " timings  RandomTimer on $hash->{DEVICE}: "
@@ -190,7 +190,7 @@ sub RandomTimer_Exec($) {
          $hash->{active} = 0;
       }
       if ($stopTimeReached) {
-         Log3 $hash, 4, "[".$hash->{NAME}."]"." defintion RandomTimer on $hash->{DEVICE}: "
+         Log3 $hash, 4, "[".$hash->{NAME}."]"." definition RandomTimer on $hash->{DEVICE}: "
             . strftime("%H:%M:%S(%d)",localtime($hash->{startTime})) . " - "
             . strftime("%H:%M:%S(%d)",localtime($hash->{stopTime}));
          RandomTimer_setState($hash);
@@ -208,7 +208,7 @@ sub RandomTimer_Exec($) {
    RandomTimer_setState($hash);
    RandomTimer_device_toggle($hash) if (!$disabled);
 
-   my $nextSwitch = time() + getSecsToNextAbschaltTest($hash);
+   my $nextSwitch = time() + RandomTimer_getSecsToNextAbschaltTest($hash);
    myRemoveInternalTimer("Exec", $hash);
    myInternalTimer      ("Exec", $nextSwitch, "RandomTimer_Exec", $hash, 0);
 
@@ -277,7 +277,7 @@ sub RandomTimer_set_switchmode ($$) {
    }
 }
 ########################################################################
-sub getSecsToNextAbschaltTest($)
+sub RandomTimer_getSecsToNextAbschaltTest($)
 {
     my ($hash) = @_;
     my $intervall = $hash->{TIMETOSWITCH};
@@ -289,15 +289,15 @@ sub getSecsToNextAbschaltTest($)
     return $nextSecs;
 }
 ########################################################################
-sub schaltZeitenErmitteln ($$) {
+sub RandomTimer_schaltZeitenErmitteln ($$) {
   my ($hash,$now) = @_;
 
-  startZeitErmitteln($hash, $now);
-  stopZeitErmitteln ($hash, $now);
+  RandomTimer_startZeitErmitteln($hash, $now);
+  RandomTimer_stopZeitErmitteln ($hash, $now);
 
 }
 ########################################################################
-sub zeitBerechnen  ($$$$) {
+sub RandomTimer_zeitBerechnen  ($$$$) {
    my ($now, $hour, $min, $sec) = @_;
 
    my @jetzt_arr = localtime($now);
@@ -307,7 +307,7 @@ sub zeitBerechnen  ($$$$) {
    return $next;
 }
 ########################################################################
-sub addDays ($$) {
+sub RandomTimer_addDays ($$) {
    my ($now, $days) = @_;
 
    my @jetzt_arr = localtime($now);
@@ -317,7 +317,7 @@ sub addDays ($$) {
 
 }
 ########################################################################
-sub startZeitErmitteln  ($$) {
+sub RandomTimer_startZeitErmitteln  ($$) {
    my ($hash,$now) = @_;
 
    my $timespec_start = $hash->{TIMESPEC_START};
@@ -333,13 +333,13 @@ sub startZeitErmitteln  ($$) {
    if($rel) {
       $startTime = $now + 3600* $hour        + 60* $min       +  $sec;
    } else {
-      $startTime = zeitBerechnen($now, $hour, $min, $sec);
+      $startTime = RandomTimer_zeitBerechnen($now, $hour, $min, $sec);
    }
    $hash->{startTime} = $startTime;
    $hash->{STARTTIME} = strftime("%d.%m.%Y  %H:%M:%S",localtime($startTime));
 }
 ########################################################################
-sub stopZeitErmitteln  ($$) {
+sub RandomTimer_stopZeitErmitteln  ($$) {
    my ($hash,$now) = @_;
 
    my $timespec_stop = $hash->{TIMESPEC_STOP};
@@ -355,34 +355,37 @@ sub stopZeitErmitteln  ($$) {
    if($rel) {
       $stopTime = $hash->{startTime} + 3600* $hour        + 60* $min       +  $sec;
    } else {
-      $stopTime = zeitBerechnen($now, $hour, $min, $sec);
+      $stopTime = RandomTimer_zeitBerechnen($now, $hour, $min, $sec);
    }
    if ($hash->{startTime} > $stopTime) {
-      $stopTime  = addDays($stopTime, 1);
+      $stopTime  = RandomTimer_addDays($stopTime, 1);
    }
    $hash->{stopTime} = $stopTime;
    $hash->{STOPTIME} = strftime("%d.%m.%Y  %H:%M:%S",localtime($stopTime));
 
 }
 ########################################################################
-sub RandomTimer_device_toggle ($)
-{
+sub RandomTimer_device_toggle ($) {
     my ($hash) = @_;
 
-    my $sigma = ($hash->{COMMAND} eq "on") ? $hash->{SIGMAON} : $hash->{SIGMAOFF};
+    my $status = Value($hash->{DEVICE});
+    if ($status ne "on" && $status ne "off" ) {
+       Log3 $hash, 3, "[".$hash->{NAME}."]"." result of function Value($hash->{DEVICE}) must be 'on' or 'off'";
+    }
+    my $sigma = ($status eq "on") ? $hash->{SIGMAON} : $hash->{SIGMAOFF};
 
     my $zufall = int(rand(1000));
-    Log3 $hash, 4,  "[".$hash->{NAME}."]"." Zustand:$hash->{COMMAND} sigma:$sigma random:$zufall->" . ($zufall < $sigma);
+    Log3 $hash, 4,  "[".$hash->{NAME}."]"." IstZustand:$status sigma-$status:$sigma random:$zufall->" . (($zufall < $sigma)?"true":"false");
 
     if ($zufall < $sigma ) {
-       $hash->{COMMAND}  = ($hash->{COMMAND} eq "on") ? "off" : "on";
+       $hash->{COMMAND}  = ($status eq "on") ? "off" : "on";
        RandomTimer_device_switch($hash); 
     }
 }
 ########################################################################
-sub RandomTimer_device_switch ($)
-{
+sub RandomTimer_device_switch ($) {
    my ($hash) = @_;
+   
    my $command = "set @ $hash->{COMMAND}";
    if ($hash->{COMMAND} eq "on") {
       $command = AttrVal($hash->{NAME}, "onCmd", $command);
@@ -394,7 +397,9 @@ sub RandomTimer_device_switch ($)
    Log3 $hash, 4, "[".$hash->{NAME}. "]"." command: $command";
 
    my $ret  = AnalyzeCommandChain(undef, $command);
-   Log3 ($hash, 3, "[$hash->{NAME}] ERROR: " . $ret . " SENDING " . $command) if($ret)
+   Log3 ($hash, 3, "[$hash->{NAME}] ERROR: " . $ret . " SENDING " . $command) if($ret);
+  #Log3  $hash, 3, "[$hash->{NAME}] Value($hash->{COMMAND})=".Value($hash->{DEVICE});
+  #$hash->{"$hash->{COMMAND}Value"} = Value($hash->{DEVICE});
 }
 ########################################################################
 sub RandomTimer_isDisabled($) {

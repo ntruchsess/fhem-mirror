@@ -433,7 +433,7 @@ HUEBridge_Set($@)
 
 
   } else {
-    my $list = "delete creategroup deletegroup savescene modifyscene scene deletewhitelist touchlink autocreate:noArg statusRequest:noArg";
+    my $list = "delete creategroup deletegroup savescene modifyscene scene deletewhitelist touchlink:noArg autodetect:noArg autocreate:noArg statusRequest:noArg";
     $list .= " swupdate:noArg" if( defined($hash->{updatestate}) && $hash->{updatestate} =~ '^2' );
     return "Unknown argument $cmd, choose one of $list";
   }
@@ -830,15 +830,16 @@ HUEBridge_HTTP_Call($$$;$)
     return undef;
   }
 
-#  try {
-#    from_json($ret);
-#  } catch {
-#    return undef;
-#  }
+  my $decoded;
+  if( HUEBridge_isFritzBox() ) {
+    $decoded = eval { decode_json($ret) };
+    Log3 $name, 2, "$name: json error: $@ in $ret" if( $@ );
+  } else {
+    $decoded = eval { from_json($ret) };
+    Log3 $name, 2, "$name: json error: $@ in $ret" if( $@ );
+  }
 
-  return HUEBridge_ProcessResponse($hash,decode_json($ret)) if( HUEBridge_isFritzBox() );
-
-  return HUEBridge_ProcessResponse($hash,from_json($ret));
+  return HUEBridge_ProcessResponse($hash, $decoded);
 }
 
 sub

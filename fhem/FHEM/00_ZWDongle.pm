@@ -1,15 +1,11 @@
 ##############################################
 # $Id$
-# TODO:
-# - routing commands
-# - one command to create a fhem device for all nodeList entries
-# - inclusion mode active only for a given time (pairForSec)
-# - use central readings functions
 package main;
 
 use strict;
 use warnings;
 use Time::HiRes qw(gettimeofday);
+use ZWLib;
 
 sub ZWDongle_Parse($$$);
 sub ZWDongle_Read($@);
@@ -26,9 +22,10 @@ sub ZWDongle_ProcessSendStack($);
 # https://bitbucket.org/bradsjm/aeonzstickdriver
 my %sets = (
   "addNode"          => { cmd => "4a%02x@",    # ZW_ADD_NODE_TO_NETWORK'
-                          param => {nwOn=>0xc1, on=>0x81, off=>0x05 } },
+                          param => { onNw   =>0xc1, on   =>0x81, off=>0x05,
+                                     onNwSec=>0xc1, onSec=>0x81 } },
   "removeNode"       => { cmd => "4b%02x@",    # ZW_REMOVE_NODE_FROM_NETWORK'
-                          param => {nwOn=>0xc1, on=>0x81, off=>0x05 } },
+                          param => {onNw=>0xc1, on=>0x81, off=>0x05 } },
   "createNode"       => { cmd => "60%02x" },   # ZW_REQUEST_NODE_INFO'
   "removeFailedNode" => { cmd => "61%02x@" },   # ZW_REMOVE_FAILED_NODE_ID
   "replaceFailedNode"=> { cmd => "63%02x@" },   # ZW_REPLACE_FAILED_NODE
@@ -45,131 +42,13 @@ my %gets = (
   "getVirtualNodes" => "a5",      # ZW_GET_VIRTUAL_NODES
   "homeId"          => "20",      # MEMORY_GET_ID
   "isFailedNode"    => "62%02x",  # ZW_IS_FAILED_NODE
+  "neighborList"    => "80%02x",  # GET_ROUTING_TABLE_LINE
   "nodeInfo"        => "41%02x",  # ZW_GET_NODE_PROTOCOL_INFO
   "nodeList"        => "02",      # SERIAL_API_GET_INIT_DATA
   "random"          => "1c%02x",  # ZW_GET_RANDOM
   "version"         => "15",      # ZW_GET_VERSION
   "timeouts"        => "06",      # SERIAL_API_SET_TIMEOUTS
-
   "raw"             => "%s",            # hex
-);
-
-# Known controller function. 
-# Note: Known != implemented, see %sets & %gets for the implemented ones.
-use vars qw(%zw_func_id);
-use vars qw(%zw_type6);
-
-%zw_func_id= (
-  '02'  => 'SERIAL_API_GET_INIT_DATA',
-  '03'  => 'SERIAL_API_APPL_NODE_INFORMATION',
-  '04'  => 'APPLICATION_COMMAND_HANDLER',
-  '05'  => 'ZW_GET_CONTROLLER_CAPABILITIES',
-  '06'  => 'SERIAL_API_SET_TIMEOUTS',
-  '07'  => 'SERIAL_API_GET_CAPABILITIES',
-  '08'  => 'SERIAL_API_SOFT_RESET',
-  '10'  => 'ZW_SET_R_F_RECEIVE_MODE',
-  '11'  => 'ZW_SET_SLEEP_MODE',
-  '12'  => 'ZW_SEND_NODE_INFORMATION',
-  '13'  => 'ZW_SEND_DATA',
-  '14'  => 'ZW_SEND_DATA_MULTI',
-  '15'  => 'ZW_GET_VERSION',
-  '16'  => 'ZW_SEND_DATA_ABORT',
-  '17'  => 'ZW_R_F_POWER_LEVEL_SET',
-  '18'  => 'ZW_SEND_DATA_META',
-  '1c'  => 'ZW_GET_RANDOM',
-  '20'  => 'MEMORY_GET_ID',
-  '21'  => 'MEMORY_GET_BYTE',
-  '22'  => 'MEMORY_PUT_BYTE',
-  '23'  => 'MEMORY_GET_BUFFER',
-  '24'  => 'MEMORY_PUT_BUFFER',
-  '27'  => 'FLASH_AUTO_PROG_SET',
-  '29'  => 'NVM_GET_ID',
-  '2a'  => 'NVM_EXT_READ_LONG_BUFFER',
-  '2b'  => 'NVM_EXT_WRITE_LONG_BUFFER',
-  '2c'  => 'NVM_EXT_READ_LONG_BYTE',
-  '2d'  => 'NVM_EXT_WRITE_LONG_BYTE',
-  '30'  => 'CLOCK_SET',
-  '31'  => 'CLOCK_GET',
-  '32'  => 'CLOCK_COMPARE',
-  '33'  => 'RTC_TIMER_CREATE',
-  '34'  => 'RTC_TIMER_READ',
-  '35'  => 'RTC_TIMER_DELETE',
-  '36'  => 'RTC_TIMER_CALL',
-  '40'  => 'ZW_SET_LEARN_NODE_STATE',
-  '41'  => 'ZW_GET_NODE_PROTOCOL_INFO',
-  '42'  => 'ZW_SET_DEFAULT',
-  '43'  => 'ZW_NEW_CONTROLLER',
-  '44'  => 'ZW_REPLICATION_COMMAND_COMPLETE',
-  '45'  => 'ZW_REPLICATION_SEND_DATA',
-  '46'  => 'ZW_ASSIGN_RETURN_ROUTE',
-  '47'  => 'ZW_DELETE_RETURN_ROUTE',
-  '48'  => 'ZW_REQUEST_NODE_NEIGHBOR_UPDATE',
-  '49'  => 'ZW_APPLICATION_UPDATE',
-  '4a'  => 'ZW_ADD_NODE_TO_NETWORK',
-  '4b'  => 'ZW_REMOVE_NODE_FROM_NETWORK',
-  '4c'  => 'ZW_CREATE_NEW_PRIMARY',
-  '4d'  => 'ZW_CONTROLLER_CHANGE',
-  '50'  => 'ZW_SET_LEARN_MODE',
-  '51'  => 'ZW_ASSIGN_SUC_RETURN_ROUTE',
-  '52'  => 'ZW_ENABLE_SUC',
-  '53'  => 'ZW_REQUEST_NETWORK_UPDATE',
-  '54'  => 'ZW_SET_SUC_NODE_ID',
-  '55'  => 'ZW_DELETE_SUC_RETURN_ROUTE',
-  '56'  => 'ZW_GET_SUC_NODE_ID',
-  '57'  => 'ZW_SEND_SUC_ID',
-  '59'  => 'ZW_REDISCOVERY_NEEDED',
-  '5e'  => 'ZW_EXPLORE_REQUEST_INCLUSION',
-  '60'  => 'ZW_REQUEST_NODE_INFO',
-  '61'  => 'ZW_REMOVE_FAILED_NODE_ID',
-  '62'  => 'ZW_IS_FAILED_NODE',
-  '63'  => 'ZW_REPLACE_FAILED_NODE',
-  '70'  => 'TIMER_START',
-  '71'  => 'TIMER_RESTART',
-  '72'  => 'TIMER_CANCEL',
-  '73'  => 'TIMER_CALL',
-  '80'  => 'GET_ROUTING_TABLE_LINE',
-  '81'  => 'GET_T_X_COUNTER',
-  '82'  => 'RESET_T_X_COUNTER',
-  '83'  => 'STORE_NODE_INFO',
-  '84'  => 'STORE_HOME_ID',
-  '90'  => 'LOCK_ROUTE_RESPONSE',
-  '91'  => 'ZW_SEND_DATA_ROUTE_DEMO',
-  '95'  => 'SERIAL_API_TEST',
-  'a0'  => 'SERIAL_API_SLAVE_NODE_INFO',
-  'a1'  => 'APPLICATION_SLAVE_COMMAND_HANDLER',
-  'a2'  => 'ZW_SEND_SLAVE_NODE_INFO',
-  'a3'  => 'ZW_SEND_SLAVE_DATA',
-  'a4'  => 'ZW_SET_SLAVE_LEARN_MODE',
-  'a5'  => 'ZW_GET_VIRTUAL_NODES',
-  'a6'  => 'ZW_IS_VIRTUAL_NODE',
-  'b6'  => 'ZW_WATCHDOG_ENABLE',
-  'b7'  => 'ZW_WATCHDOG_DISABLE',
-  'b8'  => 'ZW_WATCHDOG_CHECK',
-  'b9'  => 'ZW_SET_EXT_INT_LEVEL',
-  'ba'  => 'ZW_RF_POWERLEVEL_GET',
-  'bb'  => 'ZW_GET_NEIGHBOR_COUNT',
-  'bc'  => 'ZW_ARE_NODES_NEIGHBOURS',
-  'bd'  => 'ZW_TYPE_LIBRARY',
-  'be'  => 'ZW_SEND_TEST_FRAME',
-  'bf'  => 'ZW_GET_PROTOCOL_STATUS',
-  'd0'  => 'ZW_SET_PROMISCUOUS_MODE',
-  'd2'  => 'WATCHDOG_START',
-  'd3'  => 'WATCHDOG_STOP',
-  'f2'  => 'ZME_FREQ_CHANGE',
-  'f4'  => 'ZME_BOOTLOADER_FLASH',
-);
-
-%zw_type6 = (
-  '01' => 'GENERIC_CONTROLLER',    '12' => 'SWITCH_REMOTE',
-  '02' => 'STATIC_CONTROLLER',     '13' => 'SWITCH_TOGGLE',
-  '03' => 'AV_CONTROL_POINT',      '20' => 'SENSOR_BINARY',
-  '06' => 'DISPLAY',               '21' => 'SENSOR_MULTILEVEL',
-  '07' => 'GARAGE_DOOR',           '22' => 'WATER_CONTROL',
-  '08' => 'THERMOSTAT',            '30' => 'METER_PULSE',
-  '09' => 'WINDOW_COVERING',       '40' => 'ENTRY_CONTROL',
-  '0F' => 'REPEATER_SLAVE',        '50' => 'SEMI_INTEROPERABLE',
-  '10' => 'SWITCH_BINARY',         'ff' => 'NON_INTEROPERABLE',
-  '11' => 'SWITCH_MULTILEVEL',
 );
 
 sub
@@ -224,7 +103,7 @@ ZWDongle_Define($$)
     Log3 $name, 1, 
         "$name device is none (homeId:$1), commands will be echoed only";
     $attr{$name}{dummy} = 1;
-    $hash->{STATE} = "dummy";
+    readingsSingleUpdate($hash, "state", "dummy", 1);
     return undef;
 
   } elsif($dev !~ m/@/ && $dev !~ m/:/) {
@@ -279,11 +158,26 @@ ZWDongle_Set($@)
     return;
   }
 
+  if(($type eq "removeFailedNode" ||
+      $type eq "replaceFailedNode" ||
+      $type eq "sendNIF") &&
+     $defs{$a[0]} && $defs{$a[0]}{nodeIdHex}) {
+    $a[0] = hex($defs{$a[0]}{nodeIdHex});
+  }
+
   my $cmd = $sets{$type}{cmd};
   my $fb = substr($cmd, 0, 2);
   if($fb =~ m/^[0-8A-F]+$/i &&
      ReadingsVal($name, "caps","") !~ m/\b$zw_func_id{$fb}\b/) {
     return "$type is unsupported by this controller";
+  }
+
+  if($type eq "addNode") {
+    if($a[0] && $a[0] =~ m/sec/i) {
+      $hash->{addSecure} = 1;
+    } else {
+      delete($hash->{addSecure});
+    }
   }
 
   my $par = $sets{$type}{param};
@@ -301,22 +195,14 @@ ZWDongle_Set($@)
     $cmd =~ s/\@/$c/g;
   }
 
-  if($type eq "addNode") {
-    if(@a == 2 && $a[1] =~ m/^sec/i) {
-      $hash->{addSecure} = pop(@a);
-    } else {
-      delete($hash->{addSecure});
-    }
-  }
 
   my @ca = split("%", $cmd, -1);
   my $nargs = int(@ca)-1;
   return "set $name $type needs $nargs arguments" if($nargs != int(@a));
 
-  ZWDongle_Write($hash,  "00", sprintf($cmd, @a));
+  ZWDongle_Write($hash, "",  "00".sprintf($cmd, @a));
   return undef;
 }
-
 
 #####################################
 sub
@@ -326,50 +212,57 @@ ZWDongle_Get($@)
   my $name = shift @a;
 
   return "\"get $name\" needs at least one parameter" if(@a < 1);
-  my $type = shift @a;
+  my $cmd = shift @a;
 
-  return "Unknown argument $type, choose one of " .
+  return "Unknown argument $cmd, choose one of " .
         join(" ", map { $gets{$_} =~ m/%/ ? $_ : "$_:noArg" } sort keys %gets)
-        if(!defined($gets{$type}));
+        if(!defined($gets{$cmd}));
 
-  my $fb = substr($gets{$type}, 0, 2);
-  if($fb =~ m/^[0-8A-F]+$/i && $type ne "caps" &&
+  my $fb = substr($gets{$cmd}, 0, 2);
+  if($fb =~ m/^[0-8A-F]+$/i && $cmd ne "caps" &&
      ReadingsVal($name, "caps","") !~ m/\b$zw_func_id{$fb}\b/) {
-    return "$type is unsupported by this controller";
+    return "$cmd is unsupported by this controller";
   }
 
-  Log3 $hash, 4, "ZWDongle get $name $type ".join(" ",@a);
-  my @ga = split("%", $gets{$type}, -1);
+  Log3 $hash, 4, "ZWDongle get $name $cmd ".join(" ",@a);
+
+  if($cmd eq "neighborList") {
+    my @b;
+    @b = grep(!/onlyRep/i,  @a); my $onlyRep = (@b != @a); @a = @b;
+    @b = grep(!/excludeDead/i,  @a); my $exclDead = (@b != @a); @a = @b;
+    $gets{neighborList} = "80%02x".($exclDead ?"00":"01").($onlyRep ?"01":"00");
+    return "Usage: get $name $cmd [excludeDead] [onlyRep] nodeId"
+        if(int(@a) != 1);
+  }
+
+  my @ga = split("%", $gets{$cmd}, -1);
   my $nargs = int(@ga)-1;
-  return "get $name $type needs $nargs arguments" if($nargs != int(@a));
+  return "get $name $cmd needs $nargs arguments" if($nargs != int(@a));
 
-  return "No $type for dummies" if(IsDummy($name));
+  return "No $cmd for dummies" if(IsDummy($name));
 
-  my $out = sprintf($gets{$type}, @a);
-  ZWDongle_Write($hash,  "00", $out);
+  if(($cmd eq "neighborList" ||
+      $cmd eq "nodeInfo" ||
+      $cmd eq "isFailedNode") &&
+     $defs{$a[0]} && $defs{$a[0]}{nodeIdHex}) {
+    $a[0] = hex($defs{$a[0]}{nodeIdHex});
+  }
+
+  my $out = sprintf($gets{$cmd}, @a);
+  ZWDongle_Write($hash, "", "00".$out);
   my $re = "^01".substr($out,0,2);  # Start with <01><len><01><CMD>
-  my ($err, $ret) = ZWDongle_ReadAnswer($hash, $type, $re);
+  my ($err, $ret) = ZWDongle_ReadAnswer($hash, $cmd, $re);
   return $err if($err);
 
   my $msg="";
   $msg = $ret if($ret);
   my @r = map { ord($_) } split("", pack('H*', $ret)) if(defined($ret));
 
-  if($type eq "nodeList") {                     ############################
-    return "$name: Bogus data received" if(int(@r) != 36);
-    my @list;
-    for my $byte (0..28) {
-      my $bits = $r[5+$byte];
-      for my $bit (0..7) {
-        next if(!($bits & (1<<$bit)));
-        my $idx = $byte*8+$bit+1;
-        my @l = devspec2array(sprintf(".*:FILTER=nodeIdHex=%02x", $idx));
-        push @list, ($l[0] && $defs{$l[0]} ? $l[0] : "UNKNOWN_$idx");
-      }
-    }
-    $msg = join(" ", @list);
+  if($cmd eq "nodeList") {                     ############################
+    $msg =~ s/^.{10}(.{58}).*/$1/;
+    $msg = zwlib_parseNeighborList($hash, $msg);
 
-  } elsif($type eq "caps") {                    ############################
+  } elsif($cmd eq "caps") {                    ############################
     $msg  = sprintf("Vers:%d Rev:%d ",       $r[2], $r[3]);
     $msg .= sprintf("ManufID:%02x%02x ",     $r[4], $r[5]);
     $msg .= sprintf("ProductType:%02x%02x ", $r[6], $r[7]);
@@ -385,21 +278,21 @@ ZWDongle_Get($@)
     }
     $msg .= " ".join(" ",@list);
 
-  } elsif($type eq "homeId") {                  ############################
+  } elsif($cmd eq "homeId") {                  ############################
     $msg = sprintf("HomeId:%s CtrlNodeId:%s", 
                 substr($ret,4,8), substr($ret,12,2));
     $hash->{homeId} = substr($ret,4,8);
     $hash->{nodeIdHex} = substr($ret,12,2);
     $attr{NAME}{homeId} = substr($ret,4,8);
 
-  } elsif($type eq "version") {                 ############################
+  } elsif($cmd eq "version") {                 ############################
     $msg = join("",  map { chr($_) } @r[2..13]);
     my @type = qw( STATIC_CONTROLLER CONTROLLER ENHANCED_SLAVE
                    SLAVE INSTALLER NO_INTELLIGENT_LIFE BRIDGE_CONTROLLER);
     my $idx = $r[14]-1;
     $msg .= " $type[$idx]" if($idx >= 0 && $idx <= $#type);
 
-  } elsif($type eq "ctrlCaps") {                ############################
+  } elsif($cmd eq "ctrlCaps") {                ############################
     my @type = qw(SECONDARY OTHER MEMBER PRIMARY SUC);
     my @list;
     for my $bit (0..7) {
@@ -407,10 +300,10 @@ ZWDongle_Get($@)
     }
     $msg = join(" ", @list);
 
-  } elsif($type eq "getVirtualNodes") {         ############################
+  } elsif($cmd eq "getVirtualNodes") {         ############################
     $msg = join(" ", @r);
 
-  } elsif($type eq "nodeInfo") {                 ############################
+  } elsif($cmd eq "nodeInfo") {                ############################
     my $id = sprintf("%02x", $r[6]);
     if($id eq "00") {
       $msg = "node $a[0] is not present";
@@ -429,20 +322,24 @@ ZWDongle_Get($@)
       $msg = join(" ", @list);
     }
 
-  } elsif($type eq "random") {                  ############################
+  } elsif($cmd eq "random") {                  ############################
     return "$name: Cannot generate" if($ret !~ m/^011c01(..)(.*)$/);
     $msg = $2; @a = ();
 
-  } elsif($type eq "isFailedNode") {                  ############################
+  } elsif($cmd eq "isFailedNode") {            ############################
     $msg = ($r[2]==1)?"yes":"no";
+
+  } elsif($cmd eq "neighborList") {            ############################
+    $msg =~ s/^....//;
+    $msg = zwlib_parseNeighborList($hash, $msg);
 
   }
 
-  $type .= "_".join("_", @a) if(@a);
-  $hash->{READINGS}{$type}{VAL} = $msg;
-  $hash->{READINGS}{$type}{TIME} = TimeNow();
+  $cmd .= "_".join("_", @a) if(@a);
+  $hash->{READINGS}{$cmd}{VAL} = $msg;
+  $hash->{READINGS}{$cmd}{TIME} = TimeNow();
 
-  return "$name $type => $msg";
+  return "$name $cmd => $msg";
 }
 
 #####################################
@@ -486,27 +383,15 @@ ZWDongle_DoInit($)
 
 #####################################
 sub
-ZWDongle_CheckSum($)
-{
-  my ($data) = @_;
-  my $cs = 0xff;
-  map { $cs ^= ord($_) } split("", pack('H*', $data));
-  return sprintf("%02x", $cs);
-}
-
-
-#####################################
-sub
 ZWDongle_Write($$$)
 {
   my ($hash,$fn,$msg) = @_;
 
-  Log3 $hash, 5, "ZWDongle_Write $fn $msg";
+  Log3 $hash, 5, "ZWDongle_Write $msg ($fn)";
   # assemble complete message
-  $msg = "$fn$msg";
   $msg = sprintf("%02x%s", length($msg)/2+1, $msg);
 
-  $msg = "01$msg" . ZWDongle_CheckSum($msg);
+  $msg = "01$msg" . zwlib_checkSum_8($msg);
   push @{$hash->{SendStack}}, $msg;
 
   ZWDongle_ProcessSendStack($hash);
@@ -652,7 +537,7 @@ ZWDongle_Read($@)
     my $rcs  = substr($data, $l+2, 2);          # Received Checksum
     $data = substr($data, $l+4);
 
-    my $ccs = ZWDongle_CheckSum("$len$msg");    # Computed Checksum
+    my $ccs = zwlib_checkSum_8("$len$msg");    # Computed Checksum
     if($rcs ne $ccs) {
       Log3 $name, 1,
            "$name: wrong checksum: received $rcs, computed $ccs for $len$msg";
@@ -750,7 +635,8 @@ ZWDongle_Parse($$$)
 {
   my ($hash, $name, $rmsg) = @_;
 
-  if(!defined($hash->{STATE}) || $hash->{STATE} ne "Initialized"){
+  if(!defined($hash->{STATE}) || 
+     ReadingsVal($name, "state", "") ne "Initialized"){
     Log3 $hash, 4,"ZWDongle_Parse $rmsg: dongle not yet initialized";
     return;
   }
@@ -774,11 +660,11 @@ ZWDongle_Attr($$$$)
   if($attr eq "disable") {
     if($cmd eq "set" && ($value || !defined($value))) {
       DevIo_CloseDev($hash) if(!AttrVal($name,"dummy",undef));
-      $hash->{STATE} = "disabled";
+      readingsSingleUpdate($hash, "state", "disabled", 1);
 
     } else {
       if(AttrVal($name,"dummy",undef)) {
-        $hash->{STATE} = "dummy";
+        readingsSingleUpdate($hash, "state", "dummy", 1);
         return;
       }
       DevIo_OpenDev($hash, 0, "ZWDongle_DoInit");
@@ -808,7 +694,7 @@ ZWDongle_Ready($)
   return undef if (IsDisabled($hash->{NAME}));
 
   return DevIo_OpenDev($hash, 1, "ZWDongle_DoInit")
-                if($hash->{STATE} eq "disconnected");
+            if(ReadingsVal($hash->{NAME}, "state","") eq "disconnected");
 
   # This is relevant for windows/USB only
   my $po = $hash->{USBDev};
@@ -818,6 +704,7 @@ ZWDongle_Ready($)
   }
   return 0;
 }
+
 
 1;
 
@@ -855,22 +742,23 @@ ZWDongle_Ready($)
   <b>Set</b>
   <ul>
 
-  <li>addNode [nwOn|on|off] [sec]<br>
+  <li>addNode [on|onNw|onSec|onNwSec|off]<br>
     Activate (or deactivate) inclusion mode. The controller (i.e. the dongle)
     will accept inclusion (i.e. pairing/learning) requests only while in this
     mode. After activating inclusion mode usually you have to press a switch
     three times within 1.5 seconds on the node to be included into the network
     of the controller. If autocreate is active, a fhem device will be created
-    after inclusion. "on" activates standard inclusion. "nwOn" activates network
+    after inclusion. "on" activates standard inclusion. "onNw" activates network
     wide inclusion (only SDK 4.5-4.9, SDK 6.x and above).<br>
-    If sec is specified, the ZWDongle networkKey ist set, and the device
-    supports the SECURITY class, then a secure inclusion is attempted.
+    If onSec/onNwSec is specified, the ZWDongle networkKey ist set, and the
+    device supports the SECURITY class, then a secure inclusion is attempted.
     </li>
 
-  <li>removeNode [nwOn|on|off]<br>
+  <li>removeNode [onNw|on|off]<br>
     Activate (or deactivate) exclusion mode. "on" activates standard exclusion. 
-    "nwOn" activates network wide exclusion (only SDK 4.5-4.9, SDK 6.x and above). 
-    Note: the corresponding fhem device have to be deleted manually.</li>
+    "onNw" activates network wide exclusion (only SDK 4.5-4.9, SDK 6.x and
+    above).  Note: the corresponding fhem device have to be deleted
+    manually.</li>
 
   <li>createNode id<br>
     Request the class information for the specified node, and create a fhem
@@ -911,6 +799,12 @@ ZWDongle_Ready($)
     return different controller specific information. Needed by developers
     only.  </li>
 
+  <li>neighborList [onlyRep] nodeId<br>
+    return data for the decimal nodeId.<br>
+    With onlyRep the result will include only nodes with repeater
+    functionality.
+    </li>
+
   <li>nodeInfo<br>
     return node specific information. Needed by developers only.</li>
 
@@ -930,10 +824,10 @@ ZWDongle_Ready($)
     <li><a href="#do_not_notify">do_not_notify</a></li>
     <li><a href="#model">model</a></li>
     <li><a href="#disable">disable</a></li>
-    <li><a href="#homeId">homeId</a><br>
+    <li><a name="#homeId">homeId</a><br>
       Stores the homeId of the dongle. Is a workaround for some buggy dongles,
       wich sometimes report a wrong/nonexisten homeId (Forum #35126)</li>
-    <li><a href="#networkKey">networkKey</a><br>
+    <li><a name="#networkKey">networkKey</a><br>
       Needed for secure inclusion, hex string with length of 32
       </li>
   </ul>
