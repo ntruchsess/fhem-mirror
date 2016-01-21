@@ -105,7 +105,7 @@ my %static_types = (
   S_ARDUINO_REPEATER_NODE => { receives => [], sends => [] }, # Arduino repeating node device
   S_LOCK                  => { receives => [V_LOCK_STATUS], sends => [V_LOCK_STATUS] }, # Lock device
   S_IR                    => { receives => [V_IR_SEND], sends => [V_IR_RECEIVE] }, # Ir sender/receiver device
-  S_WATER                 => { receives => [], sends => [V_FLOW,V_VOLUME,] }, # Water meter
+  S_WATER                 => { receives => [], sends => [V_FLOW,V_VOLUME,V_VAR1] }, # Water meter
   S_AIR_QUALITY           => { receives => [], sends => [V_LEVEL,V_UNIT_PREFIX] }, # Air quality sensor e.g. MQ-2
   S_CUSTOM                => { receives => [], sends => [V_VAR1,V_VAR2,V_VAR3,V_VAR4,V_VAR5] }, # Use this for custom sensors where no other fits.
   S_DUST                  => { receives => [], sends => [V_LEVEL,V_UNIT_PREFIX] }, # Dust level sensor
