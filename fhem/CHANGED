@@ -1,5 +1,41 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on it.
+  - feature: 73_GasCalculator: New module for calc. around the gas consumption
+  - feature: FB_CALLLIST: new attribute "no-table-header" added, to hide the
+             table header for the whole list
+  - feature: 49_SSCam: Attribute "httptimeout" added
+  - feature: update is executed per default in the background
+  - bugfix:  FB_CALLLIST: fix "Use of uninitialized value" warnings on startup
+  - feature: *** 2016-01-17
+             *** Do not worry about a lot of updates. Many modules were
+             *** modified only to support the new commandref mechanism for
+             *** automatic classification of helper and command modules.
+  - change:  49_SSCam: Change of define-string related to rectime.
+                       Note: see all changes of rectime usage in commandref 
+                       or in Forum:
+                       .../index.php/topic,45671.msg391664.html#msg391664
+  - added:   98_count: count devices specified by devspec or all
+  - bugfix:  57_CALVIEW: bugfix for started terms
+  - feature: 10_KOPP_FC: Receive Mode for dimmer implemented, 
+    change:  10_KOPP_FC: removed "toggle" command, use "on" or "off" instead
+  - change:  49_SSCam: Vars "USERNAME" and "RECTIME" removed from Internals,
+                      Var (Internals) "SERVERNAME" changed to "SERVERADDR",
+                      minor change of Log messages,
+                      Note: use rereadcfg in order to activate the changes
+  - feature: version: version command shows also internal helper modules that
+                      are loaded (HttpUtils, Blocking, ...)
+  - feature: 70_VIERA: Using non blocking for status update.
+                       Added color button for remoteControl and SVG layout
+                       Some new SVG icons for remoteControl layout
+  - change:  73_km200: New attribute "disabled" and default values changed.
+  - feature: HUEbridge: added set deletescene and get scenes detail
+  - feature: HUEDevice: added (hue|sat|ct)(Up|Down) commands
+  - feature: 51_I2C_TSL2561: support non-blocking I2C-IO, especially when
+                             using Firmata over LAN
+  - feature: FB_CALLLIST: new attribute answMachine-is-missed-call to treat
+                          incoming calls, which were taken by an answering 
+                          machine, as "missed call". Only relevant for
+                          list-type "missed-call".
   - change:  FB_CALLMONITOR: reading "missed_call_line" will not be triggered
                              anymore. Use internal_number instead, which
                              contains the same content

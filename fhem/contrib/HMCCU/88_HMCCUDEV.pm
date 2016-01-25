@@ -4,7 +4,7 @@
 #
 #  $Id:$
 #
-#  Version 2.4
+#  Version 2.5
 #
 #  (c) 2015 zap (zap01 <at> t-online <dot> de)
 #
@@ -64,7 +64,7 @@ sub HMCCUDEV_Initialize ($)
 	$hash->{GetFn} = "HMCCUDEV_Get";
 	$hash->{AttrFn} = "HMCCUDEV_Attr";
 
-	$hash->{AttrList} = "IODev ccureadingfilter ccureadingformat:name,address ccureadings:0,1 ccustate statevals substitute statechannel statedatapoint stripnumber:0,1,2 loglevel:0,1,2,3,4,5,6 ". $readingFnAttributes;
+	$hash->{AttrList} = "IODev ccureadingfilter ccureadingformat:name,address ccureadings:0,1 ccustate ccuget:State,Value statevals substitute statechannel statedatapoint controldatapoint stripnumber:0,1,2 loglevel:0,1,2,3,4,5,6 ". $readingFnAttributes;
 }
 
 #####################################
@@ -83,6 +83,8 @@ sub HMCCUDEV_Define ($@)
 	my $devname = shift @a;
 	my $devtype = shift @a;
 	my $devspec = shift @a;
+
+	return "Invalid or unknown CCU device name or address" if (! HMCCU_IsValidDevice ($devspec));
 
 	if ($devspec =~ /^(.+)\.([A-Z]{3,3}[0-9]{7,7})$/) {
 		# CCU Device address with interface
@@ -134,6 +136,7 @@ sub HMCCUDEV_Define ($@)
 	AssignIoPort ($hash);
 
 	readingsSingleUpdate ($hash, "state", "Initialized", 1);
+	$hash->{ccudevstate} = 'Active';
 
 	return undef;
 }
@@ -192,6 +195,7 @@ sub HMCCUDEV_Set ($@)
 	my $statechannel = AttrVal ($name, "statechannel", '');
 	my $statedatapoint = AttrVal ($name, "statedatapoint", 'STATE');
 	my $statevals = AttrVal ($name, "statevals", '');
+	my $controldatapoint = AttrVal ($name, "controldatapoint", '');
 
 	my $hmccu_hash = $hash->{IODev};
 	my $hmccu_name = $hash->{IODev}->{NAME};
@@ -216,6 +220,16 @@ sub HMCCUDEV_Set ($@)
 
 		usleep (100000);
 		($rc, $result) = HMCCU_GetDatapoint ($hash, $objname);
+		return HMCCUDEV_SetError ($hash, $rc) if ($rc < 0);
+
+		HMCCU_SetState ($hash, "OK");
+		return undef;
+	}
+	elsif ($opt eq 'control') {
+		return HMCCUDEV_SetError ($hash, "Attribute control datapoint not set") if ($controldatapoint eq '');
+		my $objvalue = shift @a;
+		my $objname = $hash->{ccuif}.'.'.$hash->{ccuaddr}.':'.$controldatapoint;
+		$rc = HMCCU_SetDatapoint ($hash, $objname, $objvalue);
 		return HMCCUDEV_SetError ($hash, $rc) if ($rc < 0);
 
 		HMCCU_SetState ($hash, "OK");
@@ -255,7 +269,7 @@ sub HMCCUDEV_Set ($@)
 		return undef;
 	}
 	else {
-		my $retmsg = "HMCCUDEV: Unknown argument $opt, choose one of config datapoint";
+		my $retmsg = "HMCCUDEV: Unknown argument $opt, choose one of config control datapoint";
 		return undef if ($hash->{statevals} eq 'readonly');
 
 		if ($statechannel ne '') {
@@ -346,13 +360,23 @@ sub HMCCUDEV_Get ($@)
 		return $ccureadings ? undef : $result;
 	}
 	elsif ($opt eq 'update') {
-		$rc = HMCCU_GetUpdate ($hash, $hash->{ccuaddr});
+		my $ccuget = shift @a;
+		$ccuget = 'Attr' if (!defined ($ccuget));
+		if ($ccuget !~ /^(Attr|State|Value)$/) {
+			return HMCCUDEV_SetError ($hash, "Usage: get $name update [{'State'|'Value'}]");
+		}
+		$rc = HMCCU_GetUpdate ($hash, $hash->{ccuaddr}, $ccuget);
 		return HMCCUDEV_SetError ($hash, $rc) if ($rc < 0);
 
 		return undef;
 	}
 	elsif ($opt eq 'deviceinfo') {
-		$result = HMCCU_GetDeviceInfo ($hash, $hash->{ccuaddr});
+		my $ccuget = shift @a;
+		$ccuget = 'Attr' if (!defined ($ccuget));
+		if ($ccuget !~ /^(Attr|State|Value)$/) {
+			return HMCCUDEV_SetError ($hash, "Usage: get $name deviceinfo [{'State'|'Value'}]");
+		}
+		$result = HMCCU_GetDeviceInfo ($hash, $hash->{ccuaddr}, $ccuget);
 		return HMCCUDEV_SetError ($hash, -2) if ($result eq '');
 		return $result;
 	}
@@ -397,7 +421,8 @@ sub HMCCUDEV_SetError ($$)
         my %errlist = (
            -1 => 'Channel name or address invalid',
            -2 => 'Execution of CCU script failed',
-           -3 => 'Cannot detect IO device'
+           -3 => 'Cannot detect IO device',
+	   -4 => 'Device deleted in CCU'
         );
 
         if (exists ($errlist{$text})) {
@@ -501,9 +526,11 @@ sub HMCCUDEV_SetError ($$)
          <br/>
          Get description of configuration parameters for CCU device.
       </li><br/>
-      <li>get &lt;name&gt; update
-         <br/>
+      <li>get &lt;name&gt; update [{'State'|'Value'}]<br/>
          Update datapoints / readings of device.
+      </li><br/>
+      <li>get &lt;name&gt; deviceinfo [{'State'|'Value'}]<br/>
+         Display all channels and datapoints of device.
       </li>
    </ul>
    <br/>
@@ -512,9 +539,12 @@ sub HMCCUDEV_SetError ($$)
    <b>Attributes</b><br/>
    <br/>
    <ul>
-      <li>ccureadings &lt;0 | 1&gt;
-         <br/>
-            If set to 1 values read from CCU will be stored as readings.
+      <li>ccuget &lt;State | <u>Value</u>&gt;<br/>
+         Set read access method for CCU channel datapoints. Method 'State' is slower than 'Value' because
+         each request is sent to the device. With method 'Value' only CCU is queried. Default is 'Value'.
+      </li><br/>
+      <li>ccureadings &lt;0 | <u>1</u>&gt;<br/>
+         If set to 1 values read from CCU will be stored as readings. Default is 1.
       </li><br/>
       <li>ccureadingfilter &lt;datapoint-expr&gt;
          <br/>

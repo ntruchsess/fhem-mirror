@@ -139,7 +139,6 @@ sub CommandDisplayAttr($$);
 sub CommandGet($$);
 sub CommandIOWrite($$);
 sub CommandInclude($$);
-sub CommandInform($$);
 sub CommandList($$);
 sub CommandModify($$);
 sub CommandQuit($$);
@@ -153,7 +152,6 @@ sub CommandSetstate($$);
 sub CommandShutdown($$);
 sub CommandSleep($$);
 sub CommandTrigger($$);
-sub CommandVersion($$);
 
 # configDB special
 sub cfgDB_Init;
@@ -164,7 +162,6 @@ sub cfgDB_AttrRead($);
 sub cfgDB_ReadFile($);
 sub cfgDB_UpdateFile($);
 sub cfgDB_WriteFile($@);
-sub cfgDB_svnId;
 
 ##################################################
 # Variables:
@@ -228,12 +225,13 @@ use vars qw($featurelevel);
 use vars qw(@authorize);        # List of authorization devices
 use vars qw(@authenticate);     # List of authentication devices
 use vars qw($auth_refresh);
+use vars qw($cvsid);            # used in 98_version.pm
+$cvsid = '$Id$';
 
 my $AttrList = "verbose:0,1,2,3,4,5 room group comment:textField-long alias ".
                 "eventMap userReadings:textField-long";
 my $currcfgfile="";             # current config/include file
 my $currlogfile;                # logfile, without wildcards
-my $cvsid = '$Id$';
 my $duplidx=0;                  # helper for the above pool
 my $evalSpecials;               # Used by EvalSpecials->AnalyzeCommand
 my $intAtCnt=0;
@@ -334,9 +332,6 @@ $readingFnAttributes = "event-on-change-reading event-on-update-reading ".
             Hlp=>"<devspec> <type dependent>,request data from <devspec>" },
   "include" => { Fn=>"CommandInclude",
             Hlp=>"<filename>,read the commands from <filenname>" },
-  "inform" => { Fn=>"CommandInform",
-            ClientFilter => "telnet",
-            Hlp=>"{on|off|raw|timer|status},echo all events to this client" },
   "iowrite" => { Fn=>"CommandIOWrite",
             Hlp=>"<iodev> <data>,write raw data with iodev" },
   "list"    => { Fn=>"CommandList",
@@ -378,8 +373,6 @@ $readingFnAttributes = "event-on-change-reading event-on-update-reading ".
                                       "[http://.../controlfile],update FHEM" },
   "updatefhem" => { ReplacedBy => "update" },
   "usb"     => { ModuleName => "autocreate" },
-  "version" => { Fn => "CommandVersion",
-            Hlp=>"[filter],print SVN version of loaded modules" },
 );
 
 ###################################################
@@ -501,7 +494,7 @@ if(time() < 2*3600) {
 require RTypes;
 RTypes_Initialize();
 
-my $cfgErrMsg = "Error messages while initializing FHEM:";
+my $cfgErrMsg = "Messages collected while initializing FHEM:";
 my $cfgRet="";
 if(configDBUsed()) {
   my $ret = cfgDB_ReadAll(undef);
@@ -841,7 +834,11 @@ Log3($$$)
 
   no strict "refs";
   foreach my $li (keys %logInform) {
-    &{$logInform{$li}}($li, "$tim $loglevel : $text");
+    if($defs{$li}) {
+      &{$logInform{$li}}($li, "$tim $loglevel : $text");
+    } else {
+      delete $logInform{$li};
+    }
   }
   use strict "refs";
 
@@ -2136,23 +2133,38 @@ CommandList($$)
     if($arg[1]) {
       foreach my $sdev (@list) { # Show a Hash-Entry or Reading for each device
 
-        if($defs{$sdev}) {
-          if(defined($defs{$sdev}{$arg[1]})) {
-            my $val = $defs{$sdev}{$arg[1]};
-            $val = $val->{NAME} if(ref($val) eq 'HASH' && $val->{NAME});
-            $str .= sprintf("%-20s %s\n", $sdev, $val);
+        my $first = 1;
+        foreach  my $n (@arg[1..@arg-1]) {
+          my $fType="";
+          if($n =~ m/^(.:)(.*$)/) {
+            $fType = $1;
+            $n = $2;
+          }    
 
-          } elsif($defs{$sdev}{READINGS} &&
-                  defined($defs{$sdev}{READINGS}{$arg[1]})) {
-            $str .= sprintf("%-20s %s %s\n", $sdev,
-                    $defs{$sdev}{READINGS}{$arg[1]}{TIME},
-                    $defs{$sdev}{READINGS}{$arg[1]}{VAL});
+          if($defs{$sdev}) {
+            if(defined($defs{$sdev}{$n}) && (!$fType || $fType eq "i:")) {
+              my $val = $defs{$sdev}{$n};
+              $val = $val->{NAME} if(ref($val) eq 'HASH' && $val->{NAME});
+              $str .= sprintf("%-20s %*s   %*s %s\n", $first?$sdev:'', $arg[2]?19:0, '',
+                      $arg[2]?-15:0, $arg[2]?$n:'', $val);
 
-          } elsif($attr{$sdev} && 
-                  defined($attr{$sdev}{$arg[1]})) {
-            $str .= sprintf("%-20s %s\n", $sdev, $attr{$sdev}{$arg[1]});
+            } elsif($defs{$sdev}{READINGS} &&
+                    defined($defs{$sdev}{READINGS}{$n})
+                    && (!$fType || $fType eq "r:")) {
+              $str .= sprintf("%-20s %s   %*s %s\n", $first?$sdev:'',
+                      $defs{$sdev}{READINGS}{$n}{TIME},
+                      $arg[2]?-15:0, $arg[2]?$n:'', 
+                      $defs{$sdev}{READINGS}{$n}{VAL});
 
+            } elsif($attr{$sdev} && 
+                    defined($attr{$sdev}{$n})
+                    && (!$fType || $fType eq "a:")) {
+              $str .= sprintf("%-20s %*s   %*s %s\n", $first?$sdev:'', $arg[2]?19:0, '',
+                      $arg[2]?-15:0, $arg[2]?$n:'', $attr{$sdev}{$n});
+
+            }
           }
+          $first = 0;
         }
       }
 
@@ -2642,40 +2654,6 @@ CommandTrigger($$)
 
 #####################################
 sub
-CommandInform($$)
-{
-  my ($cl, $param) = @_;
-
-  return if(!$cl);
-  my $name = $cl->{NAME};
-
-  return "Usage: inform {on|timer|raw|off} [regexp]"
-        if($param !~ m/^(on|off|raw|timer|status)/);
-
-  if($param eq "status") {
-    my $i = $inform{$name};
-    return $i ? ($i->{type} . ($i->{regexp} ? " ".$i->{regexp} : "")) : "off";
-  }
-
-  delete($inform{$name});
-  if($param !~ m/^off/) {
-    my ($type, $regexp) = split(" ", $param);
-    $inform{$name}{NR} = $cl->{NR};
-    $inform{$name}{type} = $type;
-    if($regexp) {
-      eval { "Hallo" =~ m/$regexp/ };
-      return "Bad regexp: $@" if($@);
-      $inform{$name}{regexp} = $regexp;
-    }
-    Log 4, "Setting inform to $param";
-
-  }
-
-  return undef;
-}
-
-#####################################
-sub
 WakeUpFn($)
 {
   my $h = shift;
@@ -2748,43 +2726,6 @@ CommandSleep($$)
 
   }
   return undef;
-}
-
-#####################################
-sub
-CommandVersion($$)
-{
-  my ($cl, $param) = @_;
-
-  my @ret = ("# $cvsid");
-  push @ret, cfgDB_svnId if(configDBUsed());
-  my $max = 7 ; # length("fhem.pl") = 7
-  
-  foreach my $m (sort {uc($a) cmp uc($b)} keys %modules) {
-    next if(!$modules{$m}{LOADED} ||
-             $modules{$m}{ORDER} < 0 ||
-             ($param && $m !~ /$param/));
-    Log 4, "Looking for SVN Id in module $m";
-    my $fn = "$attr{global}{modpath}/FHEM/".$modules{$m}{ORDER}."_$m.pm"; 
-    if($max < length($modules{$m}{ORDER}."_$m.pm")) {
-      $max = length($modules{$m}{ORDER}."_$m.pm")
-    }
-    if(!open(FH, $fn)) {
-      my $ret = "$fn: $!";
-      if(configDBUsed()){
-        Log 4, "Looking for module $m in configDB to find SVN Id";
-        $ret = cfgDB_Fileversion($fn,$ret);
-      }
-      push @ret, $ret;
-    } else {
-      push @ret, grep(/\$Id. [^\$\n\r].+\$/, <FH>);
-    }
-  }
-  @ret = map {/\$Id. (\S+) (\d+) (.+?)\$/ ? sprintf("%-".$max."s %5d %s",$1,$2,$3) : $_}
-        @ret; 
-  
-  return sprintf("%-".$max."s %s","File","Rev   Last Change\n\n").
-         join("\n", grep((defined($param) ? ($_ =~ /$param/) : 1), @ret));
 }
 
 #####################################
@@ -3164,6 +3105,7 @@ DoTrigger($$@)
 
   if(!defined($hash->{INTRIGGER})) {
     delete($hash->{CHANGED});
+    delete($hash->{CHANGETIME});
     delete($hash->{CHANGEDWITHSTATE});
   }
 

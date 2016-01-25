@@ -54,6 +54,7 @@ FHEM/10_FS20.pm              rudolfkoenig         http://forum.fhem.de SlowRF
 FHEM/00_HXBDevice.pm         borisneubert         http://forum.fhem.de Sonstige Systeme
 FHEM/10_IT.pm                dancer0705/bjoernh   http://forum.fhem.de InterTechno
 FHEM/10_Itach_IR             ulimaass             http://forum.fhem.de Sonstige Systeme
+FHEM/10_KOPP_FC.pm           raspii               http://forum.fhem.de/index.php/topic,32048.30.html#lastPost
 FHEM/10_MAX.pm               mgehre               http://forum.fhem.de MAX
 FHEM/10_MQTT_BRIDGE          ntruchsess           http://forum.fhem.de Sonstige Systeme
 FHEM/10_MQTT_DEVICE          ntruchsess           http://forum.fhem.de Sonstige Systeme
@@ -191,7 +192,7 @@ FHEM/52_I2C_PCA9532          klausw               http://forum.fhem.de Sonstige 
 FHEM/52_I2C_PCA9685          klausw               http://forum.fhem.de Sonstige Systeme
 FHEM/52_I2C_PCF8574          klausw               http://forum.fhem.de Sonstige Systeme
 FHEM/52_I2C_SHT21            klausw               http://forum.fhem.de Sonstige Systeme
-FHEM/52_I2C_TSL2561          kaihs                http://forum.fhem.de Sonstige Systeme
+FHEM/52_I2C_TSL2561          jensb                http://forum.fhem.de Sonstige Systeme
 FHEM/53_GHoma.pm             klausw               http://forum.fhem.de Sonstige Systeme
 FHEM/55_GDS.pm               betateilchen         http://forum.fhem.de Unterstuetzende Dienste
 FHEM/55_InfoPanel.pm         betateilchen         http://forum.fhem.de Unterstuetzende Dienste
@@ -251,9 +252,9 @@ FHEM/75_msgConfig.pm         loredo               http://forum.fhem.de Automatis
 FHEM/76_MSGFile.pm           gandy                http://forum.fhem.de Automatisierung
 FHEM/76_MSGMail.pm           gandy                http://forum.fhem.de Automatisierung
 FHEM/80_M232.pm              borisneubert         http://forum.fhem.de Sonstige Systeme
-FHEM/80_xxLG7000.pm          painseeker           http://forum.fhem.de Sonstiges
+FHEM/80_xxLG7000.pm          markusbloch          http://forum.fhem.de Multimedia
 FHEM/81_M232Counter.pm       borisneubert         http://forum.fhem.de Sonstige Systeme
-FHEM/82_LGTV.pm              painseeker           http://forum.fhem.de Sonstiges
+FHEM/82_LGTV.pm              markusbloch          http://forum.fhem.de Multimedia
 FHEM/82_M232Voltage.pm       borisneubert         http://forum.fhem.de Sonstige Systeme
 FHEM/87_WS2000.pm            tdressler            http://forum.fhem.de Sonstiges
 FHEM/88_ALL4000T.pm          sachag               http://forum.fhem.de Sonstiges
@@ -313,6 +314,7 @@ FHEM/98_cloneDummy.pm        Joachim              http://forum.fhem.de Automatis
 FHEM/98_cmdalias.pm          rudolfkoenig         http://forum.fhem.de Automatisierung
 FHEM/98_configdb.pm          betateilchen         http://forum.fhem.de Sonstiges
 FHEM/98_copy.pm              justme1968           http://forum.fhem.de Sonstiges
+FHEM/98_count.pm             betateilchen         http://forum.fhem.de Sonstiges
 FHEM/98_CustomReadings.pm    HCS                  http://forum.fhem.de Unterstuetzende Dienste
 FHEM/98_dewpoint.pm          Joachim              http://forum.fhem.de Automatisierung
 FHEM/98_dummy.pm             rudolfkoenig         http://forum.fhem.de Automatisierung
@@ -320,6 +322,7 @@ FHEM/98_fheminfo.pm          mfr69bs              http://forum.fhem.de Sonstiges
 FHEM/98_help.pm              betateilchen         http://forum.fhem.de Sonstiges
 FHEM/98_HourCounter.pm       john                 http://forum.fhem.de MAX
 FHEM/98_logProxy.pm          justme1968           http://forum.fhem.de Frontends
+FHEM/98_MaxScanner.pm        john                 http://forum.fhem.de MAX
 FHEM/98_notice.pm            mfr69bs              http://forum.fhem.de Sonstiges
 FHEM/98_pilight.pm           andreas-fey          http://forum.fhem.de Unterstuetzende Dienste
 FHEM/98_ping                 mattwire             http://forum.fhem.de Sonstiges
@@ -330,6 +333,7 @@ FHEM/98_statistics.pm        tupol                http://forum.fhem.de Unterstue
 FHEM/98_structure.pm         rudolfkoenig         http://forum.fhem.de Automatisierung
 FHEM/98_telnet.pm            rudolfkoenig         http://forum.fhem.de Automatisierung
 FHEM/98_update.pm            rudolfkoenig         http://forum.fhem.de Sonstiges
+FHEM/98_version.pm           markusbloch          http://forum.fhem.de Sonstiges
 FHEM/98_weblink.pm           rudolfkoenig         http://forum.fhem.de Frontends
 FHME/98_weekprofile.pm       risiko               http://forum.fhem.de Frontends
 FHEM/99_SUNRISE_EL.pm        rudolfkoenig         http://forum.fhem.de Automatisierung
@@ -379,6 +383,7 @@ www/codemirror/*             rapster              http://forum.fhem.de Frontends
 www/gplot/*                  rudolfkoenig         http://forum.fhem.de Frontends
 www/images/*                 ulimaass             http://forum.fhem.de Frontends
 www/pgm2/dashboard/*         svenson08            http://forum.fhem.de Frontends
+www/pgm2/fhemweb_readingsGroup.js  justme1968     http://forum.fhem.de Frontends
 www/pgm2/fhemweb_readingsHistory.js  justme1968   http://forum.fhem.de Frontends
 www/pgm2/fhemweb_sortable.js markusbloch          http://forum.fhem.de Frontends
 www/pgm2/fhemweb_fbcalllist.js markusbloch        http://forum.fhem.de Frontends
@@ -390,6 +395,8 @@ www/frontend/*               johannnes            http://forum.fhem.de Frontends
 
 docs/fhem-floorplan-*        ulimaass             http://forum.fhem.de Sonstiges
 docs/*                       rudolfkoenig         http://forum.fhem.de Sonstiges
+
+http://debian.fhem.de        betateilchen         http://forum.fhem.de Sonstiges
 
 Files that every developer should modify/extend
   MAINTAINER.txt

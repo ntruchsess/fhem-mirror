@@ -945,8 +945,6 @@ sub RESIDENTStk_wakeupRun($;$) {
     my $lastRunTimestamp =
       ReadingsTimestamp( $NAME, "lastRun", "1970-01-01 00:00:00" );
     my $nextRun = ReadingsVal( $NAME, "nextRun", "06:00" );
-    my $nextRunTimestamp =
-      ReadingsTimestamp( $NAME, "nextRun", "1970-01-01 00:00:00" );
     my $wakeupUserdeviceState  = ReadingsVal( $wakeupUserdevice, "state",  0 );
     my $wakeupUserdeviceWakeup = ReadingsVal( $wakeupUserdevice, "wakeup", 0 );
     my $room         = AttrVal( $NAME, "room", 0 );
@@ -969,15 +967,19 @@ sub RESIDENTStk_wakeupRun($;$) {
     }
 
     my ( $sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst ) =
-      localtime( time + $wakeupOffset * 60 );
-    $mon += 01;
+      localtime( time() + $wakeupOffset * 60 );
 
-    $hour = "0" . $hour if ( $hour < 10 );
-    $min  = "0" . $min  if ( $min < 10 );
+    $year += 1900;
+    $mon++;
+    $mon   = "0" . $mon if ( $mon < 10 );
+    $mday  = "0" . $mday  if ( $mday < 10 );
+    $hour  = "0" . $hour if ( $hour < 10 );
+    $min   = "0" . $min  if ( $min < 10 );
+    $sec   = "0" . $sec  if ( $sec < 10 );
 
     my $nowRun = $hour . ":" . $min;
     my $nowRunSec =
-      RESIDENTStk_Datetime2Timestamp( $year . "-"
+      time_str2num( $year . "-"
           . $mon . "-"
           . $mday . " "
           . $hour . ":"
@@ -991,24 +993,6 @@ sub RESIDENTStk_wakeupRun($;$) {
     else {
         $lastRun = $nextRun;
         Log3 $NAME, 4, "RESIDENTStk $NAME: lastRun = nextRun = $lastRun";
-    }
-
-    # do not run if wakeupWaitPeriod expiration was not reached yet
-    my $expLastRun =
-      RESIDENTStk_Datetime2Timestamp($lastRunTimestamp) - 1 +
-      $wakeupOffset * 60 +
-      $wakeupWaitPeriod * 60;
-    my $expNextRun = RESIDENTStk_Datetime2Timestamp($nextRunTimestamp) - 1 +
-      $wakeupWaitPeriod * 60;
-    if (   $expLastRun > $nowRunSec
-        && $expNextRun < time() )
-    {
-        $preventRun = 1;
-    }
-    else {
-        Log3 $NAME, 5,
-"RESIDENTStk $NAME: wakeupWaitPeriod threshold reached (expLastRun=$expLastRun nowRunSec=$nowRunSec expNextRun=$expNextRun localtime="
-          . time() . ")";
     }
 
     my @days = ($wday);
@@ -1096,6 +1080,12 @@ sub RESIDENTStk_wakeupRun($;$) {
 
     #  general conditions to trigger program fulfilled
     else {
+
+      my $expLastRun =
+        time_str2num($lastRunTimestamp) - 1 +
+        $wakeupOffset * 60 +
+        $wakeupWaitPeriod * 60;
+
         if ( !$wakeupMacro ) {
             return "$NAME: missing attribute wakeupMacro";
         }
@@ -1110,10 +1100,9 @@ sub RESIDENTStk_wakeupRun($;$) {
             Log3 $NAME, 3,
 "RESIDENTStk $NAME: Another wake-up program is already being executed for device $wakeupUserdevice, won't trigger $wakeupMacro";
         }
-        elsif ( $preventRun && !$forceRun ) {
+        elsif ( $expLastRun > $nowRunSec && !$forceRun ) {
             Log3 $NAME, 4,
-"RESIDENTStk $NAME: won't trigger wake-up program due to non-expired wakeupWaitPeriod threshold since lastRun (expLastRun=$expLastRun nowRunSec=$nowRunSec expNextRun=$expNextRun localtime="
-              . time() . ")";
+"RESIDENTStk $NAME: won't trigger wake-up program due to non-expired wakeupWaitPeriod threshold since lastRun (expLastRun=$expLastRun > nowRunSec=$nowRunSec)";
         }
         else {
             # conditional enforced wake-up:
@@ -1575,8 +1564,8 @@ sub RESIDENTStk_TimeDiff ($$;$) {
         $datetimeOld = "1970-01-01 00:00:00";
     }
 
-    my $timestampNow = RESIDENTStk_Datetime2Timestamp($datetimeNow);
-    my $timestampOld = RESIDENTStk_Datetime2Timestamp($datetimeOld);
+    my $timestampNow = time_str2num($datetimeNow);
+    my $timestampOld = time_str2num($datetimeOld);
     my $timeDiff     = $timestampNow - $timestampOld;
 
     # return seconds
@@ -1589,35 +1578,6 @@ sub RESIDENTStk_TimeDiff ($$;$) {
 
     # return human readable format
     return RESIDENTStk_sec2time( int( $timeDiff + 0.5 ) );
-}
-
-sub RESIDENTStk_Datetime2Timestamp($) {
-    my ($datetime) = @_;
-    my $timestamp;
-
-    if ( $datetime =~
-/.*([0-9]{4})-([0-9]{1}|[0-9]{2})-([0-9]{1}|[0-9]{2}).([0-9]{1}|[0-9]{2}):([0-9]{1}|[0-9]{2}):([0-9]{1}|[0-9]{2}).*/
-      )
-    {
-        my ( $date, $time, $y, $m, $d, $hour, $min, $sec );
-
-        $sec  = $6;
-        $min  = $5;
-        $hour = $4;
-        $d    = $3;
-        $m    = $2;
-        $y    = $1;
-
-        $m -= 01 if ( $m > 0 );
-        $timestamp = timelocal( $sec, $min, $hour, $d, $m, $y );
-    }
-    else {
-        Log3 $name, 5,
-          "RESIDENTStk $name: timestamp '$datetime' has wrong format.";
-        $timestamp = timelocal( "00", "00", "00", "01", "01", "1970" );
-    }
-
-    return $timestamp;
 }
 
 sub RESIDENTStk_sec2time($) {

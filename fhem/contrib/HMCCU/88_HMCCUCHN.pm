@@ -4,7 +4,7 @@
 #
 #  $Id:$
 #
-#  Version 2.4
+#  Version 2.5
 #
 #  (c) 2015 zap (zap01 <at> t-online <dot> de)
 #
@@ -61,7 +61,7 @@ sub HMCCUCHN_Initialize ($)
 	$hash->{GetFn} = "HMCCUCHN_Get";
 	$hash->{AttrFn} = "HMCCUCHN_Attr";
 
-	$hash->{AttrList} = "IODev ccureadingfilter ccureadingformat:name,address,datapoint ccureadings:0,1 ccustate statedatapoint statevals substitute stripnumber:0,1,2 loglevel:0,1,2,3,4,5,6 ". $readingFnAttributes;
+	$hash->{AttrList} = "IODev ccureadingfilter ccureadingformat:name,address,datapoint ccureadings:0,1 ccustate ccuget:State,Value statedatapoint statevals substitute stripnumber:0,1,2 loglevel:0,1,2,3,4,5,6 ". $readingFnAttributes;
 }
 
 #####################################
@@ -79,6 +79,8 @@ sub HMCCUCHN_Define ($@)
 	my $devname = shift @a;
 	my $devtype = shift @a;
 	my $devspec = shift @a;
+
+	return "Invalid or unknown CCU channel name or address" if (! HMCCU_IsValidDevice ($devspec));
 
 	if ($devspec =~ /^(.+)\.([A-Z]{3,3}[0-9]{7,7}:[0-9]+)$/) {
 		# CCU Channel address with interface
@@ -116,6 +118,7 @@ sub HMCCUCHN_Define ($@)
 	AssignIoPort ($hash);
 
 	readingsSingleUpdate ($hash, "state", "Initialized", 1);
+	$hash->{ccudevstate} = 'Active';
 
 	return undef;
 }
@@ -288,7 +291,12 @@ sub HMCCUCHN_Get ($@)
 		return $ccureadings ? undef : $result;
 	}
 	elsif ($opt eq 'update') {
-		$rc = HMCCU_GetUpdate ($hash, $hash->{ccuaddr});
+		my $ccuget = shift @a;
+		$ccuget = 'Attr' if (!defined ($ccuget));
+		if ($ccuget !~ /^(Attr|State|Value)$/) {
+			return HMCCUCHN_SetError ($hash, "Usage: get $name update [{'State'|'Value'}]");
+		}
+		$rc = HMCCU_GetUpdate ($hash, $hash->{ccuaddr}, $ccuget);
 		return HMCCUCHN_SetError ($hash, $rc) if ($rc < 0);
 		return undef;
 	}
@@ -323,7 +331,8 @@ sub HMCCUCHN_SetError ($$)
 	my %errlist = (
 	   -1 => 'Channel name or address invalid',
 	   -2 => 'Execution of CCU script failed',
-	   -3 => 'Cannot detect IO device'
+	   -3 => 'Cannot detect IO device',
+	   -4 => 'Device deleted in CCU'
 	);
 
 	if (exists ($errlist{$text})) {
@@ -422,8 +431,7 @@ sub HMCCUCHN_SetError ($$)
          <br/>
          Get description of configuration parameters of CCU channel.
       </li><br/>
-      <li>get &lt;name&gt; update
-         <br/>
+      <li>get &lt;name&gt; update [{'State'|'Value'}]<br/>
          Update all datapoints / readings of channel.
       </li>
    </ul>
@@ -433,31 +441,29 @@ sub HMCCUCHN_SetError ($$)
    <b>Attributes</b><br/>
    <br/>
    <ul>
-      <li>ccureadings &lt;0 | 1&gt;
-         <br/>
-            If set to 1 values read from CCU will be stored as readings.
+      <li>ccuget &lt;State | Value&gt;<br/>
+         Set read access method for CCU channel datapoints. Method 'State' is slower than 'Value' because
+         each request is sent to the device. With method 'Value' only CCU is queried. Default is 'Value'.
       </li><br/>
-      <li>ccureadingfilter &lt;datapoint-expr&gt;
-         <br/>
-            Only datapoints matching specified expression are stored as
-            readings.
+      <li>ccureadings &lt;0 | 1&gt;<br/>
+         If set to 1 values read from CCU will be stored as readings. Default is 1.
       </li><br/>
-      <li>statedatapoint &lt;datapoint&gt;
-         <br/>
-            Set datapoint for devstate commands.
+      <li>ccureadingfilter &lt;datapoint-expr&gt;<br/>
+         Only datapoints matching specified expression are stored as readings.
       </li><br/>
-      <li>statevals &lt;text&gt;:&lt;text&gt;[,...]
-         <br/>
-            Define substitution for set commands values. The parameters &lt;text&gt;
-            are available as set commands. Example:<br/>
-            <code>attr my_switch statevals on:true,off:false</code><br/>
-            <code>set my_switch on</code>
+      <li>statedatapoint &lt;datapoint&gt;<br/>
+         Set datapoint for devstate commands.
       </li><br/>
-      <li>substitude &lt;subst-rule&gt;[;...]
-         <br/>
-            Define substitions for reading values. Substitutions for parfile values must
-            be specified in parfiles. Syntax of subst-rule is<br/><br/>
-            [datapoint!]&lt;regexp1&gt;:&lt;text1&gt;[,...]
+      <li>statevals &lt;text&gt;:&lt;text&gt;[,...]<br/>
+         Define substitution for set commands values. The parameters &lt;text&gt;
+         are available as set commands. Example:<br/>
+         <code>attr my_switch statevals on:true,off:false</code><br/>
+         <code>set my_switch on</code>
+      </li><br/>
+      <li>substitude &lt;subst-rule&gt;[;...]<br/>
+         Define substitions for reading values. Substitutions for parfile values must
+         be specified in parfiles. Syntax of subst-rule is<br/><br/>
+         [datapoint!]&lt;regexp1&gt;:&lt;text1&gt;[,...]
       </li>
    </ul>
 </ul>

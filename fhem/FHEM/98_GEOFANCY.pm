@@ -259,6 +259,19 @@ sub GEOFANCY_CGI() {
 m/(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([0-1][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])Z/
           );
 
+        # validate timestamp
+        return (
+            "text/plain; charset=utf-8",
+            "NOK Specified timestamp '"
+              . $webArgs->{timestamp} . "'"
+              . " does not seem to be a valid Unix timestamp"
+          )
+          if (
+            defined( $webArgs->{timestamp} )
+            && (   $webArgs->{timestamp} !~ m/^\d+(\.\d+)?$/
+                || $webArgs->{timestamp} > time() + 300 )
+          );
+
         # validate locName
         return ( "text/plain; charset=utf-8",
             "NOK No whitespace allowed in id '" . $webArgs->{locName} . "'" )
@@ -274,7 +287,7 @@ m/(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([0-1][0-9]|2[0-3]):([0-5
           )
           if (
             defined $webArgs->{latitude}
-            && (   $webArgs->{latitude} !~ m/^[0-9]+([.][0-9]+)?$/
+            && (   $webArgs->{latitude} !~ m/^-?\d+(\.\d+)?$/
                 || $webArgs->{latitude} < -90
                 || $webArgs->{latitude} > 90 )
           );
@@ -288,7 +301,7 @@ m/(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([0-1][0-9]|2[0-3]):([0-5
           )
           if (
             defined $webArgs->{longitude}
-            && (   $webArgs->{longitude} !~ m/^[0-9]+([.][0-9]+)?$/
+            && (   $webArgs->{longitude} !~ m/^-?\d+(\.\d+)?$/
                 || $webArgs->{longitude} < -180
                 || $webArgs->{longitude} > 180 )
           );
@@ -312,6 +325,12 @@ m/(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([0-1][0-9]|2[0-3]):([0-5
             $lat    = $webArgs->{latitude};
             $long   = $webArgs->{longitude};
             $device = $webArgs->{device};
+
+            if ( defined( $webArgs->{timestamp} ) ) {
+                my ( $sec, $min, $hour, $d, $m, $y ) =
+                  localtime( $webArgs->{timestamp} );
+                $date = timelocal( $sec, $min, $hour, $d, $m, $y );
+            }
         }
 
         # Geofency.app
@@ -319,7 +338,7 @@ m/(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([0-1][0-9]|2[0-3]):([0-5
             $id      = $webArgs->{id};
             $locName = $webArgs->{name};
             $entry   = $webArgs->{entry};
-            $date    = $webArgs->{date};
+            $date    = GEOFANCY_ISO8601UTCtoLocal( $webArgs->{date} );
             $lat     = $webArgs->{latitude};
             $long    = $webArgs->{longitude};
             $address = $webArgs->{address}
@@ -446,9 +465,9 @@ m/(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([0-1][0-9]|2[0-3]):([0-5
 
     readingsBeginUpdate($hash);
 
-    # validate date
+    # use date for readings
     if ( $date ne "" ) {
-        $hash->{".updateTime"}      = GEOFANCY_ISO8601UTCtoLocal($date);
+        $hash->{".updateTime"}      = $date;
         $hash->{".updateTimestamp"} = FmtDateTime( $hash->{".updateTime"} );
         $time                       = $hash->{".updateTimestamp"};
     }
@@ -576,7 +595,7 @@ sub GEOFANCY_ISO8601UTCtoLocal ($) {
 1;
 
 =pod
-
+=item helper
 =begin html
 
     <p>
@@ -638,7 +657,7 @@ sub GEOFANCY_ISO8601UTCtoLocal ($) {
           <br>
           You might also want to think about protecting the access by using HTTP Basic Authentication and encryption via TLS/SSL. Using TLS offloading in the reverse proxy software is highly recommended and software like HAproxy provides high control of data flow for TLS.<br>
           <br>
-          Also the definition of a dedicated FHEMWEB instance for that purpose together with <a href="#alllowed">allowed</a> might help to restrict FHEM's functionality (e.g. set attributes allowedCommands and allowedDevices to ",". Note that attributes <i>hiddengroup</i> and <i>hiddenroom</i> of FHEMWEB do NOT protect from just guessing/knowing the correct URI but would help tremendously to prevent easy inspection of your FHEM setup.)<br>
+          Also the definition of a dedicated FHEMWEB instance for that purpose together with <a href="#allowed">allowed</a> might help to restrict FHEM's functionality (e.g. set attributes allowedCommands and allowedDevices to ",". Note that attributes <i>hiddengroup</i> and <i>hiddenroom</i> of FHEMWEB do NOT protect from just guessing/knowing the correct URI but would help tremendously to prevent easy inspection of your FHEM setup.)<br>
           <br>
           To make that reverse proxy available from the internet, just forward the appropriate port via your internet router.<br>
           <br>

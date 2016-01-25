@@ -322,8 +322,9 @@ sub GUEST_Set($@) {
     $usage .= " location$locations";
     if ($adminMode) {
         $usage .= " create:wakeuptimer";
-
-        #    $usage .= " compactMode:noArg largeMode:noArg";
+        $usage .= ",locationMap"
+          if ( ReadingsVal( $name, "locationLat", "-" ) ne "-"
+            && ReadingsVal( $name, "locationLong", "-" ) ne "-" );
     }
 
     # silentSet
@@ -747,8 +748,12 @@ sub GUEST_Set($@) {
     }
 
     # create
-    elsif ( $a[1] eq "create" ) {
-        if ( defined( $a[2] ) && $a[2] eq "wakeuptimer" ) {
+    elsif ( lc( $a[1] ) eq "create" ) {
+        if ( !defined( $a[2] ) ) {
+            return
+              "Invalid 2nd argument, choose one of wakeuptimer locationMap ";
+        }
+        elsif ( lc( $a[2] ) eq "wakeuptimer" ) {
             my $i               = "1";
             my $wakeuptimerName = $name . "_wakeuptimer" . $i;
             my $created         = 0;
@@ -804,8 +809,38 @@ sub GUEST_Set($@) {
             return
 "Dummy $wakeuptimerName and other pending devices created and pre-configured.\nYou may edit Macro_$wakeuptimerName to define your wake-up actions\nand at_$wakeuptimerName for optional at-device adjustments.";
         }
-        else {
-            return "Invalid 2nd argument, choose one of wakeuptimer ";
+        elsif ( lc( $a[2] ) eq "locationmap" ) {
+            my $locationmapName = $name . "_map";
+
+            if ( defined( $defs{$locationmapName} ) ) {
+                return
+"Device $locationmapName existing already, delete it first to have it re-created.";
+            }
+            else {
+                my $sortby = AttrVal( $name, "sortby", -1 );
+                $sortby++;
+
+                # create new weblink device
+                fhem "define $locationmapName weblink htmlCode {
+'<div style=\"width: 400px;; overflow: hidden;; height: 300px;;\">
+<iframe name=\"$locationmapName\" src=\"https://www.google.com/maps/embed/v1/place?key=AIzaSyB66DvcpbXJ5eWgIkzxpUN2s_9l3_6fegM&q='
+.ReadingsVal('$name','locationLat','')
+.','
+.ReadingsVal('$name','locationLong','')
+.'&zoom=13\" width=\"480\" height=\"480\" frameborder=\"0\" style=\"border:0;; margin-top: -165px;; margin-left: -135px;;\">
+</iframe>
+</div>'
+}";
+                fhem "attr $locationmapName alias Current Location";
+                fhem
+                  "attr $locationmapName comment Auto-created by GUEST module";
+                fhem "attr $locationmapName group " . $attr{$name}{group}
+                  if ( defined( $attr{$name}{group} ) );
+                fhem "attr $locationmapName room " . $attr{$name}{room}
+                  if ( defined( $attr{$name}{room} ) );
+            }
+
+            return "Weblink device $locationmapName was created.";
         }
     }
 
@@ -889,8 +924,7 @@ sub GUEST_DurationTimer($;$) {
         {
             $durPresence =
               $timestampNow -
-              RESIDENTStk_Datetime2Timestamp(
-                ReadingsVal( $name, "lastArrival", "-" ) );
+              time_str2num( ReadingsVal( $name, "lastArrival", "" ) );
         }
 
         # absence timer
@@ -899,8 +933,7 @@ sub GUEST_DurationTimer($;$) {
         {
             $durAbsence =
               $timestampNow -
-              RESIDENTStk_Datetime2Timestamp(
-                ReadingsVal( $name, "lastDeparture", "-" ) );
+              time_str2num( ReadingsVal( $name, "lastDeparture", "" ) );
         }
 
         # sleep timer
@@ -909,8 +942,7 @@ sub GUEST_DurationTimer($;$) {
         {
             $durSleep =
               $timestampNow -
-              RESIDENTStk_Datetime2Timestamp(
-                ReadingsVal( $name, "lastSleep", "-" ) );
+              time_str2num( ReadingsVal( $name, "lastSleep", "" ) );
         }
 
         my $durPresence_hr =
@@ -964,13 +996,13 @@ sub GUEST_SetLocation($$$;$$$$$$) {
     my $currWayhome  = ReadingsVal( $name, "wayhome", "0" );
     my $currLat      = ReadingsVal( $name, "locationLat", "-" );
     my $currLong     = ReadingsVal( $name, "locationLong", "-" );
-    my $currAddr     = ReadingsVal( $name, "locationAddr", "-" );
-    $id      = "-" if ( !$id      || $id eq "" );
-    $lat     = "-" if ( !$lat     || $lat eq "" );
-    $long    = "-" if ( !$long    || $long eq "" );
-    $address = "-" if ( !$address || $address eq "" );
-    $time    = ""  if ( !$time );
-    $device  = ""  if ( !$device );
+    my $currAddr     = ReadingsVal( $name, "locationAddr", "" );
+    $id   = "-" if ( !$id   || $id eq "" );
+    $lat  = "-" if ( !$lat  || $lat eq "" );
+    $long = "-" if ( !$long || $long eq "" );
+    $address = "" if ( !$address );
+    $time    = "" if ( !$time );
+    $device  = "" if ( !$device );
 
     Log3 $name, 5,
 "GUEST $name: received location information: id=$id name=$location trig=$trigger date=$time lat=$lat long=$long address:$address device=$device";
@@ -998,7 +1030,6 @@ sub GUEST_SetLocation($$$;$$$$$$) {
     # check for implicit state change
     #
     my $stateChange = 0;
-    my $wayhome;
 
     # home
     if ( $location eq "home" || grep( m/^$searchstring$/, @location_home ) ) {
@@ -1060,7 +1091,6 @@ sub GUEST_SetLocation($$$;$$$$$$) {
         {
             Log3 $name, 3, "GUEST $name: on way back home from $location";
             readingsBulkUpdate( $hash, "wayhome", "1" );
-            $wayhome = 1;
         }
 
         # wayhome=false
@@ -1071,7 +1101,6 @@ sub GUEST_SetLocation($$$;$$$$$$) {
             Log3 $name, 3,
               "GUEST $name: seems not to be on way back home anymore";
             readingsBulkUpdate( $hash, "wayhome", "0" );
-            $wayhome = 1;
         }
 
     }
@@ -1081,44 +1110,52 @@ sub GUEST_SetLocation($$$;$$$$$$) {
         Log3 $name, 3,
           "GUEST $name: seems to stay at $location before coming home";
         readingsBulkUpdate( $hash, "wayhome", "2" );
-        $wayhome = 1;
     }
 
     # revert wayhome during active wayhome tracing
     elsif ( $stateChange == 0 && $trigger == 0 && $currWayhome == 2 ) {
         Log3 $name, 3, "GUEST $name: finally on way back home from $location";
         readingsBulkUpdate( $hash, "wayhome", "1" );
-        $wayhome = 1;
     }
 
-    if ( $trigger == 1 ) {
+    my $currLongDiff = 0;
+    my $currLatDiff  = 0;
+    $currLongDiff =
+      maxNum( ReadingsVal( $name, "lastLocationLong", 0 ), $currLong ) -
+      minNum( ReadingsVal( $name, "lastLocationLong", 0 ), $currLong )
+      if ( $currLong ne "-" );
+    $currLatDiff =
+      maxNum( ReadingsVal( $name, "lastLocationLat", 0 ), $currLat ) -
+      minNum( ReadingsVal( $name, "lastLocationLat", 0 ), $currLat )
+      if ( $currLat ne "-" );
+
+    if (
+        $trigger == 1
+        && (   $stateChange > 0
+            || ReadingsVal( $name, "lastLocation", "-" ) ne $currLocation
+            || $currLongDiff > 0.00002
+            || $currLatDiff > 0.00002 )
+      )
+    {
         Log3 $name, 5, "GUEST $name: archiving last known location";
         readingsBulkUpdate( $hash, "lastLocationLat",  $currLat );
         readingsBulkUpdate( $hash, "lastLocationLong", $currLong );
-        readingsBulkUpdate( $hash, "lastLocationAddr", $currAddr );
-        readingsBulkUpdate( $hash, "lastLocation",     $currLocation );
+        readingsBulkUpdate( $hash, "lastLocationAddr", $currAddr )
+          if ( $currAddr ne "" );
+        readingsBulkUpdate( $hash, "lastLocation", $currLocation );
     }
 
-    if (   $wayhome
-        || $stateChange > 0
-        || ( $lat ne "-" && $long ne "-" ) )
-    {
-        Log3 $name, 5, "GUEST $name: Using new lat/long/addr information";
-        readingsBulkUpdate( $hash, "locationLat",  $lat );
-        readingsBulkUpdate( $hash, "locationLong", $long );
+    readingsBulkUpdate( $hash, "locationLat",  $lat );
+    readingsBulkUpdate( $hash, "locationLong", $long );
+
+    if ( $address ne "" ) {
         readingsBulkUpdate( $hash, "locationAddr", $address );
     }
-
-    else {
-        Log3 $name, 5,
-          "GUEST $name: keeping last known lat/long/addr information";
-        readingsBulkUpdate( $hash, "locationLat",  $currLat );
-        readingsBulkUpdate( $hash, "locationLong", $currLong );
-        readingsBulkUpdate( $hash, "locationAddr", $currAddr );
+    elsif ( $currAddr ne "" ) {
+        readingsBulkUpdate( $hash, "locationAddr", "-" );
     }
 
-    readingsBulkUpdate( $hash, "location", $location )
-      if ( $location ne "wayhome" );
+    readingsBulkUpdate( $hash, "location", $location );
 
     readingsEndUpdate( $hash, 1 );
 
@@ -1146,7 +1183,7 @@ sub GUEST_StartInternalTimers($$) {
 1;
 
 =pod
-
+=item helper
 =begin html
 
     <p>
@@ -1200,7 +1237,9 @@ sub GUEST_StartInternalTimers($$) {
             <b>state</b> &nbsp;&nbsp;home,gotosleep,asleep,awoken,absent,none&nbsp;&nbsp; switch between states; see attribute rg_states to adjust list shown in FHEMWEB
           </li>
           <li>
-            <b>create</b> &nbsp;&nbsp;wakeuptimer&nbsp;&nbsp; add several pre-configurations provided by RESIDENTS Toolkit. See separate section in <a href="#RESIDENTS">RESIDENTS module commandref</a> for details.
+            <b>create</b>
+             <li><i>locationMap</i>&nbsp;&nbsp; add a pre-configured weblink device using showing a Google Map if readings locationLat+locationLong are present.</li>
+             <li><i>wakeuptimer</i>&nbsp;&nbsp; add several pre-configurations provided by RESIDENTS Toolkit. See separate section in <a href="#RESIDENTS">RESIDENTS module commandref</a> for details.</li>
           </li>
         </ul>
         <ul>
@@ -1500,7 +1539,9 @@ sub GUEST_StartInternalTimers($$) {
             <b>state</b> &nbsp;&nbsp;home,gotosleep,asleep,awoken,absent,gone&nbsp;&nbsp; wechselt den Status; siehe auch Attribut rg_states, um die in FHEMWEB angezeigte Liste anzupassen
           </li>
           <li>
-            <b>create</b> &nbsp;&nbsp;wakeuptimer&nbsp;&nbsp; f&uuml;gt diverse Vorkonfigurationen auf Basis von RESIDENTS Toolkit hinzu. Siehe separate Sektion in der <a href="#RESIDENTS">RESIDENTS Modul Kommandoreferenz</a>.
+            <b>create</b>
+             <li><i>locationMap</i>&nbsp;&nbsp; f&uuml;gt ein vorkonfiguriertes weblink Device hinzu, welches eine Google Map anzeigt, sofern die Readings locationLat+locationLong vorhanden sind.</li>
+             <li><i>wakeuptimer</i>&nbsp;&nbsp; f&uuml;gt diverse Vorkonfigurationen auf Basis von RESIDENTS Toolkit hinzu. Siehe separate Sektion in der <a href="#RESIDENTS">RESIDENTS Modul Kommandoreferenz</a>.</li>
           </li>
         </ul>
         <ul>

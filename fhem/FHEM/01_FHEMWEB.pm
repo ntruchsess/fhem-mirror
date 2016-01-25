@@ -111,6 +111,7 @@ my $FW_jsonp;      # jasonp answer (sending function calls to the client)
 my $FW_headerlines; #
 my $FW_chash;      # client fhem hash
 my $FW_encoding="UTF-8";
+my $FW_styleStamp=time();
 
 
 #####################################
@@ -666,6 +667,7 @@ FW_answerCall($)
     $filter = "room!=.+" if($filter eq "room=Unsorted");
 
     my %h = map { $_ => 1 } devspec2array($filter);
+    $h{global} = 1 if( $me->{inform}{addglobal} );
     $h{"#FHEMWEB:$FW_wname"} = 1;
     $me->{inform}{devices} = \%h;
     %FW_visibleDeviceHash = FW_visibleDevices();
@@ -806,7 +808,7 @@ FW_answerCall($)
   ########################
   # CSS
   my $cssTemplate = "<link href=\"$FW_ME/%s\" rel=\"stylesheet\"/>";
-  FW_pO sprintf($cssTemplate, "pgm2/style.css");
+  FW_pO sprintf($cssTemplate, "pgm2/style.css?v=$FW_styleStamp");
   FW_pO sprintf($cssTemplate, "pgm2/jquery-ui.min.css");
   map { FW_pO sprintf($cssTemplate, $_); }
                         split(" ", AttrVal($FW_wname, "CssFiles", ""));
@@ -1904,6 +1906,8 @@ FW_style($$)
     } else {
       CommandAttr(undef, "$FW_wname stylesheetPrefix $a[2]");
     }
+    $FW_styleStamp = time();
+    $FW_RET =~ s,/style.css\?v=\d+,/style.css?v=$FW_styleStamp,;
     FW_pO "${start}Reload the page in the browser.$end";
 
   } elsif($a[1] eq "edit") {
@@ -2001,10 +2005,11 @@ FW_style($$)
     FW_pO "<script type=\"text/javascript\" src=\"$FW_ME/pgm2/console.js\">".
           "</script>";
     FW_pO "<div id=\"content\">";
-    my $filter = ($a[2] && $a[2] ne "1") ? $a[2] : ".*";
+    my $filter = $a[2] ? ($a[2] eq "log" ? "global" : $a[2]) : ".*";
     FW_pO "Events (Filter: <a href=\"#\" id=\"eventFilter\">$filter</a>) ".
-          "&nbsp;&nbsp;<span class='changed'>FHEM log ".
-                "<input id='eventWithLog' type='checkbox'></span>".
+          "&nbsp;&nbsp;<span class='fhemlog'>FHEM log ".
+                "<input id='eventWithLog' type='checkbox'".
+                ($a[2] && $a[2] eq "log" ? " checked":"")."></span>".
           "&nbsp;&nbsp;<button id='eventReset'>Reset</button><br><br>\n";
     FW_pO "<div id=\"console\"></div>";
     FW_pO "</div>";
@@ -2482,7 +2487,7 @@ FW_logInform($$)
     return;
   }
   $msg = FW_htmlEscape($msg);
-  if(!addToWritebuffer($ntfy, "<div class='changed'>$msg</div>") ){
+  if(!addToWritebuffer($ntfy, "<div class='fhemlog'>$msg</div>") ){
     TcpServer_Close($ntfy);
     delete $logInform{$me};
     delete $defs{$me};
@@ -2550,7 +2555,12 @@ FW_Notify($$)
       my $tn = TimeNow();
       my $max = int(@{$events});
       for(my $i = 0; $i < $max; $i++) {
-        if( $events->[$i] !~ /: /) {
+        if($events->[$i] !~ /: /) {
+          if($dev->{NAME} eq 'global') { # Forum #47634
+            my($type,$args) = split(' ', $events->[$i], 2);
+            push @data, FW_longpollInfo($h->{fmt}, "$dn-$type", $args, $args);
+          }
+
           next; #ignore 'set' commands
         }
         my ($readingName,$readingVal) = split(": ",$events->[$i],2);
@@ -2597,7 +2607,8 @@ FW_directNotify($@) # Notify without the event overhead (Forum #31293)
     next if(!$ntfy->{TYPE} ||
             $ntfy->{TYPE} ne "FHEMWEB" ||
             !$ntfy->{inform} ||
-            !$ntfy->{inform}{devices}{$dev});
+            !$ntfy->{inform}{devices}{$dev} ||
+            $ntfy->{inform}{type} ne "status");
     if(!addToWritebuffer($ntfy, 
         FW_longpollInfo($ntfy->{inform}{fmt}, @_)."\n")) {
       my $name = $ntfy->{NAME};
@@ -2889,6 +2900,7 @@ FW_widgetOverride($$)
 1;
 
 =pod
+=item helper
 =begin html
 
 <a name="FHEMWEB"></a>
@@ -4238,16 +4250,19 @@ FW_widgetOverride($$)
         <ul>
           attr FS20dev widgetOverride on-till:time<br>
           attr WEB widgetOverride room:textField<br>
-          attr dimmer widgetOverride dim:knob,min:1,max:100,step:1,linecap:round<br>
+          attr dimmer widgetOverride dim:knob,min:1,max:100,step:1,linecap:round
+          <br>
           <br>
           attr myToggle widgetOverride state:uzsuToggle,123,xyz<br>
           attr mySelect widgetOverride state:uzsuSelect,abc,123,456,xyz<br>
-          attr myTemp widgetOverride state:uzsuDropDown,18,18.5,19,19.5,20,20.5,21,21.5,22,22.5,23<br>
+          attr myTemp widgetOverride
+            state:uzsuDropDown,18,18.5,19,19.5,20,20.5,21,21.5,22,22.5,23<br>
           attr myTimerEntry widgetOverride state:uzsuTimerEntry<br>
           attr myTimer widgetOverride state:uzsu<br>
           <br>
-          Im Folgenden wird die Verwendung des modifier2 parameters von uzsuTimerEntry und uzsu gezeigt um
-          die Auswahl des Schaltzeitpunktes mit der Auswahl des Schaltwertes zu kombinieren:
+          Im Folgenden wird die Verwendung des modifier2 parameters von
+          uzsuTimerEntry und uzsu gezeigt um die Auswahl des Schaltzeitpunktes
+          mit der Auswahl des Schaltwertes zu kombinieren:
           <pre>
 ... widgetOverride state:uzsu,slider,0,5,100                                         -> ein slider
 ... widgetOverride state:uzsu,uzsuToggle,off,on                                      -> ein on/off button

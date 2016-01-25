@@ -8,23 +8,68 @@ use strict;
 use warnings;
 
 # $Id$
+
+my $noWarnings = grep $_ eq '-noWarnings', @ARGV;
+my ($verify) = grep $_ =~ /\.pm$/ , @ARGV;
+
 use constant TAGS => qw{ul li code b i u table tr td};
+
+sub generateModuleCommandref($$;$);
+
 my %mods;
+my %modIdx;
 my @modDir = ("FHEM");
-foreach my $modDir (@modDir) {
-  opendir(DH, $modDir) || die "Cant open $modDir: $!\n";
-  while(my $l = readdir DH) {
-    next if($l !~ m/^\d\d_.*\.pm$/);
-    my $of = $l;
-    $l =~ s/.pm$//;
-    $l =~ s/^[0-9][0-9]_//;
-    $mods{$l} = "$modDir/$of";
+my @lang = ("EN", "DE");
+
+if(!$verify) {
+  foreach my $modDir (@modDir) {
+    opendir(DH, $modDir) || die "Cant open $modDir: $!\n";
+    while(my $l = readdir DH) {
+      next if($l !~ m/^\d\d_.*\.pm$/);
+      my $of = $l;
+      $l =~ s/.pm$//;
+      $l =~ s/^[0-9][0-9]_//;
+      $mods{$l} = "$modDir/$of";
+      $modIdx{$l} = "device";
+      open(MOD, "$modDir/$of") || die("Cant open $modDir/$l");
+      while(my $cl = <MOD>) {
+        if($cl =~ m/^=item\s+(helper|command|device)/) {
+          $modIdx{$l} = $1;
+          last;
+        }
+      }
+      close(MOD);
+    }
+  }
+ 
+  if(-f "configDB.pm") {
+    $mods{configDB}   = "configDB.pm";
+    $modIdx{configDB} = "helper";
+  }
+   
+} else { # check for syntax only
+  my $modname = $verify;
+  $modname =~ s/^.*[\/\\](?:\d\d_)?(.+).pm$/$1/;
+  $mods{$modname} = $verify;
+  foreach my $lang (@lang) {
+    generateModuleCommandref($modname, $lang);
+  }
+  exit;
+}
+
+sub
+printList($)
+{
+  for my $i (sort { "\L$a" cmp "\L$b" } keys %modIdx) {
+    print OUT "      <a href=\"#$i\">$i</a> &nbsp;\n"
+        if($modIdx{$i} eq $_[0]);
+  }
+  while(my $l = <IN>) {
+    next if($l =~ m/href=/);
+    print OUT $l;
+    last;
   }
 }
-$mods{configDB} = "configDB.pm" if(-f "configDB.pm");
-
-
-my @lang = ("EN", "DE");
 
 foreach my $lang (@lang) {
   my $suffix = ($lang eq "EN" ? "" : "_$lang");
@@ -34,37 +79,45 @@ foreach my $lang (@lang) {
   open(IN, "$docIn")    || die "Cant open $docIn: $!\n";
   open(OUT, ">$docOut") || die "Cant open $docOut: $!\n";
 
-  # First run: check what is a command and what is a helper module
-  my $status;
-  my %noindex;
-  while(my $l = <IN>) {
-    last if($l =~ m/<h3>Introduction/);
-    $noindex{$1} = 1 if($l =~ m/href="#(.*)"/);
+  if(!$suffix) { # First run: remember commands/helper module
+    my $modType;
+    while(my $l = <IN>) {
+      $modType = "command" if($l =~ m/>Fhem commands</);
+      $modType = "device"  if($l =~ m/>Devices</);
+      $modType = "helper"  if($l =~ m/>Helper modules</);
+      $modIdx{$1} = $modType if($modType && $l =~ m/href="#(.*?)">/);
+      last if($l =~ m/<!-- header end -->/);
+    }
+    seek(IN,0,0);
   }
-  seek(IN,0,0);
 
   # Second run: create the file
-  # Header
-  while(my $l = <IN>) {
-    print OUT $l;
-    last if($l =~ m/#global/);
-  }
-
-  # index for devices.
-  foreach my $mod (sort keys %mods) {
-    next if($noindex{$mod});
-    print OUT "      <a href='#$mod'>$mod</a> &nbsp;\n";
-  }
-
-  # Copy the middle part
-  while(my $l = <IN>) {
+  while(my $l = <IN>) { # Header
     last if($l =~ m/name="perl"/);
     print OUT $l;
+    printList($1) if($l =~ m/<!-- header:(.*) -->/);
   }
 
   # Copy the doc part from the module
   foreach my $mod (sort keys %mods) {
+    generateModuleCommandref($mod,$lang, \*OUT);
+  }
+
+  # Copy the tail
+  print OUT '<a name="perl"></a>',"\n";
+  while(my $l = <IN>) {
+    print OUT $l;
+  }
+  close(OUT);
+}
+
+#############################
+# read a module file and check/print the commandref
+sub generateModuleCommandref($$;$)
+{
+    my ($mod, $lang, $fh) = @_; 
     my $tag;
+    my $suffix = ($lang eq "EN" ? "" : "_$lang");
     my %tagcount= ();
     my %llwct = (); # Last line with closed tag
     open(MOD, $mods{$mod}) || die("Cant open $mods{$mod}:$!\n");
@@ -79,7 +132,7 @@ foreach my $lang (@lang) {
       $dosMode = 1 if($l =~ m/^=begin html$suffix.*\r/);
       if($l =~ m/^=begin html$suffix$/) {
         $l = <MOD>;    # skip one line, to be able to repeat join+split
-        print "$lang $mod: nonempty line after =begin html ignored\n"
+        print "*** $lang $mod: nonempty line after =begin html ignored\n"
           if($l =~ m/^...*$/);
         $skip = 0; $line++;
 
@@ -87,7 +140,7 @@ foreach my $lang (@lang) {
         $skip = 1;
 
       } elsif(!$skip) {
-        print OUT $l;
+        print $fh $l if($fh);
         $docCount++;
         $hasLink = ($l =~ m/<a name="$mod"/) if(!$hasLink);
         foreach $tag (TAGS) {
@@ -103,8 +156,8 @@ foreach my $lang (@lang) {
     print "*** $lang $mods{$mod}: No document text found\n"
         if(!$suffix && !$docCount && !$dosMode && $mods{$mod} !~ m,/99_,);
     if($suffix && !$docCount && !$dosMode) {
-      if($lang eq "DE") {
-        print OUT << "EOF";
+      if($lang eq "DE" && $fh) {
+        print $fh <<EOF;
 <a name="$mod"></a>
 <h3>$mod</h3>
 <ul>
@@ -114,20 +167,12 @@ foreach my $lang (@lang) {
 EOF
       }
     }
-    print "$lang $mods{$mod}: No a-tag with name=\"$mod\" \n"
-        if(!$suffix && $docCount && !$hasLink);
+    print "*** $lang $mods{$mod}: No a-tag with name=\"$mod\" \n"
+        if(!$suffix && $docCount && !$hasLink && !$noWarnings);
 
     foreach $tag (TAGS) {
-      print("$lang $mods{$mod}: Unbalanced $tag ".
+      print("*** $lang $mods{$mod}: Unbalanced $tag ".
                 "($tagcount{$tag}, last line ok: $llwct{$tag})\n")
-        if($tagcount{$tag});
+        if($tagcount{$tag} && !$noWarnings);
     }
-  }
-
-  # Copy the tail
-  print OUT '<a name="perl"></a>',"\n";
-  while(my $l = <IN>) {
-    print OUT $l;
-  }
-  close(OUT);
 }

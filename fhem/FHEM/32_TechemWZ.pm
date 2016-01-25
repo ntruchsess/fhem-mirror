@@ -13,8 +13,6 @@ package main;
 use strict;
 use warnings;
 
-# TODO remove if debug ok
-use Data::Dumper;
 use Time::HiRes qw(time);
 
 my %typeText = (
@@ -119,6 +117,7 @@ TechemWZ_Notify (@) {
   return unless (($ntfyDev->{TYPE} eq 'CUL') || ($ntfyDev->{TYPE} eq 'Global'));
   foreach my $event (@{$ntfyDev->{CHANGED}}) {
     my @e = split(' ', $event);
+    next unless defined($e[0]);
     TechemWZ_Run($hash) if ($e[0] eq 'INITIALIZED');
     # patch CUL.pm
     TechemWZ_IOPatch($hash, $e[1]) if (($e[0] eq 'ATTR') && ($e[2] eq 'rfmode') && ($e[3] eq 'WMBus_T'));
@@ -141,6 +140,7 @@ TechemWZ_Receive(@) {
   
   $hash->{VERSION} = $msg->{version};
   $hash->{METER} = $typeText{$msg->{type}};
+  delete $hash->{CHANGETIME}; # clean up, workaround for fhem prior http://forum.fhem.de/index.php/topic,47474.msg391964.html#msg391964
 
   # day period changed
   $ats = ReadingsTimestamp($hash->{NAME},"current_period", "0");
@@ -150,9 +150,8 @@ TechemWZ_Receive(@) {
     $hash->{".updateTimestamp"} = $ts;
     readingsBulkUpdate($hash, "meter", $msg->{meter});
     readingsBulkUpdate($hash, "current_period", $msg->{actualVal});
-    $hash->{CHANGETIME}[0] = $ts;
+    $hash->{CHANGETIME}->[$#{ $hash->{CHANGED} }] = $ts;
     readingsEndUpdate($hash, 1);
-    delete $hash->{CHANGETIME};
   }
 
   # billing period changed
@@ -162,9 +161,8 @@ TechemWZ_Receive(@) {
     readingsBeginUpdate($hash);
     $hash->{".updateTimestamp"} = $ts;
     readingsBulkUpdate($hash, "previous_period", $msg->{lastVal});
-    $hash->{CHANGETIME}[0] = $ts;
+    $hash->{CHANGETIME}->[$#{ $hash->{CHANGED} }] = $ts;
     readingsEndUpdate($hash, 1);
-    delete $hash->{CHANGETIME};
   }
 
   return undef;
@@ -210,18 +208,22 @@ TechemWZ_Parse(@) {
   ($message->{long}, $message->{short}) = TechemWZ_ParseID(@m);
   $message->{type} = TechemWZ_ParseSubType(@m);
   $message->{version} = TechemWZ_ParseSubVersion(@m);
-  $message->{lastVal} = TechemWZ_ParseLastPeriod(@m);
-  $message->{actualVal} = TechemWZ_ParseActualPeriod(@m);
-  ($message->{actual}->{year}, $message->{actual}->{month}, $message->{actual}->{day}) = TechemWZ_ParseActualDate(@m);
-  ($message->{last}->{year}, $message->{last}->{month}, $message->{last}->{day}) = TechemWZ_ParseLastDate(@m);
   $message->{rssi} = ($rssi)?$rssi:"?";
   
   # metertype specific adjustment
   if ($message->{type} =~ /62|72/) {
+    $message->{lastVal} = TechemWZ_ParseLastPeriod(@m);
+    $message->{actualVal} = TechemWZ_ParseActualPeriod(@m);
+    ($message->{actual}->{year}, $message->{actual}->{month}, $message->{actual}->{day}) = TechemWZ_ParseActualDate(@m);
+    ($message->{last}->{year}, $message->{last}->{month}, $message->{last}->{day}) = TechemWZ_ParseLastDate(@m);
     $message->{lastVal} /= 10;
     $message->{actualVal} /= 10;
     $message->{meter} = $message->{lastVal} + $message->{actualVal};
   } elsif ($message->{type} =~ /43/) {
+    $message->{lastVal} = TechemWZ_WMZ_Type1_ParseLastPeriod(@m);
+    $message->{actualVal} = TechemWZ_WMZ_Type1_ParseActualPeriod(@m);
+    ($message->{actual}->{year}, $message->{actual}->{month}, $message->{actual}->{day}) = TechemWZ_WMZ_Type1_ParseActualDate(@m);
+    ($message->{last}->{year}, $message->{last}->{month}, $message->{last}->{day}) = TechemWZ_ParseLastDate(@m);
     $message->{meter} = $message->{lastVal} + $message->{actualVal};
   }
   
@@ -239,7 +241,11 @@ TechemWZ_Parse(@) {
     push @d, $deviceHash->{NAME};
   }
   
-  return (@d);
+  if (defined($d[0])) {
+    return (@d);
+  } else {
+    return (''); # discard neighbor devices
+  }
 }
 
 sub
@@ -347,6 +353,35 @@ TechemWZ_ParseLastDate(@) {
   my $d = ($b >> 0) & 0x1F;
   my $m = ($b >> 5) & 0x0F;
   my $y = ($b >> 9) & 0x3F;
+  return ($y, $m, $d);
+}
+
+###############################################################################
+#
+# Compact 5 heatmeter
+#
+###############################################################################
+
+sub
+TechemWZ_WMZ_Type1_ParseLastPeriod(@) {
+  my @m = @_;
+  return hex("$m[15]$m[14]$m[13]"); 
+}
+
+sub
+TechemWZ_WMZ_Type1_ParseActualPeriod(@) {
+  my @m = @_;
+  return hex("$m[19]$m[18]$m[17]"); 
+}
+
+sub
+TechemWZ_WMZ_Type1_ParseActualDate(@) {
+  my @m = @_;
+  my @t = localtime(time);
+  my $b = hex("$m[21]$m[20]");
+  my $d = ($b >> 7) & 0x1F;
+  my $m = (hex("$m[16]") >> 3) & 0x0F;
+  my $y = $t[5] + 1900;
   return ($y, $m, $d);
 }
 

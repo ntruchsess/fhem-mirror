@@ -32,7 +32,6 @@ use warnings;
 use MIME::Base64;
 use Data::Dumper;
 
-
 sub 
 FB_CALLLIST_Initialize($)
 {
@@ -54,15 +53,17 @@ FB_CALLLIST_Initialize($)
                           "list-type:all,incoming,outgoing,missed-calls,completed,active " .
                           "time-format-string ".
                           "list-order:ascending,descending ".
+                          "answMachine-is-missed-call:0,1 ".                          
                           "language:de,en ".
                           "disable:0,1 ".
                           "disabledForIntervals ".
                           "do_not_notify:0,1 ".
                           "no-heading:0,1 ".
+                          "no-table-header:0,1 ".
                           $readingFnAttributes;
 
     $hash->{FW_detailFn}  = "FB_CALLLIST_makeTable";
-    $hash->{FW_summaryFn}  = "FB_CALLLIST_makeTable";
+    $hash->{FW_summaryFn} = "FB_CALLLIST_makeTable";
     $hash->{FW_atPageEnd} = 1;
 } 
 
@@ -75,28 +76,19 @@ sub FB_CALLLIST_Define($$)
     my $retval = undef;
     my $name = $a[0];
     my $callmonitor = $a[2];
-    if(!defined($callmonitor))
-    {
-        return "FB_CALLLIST_define: you must specify a device name for using FB_CALLLIST";
-    }
     
-    if(@a != 3) 
-    {
-        return "wrong define syntax: define <name> FB_CALLLIST <name>";
-    }
+    return "wrong define syntax: you must specify a device name for using FB_CALLLIST" if(!defined($callmonitor));
+    return "wrong define syntax: define <name> FB_CALLLIST <name>" if(@a != 3);
     
-    unless(defined($defs{$callmonitor}))
+    if($init_done)
     {
-        return "FB_CALLLIST_define: the selected device $callmonitor does not exist.";
-    }
-    
-    unless($defs{$callmonitor}->{TYPE} eq "FB_CALLMONITOR")
-    {
-        Log3 $name, 3, "FB_CALLLIST ($name) - WARNING - selected device $callmonitor ist not of type FB_CALLMONITOR";
-    }
+        return "define error: the selected device $callmonitor does not exist." unless(defined($defs{$callmonitor}));
 
+        Log3 $name, 3, "FB_CALLLIST ($name) - WARNING - selected device $callmonitor ist not of type FB_CALLMONITOR" unless($defs{$callmonitor}->{TYPE} eq "FB_CALLMONITOR");
+    }
+    
     $hash->{FB} = $callmonitor;
-    $hash->{NOTIFYDEV} = $callmonitor;
+    $hash->{NOTIFYDEV} = "global,".$callmonitor;
     $hash->{STATE} = 'Initialized';
     $hash->{helper}{DEFAULT_COLUMN_ORDER} = "row,state,timestamp,name,number,internal,external,connection,duration";
     
@@ -207,13 +199,6 @@ sub FB_CALLLIST_Attr($@)
                 return "invalid external mapping table: $value";
             } 
         } 
-        elsif($attrib eq "list-type")
-        {
-            if($value and $value =~ /^incoming|outgoing|missed-call|completed|active$/)
-            {
-                $attr{$name}{$attrib} = $value;
-            }
-        }       
     }
     elsif($cmd eq "del")
     {
@@ -233,18 +218,6 @@ sub FB_CALLLIST_Attr($@)
         {
             delete($hash->{helper}{EXTERNAL_MAP}) if(exists($hash->{helper}{EXTERNAL_MAP}));
         }
-    }
-    
-    if($init_done)
-    {
-        # delete all outdated calls according to attribute list-type, internal-number-filter and number-of-calls
-        FB_CALLLIST_cleanupList($hash);
-
-        # Inform all FHEMWEB clients
-        FB_CALLLIST_updateFhemWebClients($hash);
-        
-        # save current list state to file/configDB
-        FB_CALLLIST_saveList($hash);
     }
 }
 
@@ -289,27 +262,42 @@ sub FB_CALLLIST_Notify($$)
 {
     my ($hash,$d) = @_;
     
-    return undef if(!defined($hash));
+    return undef if(!defined($hash) or !defined($d));
 
     my $name = $hash->{NAME};
-   
-    return undef if(IsDisabled($name)); 
+    
+    if($d->{NAME} eq "global")
+    {
+        if(grep(m/^(?:ATTR $name .*|DELETEATTR $name .*|INITIALIZED|REREADCFG)$/, @{$d->{CHANGED}}))
+        {
+            my $callmonitor = $hash->{FB};
+            
+            Log3 $name, 3, "FB_CALLLIST ($name) - WARNING - the selected device $callmonitor does not exist" unless(defined($defs{$callmonitor}));
+            Log3 $name, 3, "FB_CALLLIST ($name) - WARNING - selected device $callmonitor ist not of type FB_CALLMONITOR" if(defined($defs{$callmonitor}) and $defs{$callmonitor}->{TYPE} ne "FB_CALLMONITOR");
+
+            # delete all outdated calls according to attribute list-type, internal-number-filter and number-of-calls
+            FB_CALLLIST_cleanupList($hash);
+
+            # Inform all FHEMWEB clients
+            FB_CALLLIST_updateFhemWebClients($hash) if(grep(m/^(?:ATTR|DELETEATTR)$/, @{$d->{CHANGED}}));
+            
+            # save current list state to file/configDB
+            FB_CALLLIST_saveList($hash);
+        }
+        return undef;
+    }
 
     my $fb = $d->{NAME};
     
-    if ($fb ne $hash->{FB})
-    {
-        return undef;
-    } 
- 
-    return if(!grep(m/^event:/, @{$d->{CHANGED}}));
+    return undef if(IsDisabled($name)); 
+    return undef if($fb ne $hash->{FB});
+    return undef if(!grep(m/^event:/, @{$d->{CHANGED}}));
  
     my $event = ReadingsVal($fb, "event", undef);
     my $call_id = ReadingsVal($fb, "call_id", undef);  
     
     Log3 $name, 4, "FB_CALLLIST ($name) - start processing event $event for Call-ID $call_id";
     
-
     if(exists($hash->{helper}{LAST_EVENT}) and exists($hash->{helper}{LAST_CALL_ID}) and $event eq $hash->{helper}{LAST_EVENT} and $call_id eq $hash->{helper}{LAST_CALL_ID})
     {
         Log3 $name, 4, "FB_CALLLIST ($name) - already processed event $event for Call-ID $call_id, skipping...";
@@ -353,7 +341,6 @@ sub FB_CALLLIST_Notify($$)
         $data->{direction} = ReadingsVal($fb, "direction", undef);
         $data->{running_call} = 1;
         $data->{call_id} = $call_id;
-        $data->{last_event} = $event;
        
         if($data->{direction} eq "outgoing")
         {
@@ -377,7 +364,6 @@ sub FB_CALLLIST_Notify($$)
     if($event eq "connect")
     {
         $data->{internal_connection} = ReadingsVal($fb, "internal_connection", undef)  if($data->{direction} eq "incoming");
-        $data->{last_event} = $event;
         
         Log3 $name, 5, "FB_CALLLIST ($name) - processed connect event for call id $call_id";
     }
@@ -391,14 +377,13 @@ sub FB_CALLLIST_Notify($$)
               $data->{missed_call} = 1;
         }
         
-        $data->{last_event} = $event;
-        
         delete($data->{running_call}) if(defined($data->{running_call}));
         
         Log3 $name, 5, "FB_CALLLIST ($name) - processed disconnect event for call id $call_id";
     }
 
-
+    $data->{last_event} = $event;
+            
     # clean up the list 
     FB_CALLLIST_cleanupList($hash);
     
@@ -453,7 +438,7 @@ sub FB_CALLLIST_cleanupList($)
             
             @list = grep { ($hash->{helper}{DATA}{$_}{direction} ne "outgoing") or ($hash->{helper}{DATA}{$_}{direction} eq "outgoing" and ++$count > $limit) } sort {$b <=> $a} keys %{$hash->{helper}{DATA}} if($listtype eq "outgoing");
             
-            @list = grep { ((not $hash->{helper}{DATA}{$_}{running_call}) and (not $hash->{helper}{DATA}{$_}{missed_call}) or $hash->{helper}{DATA}{$_}{direction} eq "outgoing") or ($hash->{helper}{DATA}{$_}{direction} eq "incoming" and $hash->{helper}{DATA}{$_}{missed_call} and  ++$count > $limit)  } sort {$b <=> $a} keys %{$hash->{helper}{DATA}} if($listtype eq "missed-calls");
+            @list = grep { ($hash->{helper}{DATA}{$_}{direction} eq "outgoing") or (!$hash->{helper}{DATA}{$_}{running_call} and not (((!$hash->{helper}{DATA}{$_}{missed_call} and AttrVal($name, "answMachine-is-missed-call", "0") eq "1" and $hash->{helper}{DATA}{$_}{internal_connection} =~ /^Answering_Machine/) or $hash->{helper}{DATA}{$_}{missed_call}) and not ++$count > $limit)) } sort {$b <=> $a} keys %{$hash->{helper}{DATA}} if($listtype eq "missed-calls");
             
             @list = grep { (not $hash->{helper}{DATA}{$_}{running_call}) and ++$count > $limit } sort {$b <=> $a} keys %{$hash->{helper}{DATA}} if($listtype eq "completed");
             
@@ -513,7 +498,6 @@ sub FB_CALLLIST_returnIcon($$$)
 
     my $result = FW_makeImage($icon_name);
     
-    
     return $result if($result ne $icon_name);
     return $text;
 }
@@ -562,7 +546,7 @@ sub FB_CALLLIST_returnCallState($$;$)
             $state = FB_CALLLIST_returnIcon($hash, "incoming.done", $state) if($icons and not $data->{missed_call});      
             $state = FB_CALLLIST_returnIcon($hash, "incoming.missed", $state) if($icons and $data->{missed_call});
         }
-        elsif($data->{direction} eq "incoming" and exists($data->{internal_connection}) and $data->{internal_connection} =~ /Answering_Machine/)
+        elsif($data->{direction} eq "incoming" and exists($data->{internal_connection}) and $data->{internal_connection} =~ /^Answering_Machine/)
         {
             $state = "=> O_O";
             $state = FB_CALLLIST_returnIcon($hash,"incoming.tam", $state) if($icons);
@@ -600,7 +584,7 @@ sub FB_CALLLIST_list2html($;$)
     my $name = $hash->{NAME};
     my $alias = AttrVal($hash->{NAME}, "alias", $hash->{NAME});
     
-    my $create_readings = AttrVal($hash->{NAME}, "create-readings",0);
+    my $create_readings = AttrVal($hash->{NAME}, "create-readings","0");
     
     my $td_style = 'style="padding-left:6px;padding-right:6px;"';
     my @json_output = ();
@@ -608,9 +592,18 @@ sub FB_CALLLIST_list2html($;$)
     
     my $old_locale = setlocale(LC_ALL);
     
+    if(AttrVal($name, "language", "en") eq "de")
+    {
+        setlocale(LC_ALL, "de_DE.utf8");
+    }
+    else
+    {
+        setlocale(LC_ALL, "en_US.utf8");
+    }
+    
     my $ret .= "<table>";
     
-    if(AttrVal($name, "no-heading", "0") eq "0")
+    if(AttrVal($name, "no-heading", "0") eq "0" and defined($FW_ME) and defined($FW_subdir))
     {
         $ret .=" <tr><td>";
         $ret .= '<div class="devType"><a href="'.$FW_ME.$FW_subdir.'?detail='.$name.'">'.$alias.'</a>'.(IsDisabled($name) ? " (disabled)" : "").'</div>' unless($FW_webArgs{"detail"});
@@ -621,7 +614,8 @@ sub FB_CALLLIST_list2html($;$)
     $ret .= '<div class="fhemWidget" informId="'.$name.'" cmd="" arg="fbcalllist" dev="'.$name.'">'; # div tag to support inform updates
     $ret .= '<table class="block fbcalllist">';
     
-    $ret .= FB_CALLLIST_returnOrderedHTMLOutput($hash, FB_CALLLIST_returnTableHeader($hash), 'class="fbcalllist header"','');
+    
+    $ret .= FB_CALLLIST_returnOrderedHTMLOutput($hash, FB_CALLLIST_returnTableHeader($hash), 'class="fbcalllist header"','') if(AttrVal($name, "no-table-header", "0") eq "0");
     
     if(exists($hash->{helper}{DATA}) and (scalar keys %{$hash->{helper}{DATA}}) > 0)
     {
@@ -641,7 +635,6 @@ sub FB_CALLLIST_list2html($;$)
             @list = grep { !$hash->{helper}{DATA}{$_}{running_call} } @list;
         }
 
-        
         foreach my $index (@list)
         {
             my $data = \%{$hash->{helper}{DATA}{$index}};
@@ -662,7 +655,7 @@ sub FB_CALLLIST_list2html($;$)
 
             
             push @json_output,  FB_CALLLIST_returnOrderedJSONOutput($hash, $line);
-            FB_CALLLIST_updateReadings($hash, $line) if($to_json and $create_readings);
+            FB_CALLLIST_updateReadings($hash, $line) if($to_json and $create_readings eq "1");
             $ret .= FB_CALLLIST_returnOrderedHTMLOutput($hash, $line, 'number="'.$count.'" class="fbcalllist '.($count % 2 == 1 ? "odd" : "even").'"', 'class="fbcalllist" '.$td_style);
             $count++;
         }
@@ -717,14 +710,8 @@ sub FB_CALLLIST_formatDuration($$)
     my $minute = ($data->{call_duration} / 60) % 60;
     my $seconds = int($data->{call_duration} % 60);
     
-    if($data->{missed_call})
-    {
-        return "-";
-    }
-    else
-    {
-        return sprintf("%02d:%02d:%02d", $hour, $minute, $seconds);
-    }
+    return "-"  if($data->{missed_call});
+    return sprintf("%02d:%02d:%02d", $hour, $minute, $seconds);
 }
 
 #####################################
@@ -899,10 +886,7 @@ sub FB_CALLLIST_updateReadings($$)
     }
     
     readingsEndUpdate($hash, 1);
-    
-
 }
-
 
 #####################################
 # Check, if a given internal number matches the configured internal-number-filter (if set). returns true if number matches
@@ -935,6 +919,8 @@ sub FB_CALLLIST_updateFhemWebClients($)
 {
     my ($hash) = @_;
     my $name = $hash->{NAME};
+    
+    return undef unless($init_done);
 
     if(exists($hash->{helper}{DATA}) and (scalar keys %{$hash->{helper}{DATA}}) > 0)
     {
@@ -973,7 +959,8 @@ sub FB_CALLLIST_updateFhemWebClients($)
     }
 }
 
-
+#####################################
+# returns the table header in the configured language
 sub FB_CALLLIST_returnTableHeader($)
 {
     my ($hash) = @_;
@@ -982,8 +969,6 @@ sub FB_CALLLIST_returnTableHeader($)
 
     if(AttrVal($name, "language", "en") eq "de")
     {
-        setlocale(LC_ALL, "de_DE.utf8");
-        
         $line = { 
             row => "",
             state => "Status",
@@ -998,8 +983,6 @@ sub FB_CALLLIST_returnTableHeader($)
     }
     else
     {
-        setlocale(LC_ALL, "en_US.utf8");
-        
         $line = { 
             row => "",
             state => "State",
@@ -1019,6 +1002,7 @@ sub FB_CALLLIST_returnTableHeader($)
 1;
 
 =pod
+=item helper
 =begin html
 
 <a name="FB_CALLLIST"></a>
@@ -1099,6 +1083,11 @@ sub FB_CALLLIST_returnTableHeader($)
     If enabled, for all visible calls in the list, readings and events will be created. It is recommended to set the attribute <a href="#event-on-change-reading">event-on-change-reading</a> to <code>.*</code> (all readings), to reduce the amount of generated readings for certain call events.<br><br>
     Possible values: 0 => no readings will be created, 1 => readings and events will be created.<br>
     Default Value is 0 (no readings will be created)<br><br>
+    <li><a name="FB_CALLLIST_answMachine-is-missed-call">answMachine-is-missed-call</a> 0,1</li>
+    If activated, a incoming call, which is answered by an answering machine, will be treated as a missed call. This is only relevant if <a href="#FB_CALLLIST_list-type">list-type</a> is set to "missed-call".
+    <br><br>
+    Possible values: 0 => disabled, 1 => enabled (answering machine calls will be treated as "missed call").<br>
+    Default Value is 0 (disabled)<br><br>
     <li><a name="FB_CALLLIST_number-of-calls">number-of-calls</a> 1..20</li>
     Defines the maximum number of displayed call entries in the list.<br><br>
     Default Value is 5 calls<br><br>
@@ -1207,6 +1196,10 @@ sub FB_CALLLIST_returnTableHeader($)
     If activated the headline with a link to the detail page of the current definition will be hidden.<br><br>
     Possible values: 0 => the heading line will be shown , 1 => the heading line will not be shown<br>
     Default Value is 0 (the heading line will be shown)<br><br>
+    <li><a name="FB_CALLLIST_no-table-header">no-table-header</a> 0,1</li>
+    If activated the table header containing the name of each column for the current definition will be hidden.<br><br>
+    Possible values: 0 => the table header will be shown , 1 => the table header will not be shown<br>
+    Default Value is 0 (the table header will be shown)<br><br>
     </ul>
   <br>
   <a name="FB_CALLLIST_events"></a>
@@ -1278,12 +1271,12 @@ sub FB_CALLLIST_returnTableHeader($)
   <ul>
     <li><a href="#do_not_notify">do_not_notify</a></li>
     <li><a href="#readingFnAttributes">readingFnAttributes</a></li><br>
-    <li><a name="FB_CALLLIST_disable">disable</a></li>
+    <li><a name="FB_CALLLIST_disable">disable</a> 0,1</li>
     Optionales Attribut zur Deaktivierung der Anrufliste. Es werden dann keine Anruf-Events mehr verarbeitet und die Liste nicht weiter aktualisiert.
     <br><br>
     M&ouml;gliche Werte: 0 => Anrufliste ist aktiv, 1 => Anrufliste ist deaktiviert.<br>
     Standardwert ist 0 (aktiv)<br><br>
-    <li><a name="FB_CALLLIST_disabledForIntervals">disabledForIntervals</a></li>
+    <li><a name="FB_CALLLIST_disabledForIntervals">disabledForIntervals</a> HH:MM-HH:MM HH:MM-HH-MM...</li>
     Optionales Attribut zur Deaktivierung der Anrufliste innerhalb von bestimmten Zeitintervallen.
     Das Argument ist eine Leerzeichen-getrennte Liste von Minuszeichen-getrennten HH:MM Paaren (Stunde : Minute).
     Falls die aktuelle Uhrzeit zwischen diese Werte f&auml;llt, dann wird die Ausf&uuml;hrung, wie bei <a href="#FB_CALLLIST_disable">disable</a>, ausgesetzt.
@@ -1296,6 +1289,11 @@ sub FB_CALLLIST_returnTableHeader($)
     Es wird empfohlen das Attribut <a href="#event-on-change-reading">event-on-change-reading</a> auf den Wert <code>.*</code> zu stellen um die hohe Anzahl an Events in bestimmten F&auml;llen zu minimieren.<br><br>
     M&ouml;gliche Werte: 0 => keine Readings erstellen, 1 => Readings und Events werden erzeugt.<br>
     Standardwert ist 0 (keine Readings erstellen)<br><br>
+    <li><a name="FB_CALLLIST_answMachine-is-missed-call">answMachine-is-missed-call</a> 0,1</li>
+    Sofern aktiviert, werden Anrufe, welche durch einen internen Anrufbeantworter beantwortet werden, als "verpasster Anruf" gewertet. Diese Funktionalit&auml;t ist nur relevant, wenn <a href="#FB_CALLLIST_list-type">list-type</a> auf "missed-call" gesetzt ist.
+    <br><br>
+    M&ouml;gliche Werte: 0 => deaktiviert, 1 => aktiviert (Anrufbeantworter gilt als "verpasster Anruf").<br>
+    Standardwert ist 0 (deaktiviert)<br><br>
     <li><a name="FB_CALLLIST_number-of-calls">number-of-calls</a> 1..20</li>
     Setzt die maximale Anzahl an Eintr&auml;gen in der Anrufliste. Sollte die Anrufliste voll sein, wird das &auml;lteste Gespr&auml;ch gel&ouml;scht.<br><br>
     Standardwert sind 5 Eintr&auml;ge<br><br>
@@ -1410,6 +1408,10 @@ sub FB_CALLLIST_returnTableHeader($)
     Sofern aktiviert, wird die &Uuml;berschriftenzeile ausserhalb der Liste inkl. Link auf die Detail-Seite der aktuellen Definition ausgeblendet.<br><br>
     M&ouml;gliche Werte: 0 => &Uuml;berschriftenzeile wird angezeigt , 1 => &Uuml;berschriftenzeile wird ausgeblendet<br>
     Standardwert ist 1 (&Uuml;berschriftenzeile wird angezeigt)<br><br>
+    <li><a name="FB_CALLLIST_no-table-header">no-table-header</a> 0,1</li>
+    Sofern aktiviert, wird die Kopfzeile der Tabelle f&uuml;r die aktuelle Definition ausgeblendet.<br><br>
+    M&ouml;gliche Werte: 0 => Kopfzeile wird angezeigt , 1 => Kopfzeilewird ausgeblendet<br>
+    Standardwert ist 1 (Kopfzeile wird angezeigt)<br><br>
     </ul>
   <br>
   <a name="FB_CALLLIST_events"></a>

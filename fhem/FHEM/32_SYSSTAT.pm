@@ -735,6 +735,7 @@ SYSSTAT_getStat($)
 1;
 
 =pod
+=item device
 =begin html
 
 <a name="SYSSTAT"></a>

@@ -147,7 +147,7 @@ allowed_Authenticate($$$$)
     my $pw = AttrVal($aName, "password", undef);
     if(!$pw) {
       $pw = AttrVal($aName, "globalpassword", undef);
-      $pw = undef if($pw && $cl->{NAME} =~ m/^telnet:127.0.0.1/);
+      $pw = undef if($pw && $cl->{NAME} =~ m/_127.0.0.1_/);
     }
     return 0 if(!$pw);
     return 2 if(!defined($param));
@@ -203,6 +203,7 @@ allowed_Attr(@)
 1;
 
 =pod
+=item helper
 =begin html
 
 <a name="allowed"></a>
