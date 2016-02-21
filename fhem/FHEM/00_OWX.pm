@@ -97,7 +97,7 @@ my %attrs = (
 my $owx_baud=9600;
 my $owx_cmdlen;
 #-- Debugging 0,1,2,3
-my $owx_debug=0;
+my $owx_debug=3;
 #-- 8 byte 1-Wire device address
 my @owx_ROM_ID  =(0,0,0,0 ,0,0,0,0); 
 #-- 16 byte search string
@@ -122,7 +122,7 @@ my $owx_LastDeviceFlag = 0;
 sub OWX_Initialize ($) {
   my ($hash) = @_;
   #-- Provider
-  $hash->{Clients}     = ":OWAD:OWCOUNT:OWID:OWLCD:OWMULTI:OWSWITCH:OWTHERM:";
+  $hash->{Clients}     = ":OWAD:OWCOUNT:OWID:OWLCD:OWMULTI:OWSWITCH:OWTHERM:OWVAR:";
 
   #-- Normal Devices
   $hash->{DefFn}   = "OWX_Define";
@@ -816,7 +816,11 @@ sub OWX_Discover ($) {
     #-- Family 29 = Switch DS2408
     }elsif( $owx_f eq "29" ){
       $chip     = "DS2408";
-      $acstring = "OWSWITCH DS2408";  
+      $acstring = "OWSWITCH DS2408";
+    #-- Family 2C = Potentiometer DS2490
+    }elsif( $owx_f eq "2C" ){
+      $chip     = "DS2890";
+      $acstring = "OWVAR DS2890";
     #-- Family 3A = Switch DS2413
     }elsif( $owx_f eq "3A" ){
       $chip     = "DS2413";
