@@ -34,9 +34,16 @@ no warnings 'deprecated';
 use vars qw/@ISA/;
 @ISA='OWX_SER';
 
+use constant {
+  UNKNOWN => 0,
+  COMMAND => 1,
+  DATA    => 2,
+};
+
 sub new($) {
   my ($class,$serial) = @_;
   
+  $serial->{ds2480state} = UNKNOWN; 
   return bless $serial,$class;
 }
 
@@ -133,7 +140,8 @@ sub get_pt_execute($$$$) {
 #
 #########################################################################################
 # 
-# Block_2480 - Send data block (Fig. 6 of Maxim AN192)
+# block - Send data block (Fig. 6 of Maxim AN192) on 1-Wire bus
+# switches Busmaster to data-mode if required
 #
 # Parameter hash = hash of bus master, data = string to send
 #
@@ -149,8 +157,10 @@ sub block ($) {
   my $len = length($data);
   
   #-- if necessary, prepend E1 character for data mode
-  if( substr($data,0,1) ne '\xE1') {
+  
+  if (($serial->{ds2480state} ne DATA) and (substr($data,0,1) ne '\xE1') {
     $data2 = "\xE1";
+    $serial->{ds2480state} = DATA
   }
   #-- all E3 characters have to be duplicated
   for(my $i=0;$i<$len;$i++){
@@ -163,6 +173,30 @@ sub block ($) {
   #-- write 1-Wire bus as a single string
   $serial->query($data2,$len);
 }
+
+#########################################################################################
+# 
+# command - Send command block (Fig. 6 of Maxim AN192) to Busmaster (not to 1-Wire bus)
+# switches Busmaster to command-mode if required
+#
+# Parameter hash = hash of bus master, data = string to send
+#
+# Return response, if OK
+#        0 if not OK
+#
+########################################################################################
+
+sub command ($$) {
+  my ($serial,$command,$retlen) =@_;
+  if ($serial->{ds2480state} eq COMMAND) {
+    #-- already command-mode, just write 1-Wire bus
+    $serial->query($command,$retlen);
+  } else {
+    $serial->{ds2480state} = COMMAND;
+    #-- if necessary, prepend \xE3 character for command mode
+    $serial->query("\xE3".$command,$retlen);
+  };
+} 
 
 ########################################################################################
 #
@@ -231,6 +265,7 @@ sub start_query() {
   $serial->{num_reads} = 0;
   $serial->{retlen} = 0;
   $serial->{retcount} = 0;
+  $serial->{ds2480state} = UNKNOWN; 
 }
 
 ########################################################################################
@@ -251,10 +286,8 @@ sub reset() {
   my $name = $serial->{name};
   $serial->start_query();
 
-  #-- if necessary, prepend \xE3 character for command mode
   #-- Reset command \xC5
-  #-- write 1-Wire bus
-  $serial->query("\xE3\xC5",1);
+  $serial->command("\xC5",1);
   #-- sleeping for some time (value of 0.07 taken from original OWX_Query_DS2480)
   select(undef,undef,undef,0.07);
 }
@@ -332,18 +365,21 @@ sub pt_next ($$) {
       #--increment number
       $id_bit_number++;
     }
-    #-- issue data mode \xE1, the normal search command \xF0 or the alarm search command \xEC 
-    #   and the command mode \xE3 / start accelerator \xB5 
-    if( $mode ne "alarm" ){
-      $sp1 = "\xE1\xF0\xE3\xB5";
-    } else {
-      $sp1 = "\xE1\xEC\xE3\xB5";
-    }
-    #-- issue data mode \xE1, device ID, command mode \xE3 / end accelerator \xA5
-    $sp2=sprintf("\xE1%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c\xE3\xA5",@{$context->{search}});
+    #-- issue normal search command \xF0 or the alarm search command \xEC (on 1-Wire bus) 
+    #   and activate start accelerator \xB5 (in DS2480 only, no response expected)
     $serial->reset();
-    $serial->query($sp1,1);
-    $serial->query($sp2,16);
+    if( $mode ne "alarm" ){
+      $serial->block("\xF0");
+      $serial->command("\xB5",0);
+    } else {
+      $serial->block("\xEC");
+      $serial->command("\xB5",0);
+    }
+    #-- issue device ID in data mode
+    $serial->block(sprintf("%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c",@{$context->{search}}));
+    #-- then end accelerator \xA5 in command mode
+    $serial->command("\xA5",0);
+    
     main::OWX_ASYNC_TaskTimeout($serial->{hash},gettimeofday+main::AttrVal($serial->{name},"timeout",2));
     PT_WAIT_UNTIL($serial->response_ready());
     die "reset failed" unless $serial->reset_response();
