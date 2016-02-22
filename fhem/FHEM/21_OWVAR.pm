@@ -4,7 +4,7 @@
 #
 # FHEM module to commmunicate with 1-Wire variable resistor DS2890
 #
-# Prof. Dr. Peter A. Henning
+# Prof. Dr. Peter A. Henning, Norbert Truchsess
 #
 # $Id: 21_OWTVAR.pm 6379 2016-02-04 22:31:34Z pahenning $
 #
@@ -75,7 +75,7 @@ no warnings 'deprecated';
 sub Log3($$$);
 sub AttrVal($$$);
 
-my $owx_version="5.0beta";
+my $owx_version="5.1beta";
 my $owg_channel = "";
 
 my %gets = (
@@ -200,8 +200,7 @@ sub OWVAR_Define ($$) {
     return "OWVAR: Warning, no 1-Wire I/O device found for $name.";
   #-- if coupled, test if ASYNC or not
   } else {
-    Log 1,"[OWVAR] ASYNC interface not implemented";
-    #$hash->{ASYNC} = $hash->{IODev}->{TYPE} eq "OWX_ASYNC" ? 1 : 0;
+    $hash->{ASYNC} = $hash->{IODev}->{TYPE} eq "OWX_ASYNC" ? 1 : 0;
   }
 
   $modules{OWVAR}{defptr}{$id} = $hash;
@@ -402,11 +401,10 @@ sub OWVAR_Get($@) {
     if( $interface =~ /^OWX/ ){
       #-- asynchronous mode
       if( $hash->{ASYNC} ){
-        Log 1,"[OWVAR] Get ASYNC interface not implemented";
-        #eval {
-        #  OWX_ASYNC_RunToCompletion($hash,OWX_ASYNC_PT_Verify($hash));
-        #};
-        #return GP_Catch($@) if $@;
+        eval {
+          OWX_ASYNC_RunToCompletion($hash,OWX_ASYNC_PT_Verify($hash));
+        };
+        return GP_Catch($@) if $@;
         return "$name.present => ".ReadingsVal($name,"present","unknown");
       } else {
         $value = OWX_Verify($master,$hash->{ROM_ID});
@@ -428,11 +426,10 @@ sub OWVAR_Get($@) {
     #-- not different from getting all values ..
     $ret = OWXVAR_GetValues($hash);
   }elsif( $interface eq "OWX_ASYNC" ){
-    Log 1,"[OWVAR] Get ASYNC interface not implemented";
-    #eval {
-    #  $ret = OWX_ASYNC_RunToCompletion($hash,OWXVAR_PT_GetValues($hash));
-    #};
-    #$ret = GP_Catch($@) if $@;
+    eval {
+      $ret = OWX_ASYNC_RunToCompletion($hash,OWXVAR_PT_GetValues($hash));
+    };
+    $ret = GP_Catch($@) if $@;
   #-- OWFS interface
   }elsif( $interface eq "OWServer" ){
     Log 1,"[OWVAR] Get OWFS interface not implemented";
@@ -490,7 +487,11 @@ sub OWVAR_GetValues($@) {
         if( !defined($ret) );
     }
   }elsif( $interface eq "OWX_ASYNC" ){
-    Log 1,"[OWVAR] Get ASYNC interface not implemented";
+    #TODO: retry if this fails...
+    eval {
+      OWX_ASYNC_Schedule( $hash, OWXVAR_PT_GetValues($hash,@a) );
+    };
+    $ret = GP_Catch($@) if $@;
   }elsif( $interface eq "OWServer" ){
     Log 1,"[OWVAR] Get OWFS interface not implemented";
     #$ret = OWFSVAR_GetValues($hash);
@@ -589,7 +590,10 @@ sub OWVAR_Set($@) {
   if( $interface eq "OWX" ){
     $ret = OWXVAR_SetValues($hash,$key,$value);
   }elsif( $interface eq "OWX_ASYNC" ){
-    Log 1,"[OWVAR] Set ASYNC interface not implemented";
+    eval {
+      OWX_ASYNC_Schedule( $hash, OWXVAR_PT_SetValues($hash,$key,$value) );
+    };
+    $ret = GP_Catch($@) if $@;
   #-- OWFS interface
   }elsif( $interface eq "OWServer" ){
     Log 1,"[OWVAR] Set OWFS interface not implemented";
@@ -824,6 +828,120 @@ sub OWXVAR_SetValues($$$) {
   return undef;
 }
 
+sub OWXVAR_PT_GetValues($) {
+
+  my ($hash) = @_;
+
+  return PT_THREAD(sub {
+
+    my ($thread) = @_;
+
+    my ($res,$ret);
+
+    #-- ID of the device
+    my $owx_dev = $hash->{ROM_ID};
+    #-- hash of the busmaster
+    my $master = $hash->{IODev};
+
+    PT_BEGIN($thread);
+    my $name   = $hash->{NAME};
+	
+    #-- NOW ask the specific device
+    #-- issue the match ROM command \x55 and the read wiper command \xF0
+    #-- reading 9 + 1 + 2 data bytes and 0 CRC byte = 12 bytes
+    
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\xFO",2);
+    PT_WAIT_THREAD($thread->{pt_execute});
+    die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
+
+    $res = $thread->{pt_execute}->PT_RETVAL();
+    unless (defined $res and length($res)==2) {
+      PT_EXIT("$owx_dev has returned invalid data");
+    }
+
+    $ret = OWXVAR_BinValues($hash,undef,$owx_dev,undef,undef,$res);
+    if ($ret) {
+      die $ret;
+    }
+    #TODO: according to datasheet the sequence ends with a reset. 
+    #OWX_Reset($master); - check if actually required.
+    PT_END;
+  });
+}
+
+#######################################################################################
+#
+# OWXVAR_SetValues - Implements SetFn function
+# 
+# Parameter hash = hash of device addressed
+#           a = argument array
+#
+#######################################################################################
+
+sub OWXVAR_PT_SetValues($$$) {
+  
+  my ($hash, $key,$value) = @_;
+  
+  return PT_THREAD(sub {
+
+    my ($thread) = @_;
+
+    my ($res,$rv);
+
+    #-- ID of the device
+    my $owx_dev = $hash->{ROM_ID};
+    #-- hash of the busmaster
+    my $master = $hash->{IODev};
+
+    PT_BEGIN($thread);
+    my $name   = $hash->{NAME};
+
+    #-- translate from 0..100 to 0..255
+    die sprintf("OWXVAR: Set with wrong value $value for $key, range is  [%3.1f,%3.1f]",0,100)
+      if($value < 0 || $value > 100);
+    my $pos = floor((100-$value)*2.55+0.5);
+    #-- issue the match ROM command \x55 and the write wiper command \x0F,
+    #   followed by 1 bytes of data 
+    #
+    my $select=sprintf("\x0F%c",$pos);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select, 1);
+    PT_WAIT_THREAD($thread->{pt_execute});
+    die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
+    
+    #-- process results
+    
+    $res = $thread->{pt_execute}->PT_RETVAL();
+    unless (defined $res and length($res)==1) {
+      PT_EXIT("$owx_dev has returned invalid data");
+    }
+
+    #-- check DS2890 returns same value    
+    $rv=ord($res);
+    die "OWXVAR: Set failed with return value $rv from set value $pos"
+      if($rv ne $pos);
+
+    #-- send RELEASE-command to confirm if ok
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,undef,undef,"\x96", 1);
+    PT_WAIT_THREAD($thread->{pt_execute});
+    die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
+      
+    $res = $thread->{pt_execute}->PT_RETVAL();
+    unless (defined $res and length($res)==1) {
+      PT_EXIT("$owx_dev has returned invalid data");
+    }
+
+    #-- validate RELEASE-command was aceppted (DS2890 would write all 1 if not)
+    $rv=ord($res);
+    die "OWXVAR: Set failed with return value $rv from release value"
+     if($rv ne 0);
+
+    #TODO: according to datasheet the sequence ends with a reset. 
+    #OWX_Reset($master); - check if actually required.
+    
+    $hash->{owg_val}=sprintf("%5.2f",(1-$pos/255.0)*100);
+    PT_END;
+  });
+}
 
 
 1;
