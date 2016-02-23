@@ -61,73 +61,83 @@ sub new($) {
 #
 ########################################################################################
 
-sub get_pt_execute($$$$) {
-  my ($self, $reset, $dev, $writedata, $numread) = @_;
+sub get_pt_execute($$) {
+  my ($self, $args) = @_;
+  my $numskip=0;
+
   return PT_THREAD(sub {
     my ($thread) = @_;
-    
+
     PT_BEGIN($thread);
-    
-    $self->reset() if ($reset);
-  
-    if (defined $writedata or $numread) {
-  
-      my $select;
-    
-      #-- has match ROM part
-      if( $dev ) {
-            
-        #-- ID of the device
-        my $owx_rnf = substr($dev,3,12);
-        my $owx_f   = substr($dev,0,2);
-    
-        #-- 8 byte 1-Wire device address
-        my @rom_id  =(0,0,0,0 ,0,0,0,0); 
-        #-- from search string to byte id
-        $dev=~s/\.//g;
-        for(my $i=0;$i<8;$i++){
-           $rom_id[$i]=hex(substr($dev,2*$i,2));
-        }
-        $select=sprintf("\x55%c%c%c%c%c%c%c%c",@rom_id); 
-      #-- has no match ROM part, issue skip ROM command (0xCC:)
-      } else {
-        $select="\xCC";
+
+    if ($args->{'reset'}) {
+      $self->reset();
+    } else {
+      $self->start_query();
+    }
+
+    my $select;
+
+    #-- has match ROM part
+    if( my $dev = $args->{match}) {
+
+      #-- ID of the device
+      my $owx_rnf = substr($dev,3,12);
+      my $owx_f   = substr($dev,0,2);
+
+      #-- 8 byte 1-Wire device address
+      my @rom_id  =(0,0,0,0 ,0,0,0,0); 
+      #-- from search string to byte id
+      $dev=~s/\.//g;
+      for(my $i=0;$i<8;$i++){
+         $rom_id[$i]=hex(substr($dev,2*$i,2));
       }
-      if (defined $writedata) {
-        $select.=$writedata;
-      }
-      #-- has receive data part
-      if( $numread ) {
-        #$numread += length($data);
-        for( my $i=0;$i<$numread;$i++){
-          $select .= "\xFF";
-        };
-      }
-      
+      $select=sprintf("\x55%c%c%c%c%c%c%c%c",@rom_id);
+      $numskip = 9;
+    #-- has no match ROM part, issue skip ROM command (0xCC:)
+    } elsif ($args->{skip}) {
+      $select = "\xCC";
+      $numskip = 1;
+    } elsif ($args->{resume}) {
+      $select = "\xA5";
+      $numskip = 1;
+    }
+    if (defined (my $writedata = $args->{data})) {
+      $select.=$writedata;
+      $numskip+=length($writedata);
+    }
+    #-- has receive data part
+    if( my $numread = $args->{numread}) {
+      #$numread += length($data);
+      for( my $i=0;$i<$numread;$i++){
+        $select .= "\xFF";
+      };
+    }
+    if (defined $select) {
       #-- for debugging
       if( $main::owx_async_debug > 1){
         main::Log3($self->{name},5,"OWX_SER::Execute: Sending out ".unpack ("H*",$select));
       }
       $self->block($select);
     }
-    
     main::OWX_ASYNC_TaskTimeout($self->{hash},gettimeofday+main::AttrVal($self->{name},"timeout",2));
     PT_WAIT_UNTIL($self->response_ready());
-    
-    if ($reset and !$self->reset_response()) {
+
+    if ($args->{'reset'} and !$self->reset_response()) {
       die "reset failure";
     }
-  
+
     my $res = $self->{string_in};
     #-- for debugging
     if( $main::owx_async_debug > 1){
       main::Log3($self->{name},5,"OWX_SER::Execute: Receiving ".unpack ("H*",$res));
     }
-  
+
     if (defined $res) {
-      my $writelen = defined $writedata ? split (//,$writedata) : 0;
-      my @result = split (//, $res);
-      my $readdata = 9+$writelen < @result ? substr($res,9+$writelen) : "";
+#      my $writelen = defined $args->{data} ? split (//,$args->{data}) : 0;
+#      my @result = split (//, $res);
+#      my $readdata = 9+$writelen < @result ? substr($res,9+$writelen) : "";
+      my $readdata = $numskip < length($res) ? substr($res,$numskip) : "";
       PT_EXIT($readdata);
     }
     PT_END;
@@ -158,7 +168,7 @@ sub block ($) {
   
   #-- if necessary, prepend E1 character for data mode
   
-  if (($serial->{ds2480state} ne DATA) and (substr($data,0,1) ne '\xE1') {
+  if (($serial->{ds2480state} ne DATA) and (substr($data,0,1) ne '\xE1')) {
     $data2 = "\xE1";
     $serial->{ds2480state} = DATA
   }
@@ -265,7 +275,6 @@ sub start_query() {
   $serial->{num_reads} = 0;
   $serial->{retlen} = 0;
   $serial->{retcount} = 0;
-  $serial->{ds2480state} = UNKNOWN; 
 }
 
 ########################################################################################
@@ -285,7 +294,7 @@ sub reset() {
   my ($res,$r1,$r2);
   my $name = $serial->{name};
   $serial->start_query();
-
+  $serial->{ds2480state} = UNKNOWN; 
   #-- Reset command \xC5
   $serial->command("\xC5",1);
   #-- sleeping for some time (value of 0.07 taken from original OWX_Query_DS2480)

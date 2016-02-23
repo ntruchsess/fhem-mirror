@@ -97,7 +97,8 @@ use vars qw{%owg_family %gets %sets $owx_async_version $owx_async_debug};
 # http://owfs.sourceforge.net/family.html
 %owg_family = (
   "01"  => ["DS2401/DS1990A","OWID DS2401"],
-  "05"  => ["DS2405","OWID 05"],
+  "05"  => ["DS2405","OWID DS2405"],
+  "09"  => ["DS2502","OWID DS2502"],
   "10"  => ["DS18S20/DS1920","OWTHERM DS1820"],
   "12"  => ["DS2406/DS2507","OWSWITCH DS2406"],
   "1B"  => ["DS2436","OWID 1B"],
@@ -109,6 +110,7 @@ use vars qw{%owg_family %gets %sets $owx_async_version $owx_async_debug};
   "27"  => ["DS2417","OWID 27"],
   "28"  => ["DS18B20","OWTHERM DS18B20"],
   "29"  => ["DS2408","OWSWITCH DS2408"],
+  "2C"  => ["DS2890","OWVAR DS2890"],
   "3A"  => ["DS2413","OWSWITCH DS2413"],
   "3B"  => ["DS1825","OWID 3B"],
   "81"  => ["DS1420","OWID 81"],
@@ -152,7 +154,7 @@ $owx_async_debug=0;
 sub OWX_ASYNC_Initialize ($) {
   my ($hash) = @_;
   #-- Provider
-  $hash->{Clients} = ":OWAD:OWCOUNT:OWID:OWLCD:OWMULTI:OWSWITCH:OWTHERM:";
+  $hash->{Clients} = ":OWAD:OWCOUNT:OWID:OWLCD:OWMULTI:OWSWITCH:OWTHERM:OWVAR:";
 
   #-- Normal Devices
   $hash->{DefFn}    = "OWX_ASYNC_Define";
@@ -822,7 +824,7 @@ sub OWX_ASYNC_Kick($) {
         if ((defined $hash->{dokick}) and $hash->{dokick} eq "1") {
           Log3 $hash->{NAME},5,"OWX_ASYNC_PT_Kick: kicking DS14B20 temperature conversion";
           #-- issue the skip ROM command \xCC followed by start conversion command \x44 
-          $thread->{pt_execute} = OWX_ASYNC_PT_Execute($hash,1,undef,"\x44",0);
+          $thread->{pt_execute} = OWX_ASYNC_PT_Execute($hash,{'reset'=>1,data=>"\x44",});
           PT_WAIT_THREAD($thread->{pt_execute});
           if ($thread->{pt_execute}->PT_STATE() == PT_ERROR) {
             Log3 ($hash->{NAME},4,"OWX_ASYNC_PT_Kick: Failure in temperature conversion: ".$thread->{pt_execute}->PT_CAUSE());
@@ -978,28 +980,26 @@ sub OWX_ASYNC_PT_Verify($) {
 
 ########################################################################################
 #
-# OWX_Execute - # similar to OWX_Complex, but asynchronous
+# OWX_ASYNC_PT_Execute - # similar to OWX_Complex, but asynchronous
 # executes a sequence of 'reset','skip/match ROM','write','read','delay' on the bus
 #
 # Parameter hash = hash of bus master,
-#        context = anything that can be sent as a hash-member through a thread-safe queue 
-#                  see http://perldoc.perl.org/Thread/Queue.html#DESCRIPTION
-#          reset = 1/0 if 1 reset the bus first 
-#        owx_dev = 8 Byte ROM ID of device to be tested, if undef do a 'skip ROM' instead
-#           data = bytes to write (string)
-#        numread = number of bytes to read after write
-#          delay = optional delay (in ms) to wait after executing the next command 
-#                  for the same device
+#           args = { reset  => 0/1,
+#                    match  => 8 byte romid,
+#                    skip   => 0/1,
+#                    resume => 0/1, (only one of match,skip and resume may be set)
+#                    data   => bytes to write (string)
+#                    numread => number of bytes to read
+#                  }
 #
-# Returns : 1 if OK
-#           0 if not OK
+# Returns : Protothread to rum Query
 #
 ########################################################################################
 
-sub OWX_ASYNC_PT_Execute($$$$$) {
-  my ( $hash, $reset, $owx_dev, $data, $numread ) = @_;
+sub OWX_ASYNC_PT_Execute($$) {
+  my $hash = shift;
   if (my $executor = $hash->{ASYNC}) {
-    return $executor->get_pt_execute($reset,$owx_dev,$data,$numread);
+    return $executor->get_pt_execute(@_);
   } else {
     die "OWX_ASYNC_PT_Execute: no async device assigned";
   }

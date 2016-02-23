@@ -1071,14 +1071,14 @@ sub OWXMULTI_PT_GetValues($) {
     #-- switch the device to current measurement off, VDD only
     #-- issue the match ROM command \x55 and the write scratchpad command
     #"ds2438.writestatusvdd"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\x4E\x00\x08",0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\x4E\x00\x08",});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
     #-- copy scratchpad to register
     #-- issue the match ROM command \x55 and the copy scratchpad command
     #"ds2438.copyscratchpadvdd"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\x48\x00",0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\x48\x00",});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
@@ -1086,7 +1086,7 @@ sub OWXMULTI_PT_GetValues($) {
     #-- conversion needs some 12 ms !
     #-- issue the match ROM command \x55 and the start conversion command
     #"ds2438.temperaturconversionvdd"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\x44",0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\x44",});
     $thread->{ExecuteTime} = gettimeofday() + 0.03; # was 0.012
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
@@ -1097,7 +1097,7 @@ sub OWXMULTI_PT_GetValues($) {
     #-- conversion needs some 6 ms  !
     #-- issue the match ROM command \x55 and the start conversion command
     #"ds2438.voltageconversionvdd"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\xB4",0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xB4",});
     $thread->{ExecuteTime} = gettimeofday() + 0.02; # was 0.006
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
@@ -1108,7 +1108,7 @@ sub OWXMULTI_PT_GetValues($) {
     #-- copy needs some 12 ms !
     #-- issue the match ROM command \x55 and the recall memory command
     #"ds2438.recallmemoryvdd"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\xB8\x00",0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xB8\x00",});
     $thread->{ExecuteTime} = gettimeofday() + 0.03; # was 0.012
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
@@ -1119,7 +1119,7 @@ sub OWXMULTI_PT_GetValues($) {
     #-- issue the match ROM command \x55 and the read scratchpad command \xBE
     #-- reading 9 + 2 + 9 data bytes = 20 bytes
     #"ds2438.getvdd"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\xBE\x00",9);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xBE\x00", numread=>9,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     $res = $thread->{pt_execute}->PT_RETVAL();
@@ -1134,14 +1134,14 @@ sub OWXMULTI_PT_GetValues($) {
     #-- switch the device to current measurement off, V external only
     #-- issue the match ROM command \x55 and the write scratchpad command
     #"ds2438.writestatusvad"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\x4E\x00\x00",0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\x4E\x00\x00",});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
     #-- copy scratchpad to register
     #-- issue the match ROM command \x55 and the copy scratchpad command
     #"ds2438.copyscratchpadvad"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\x48\x00",0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\x48\x00",});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
@@ -1149,7 +1149,7 @@ sub OWXMULTI_PT_GetValues($) {
     #-- conversion needs some 6 ms  !
     #-- issue the match ROM command \x55 and the start conversion command
     #"ds2438.voltageconversionvad"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\xB4",0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xB4",});
     $thread->{ExecuteTime} = gettimeofday() + 0.02; # was 0.006
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
@@ -1160,7 +1160,7 @@ sub OWXMULTI_PT_GetValues($) {
     #-- copy needs some 12 ms !
     #-- issue the match ROM command \x55 and the recall memory command
     #"ds2438.recallmemoryvad"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\xB8\x00",0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xB8\x00",});
     $thread->{ExecuteTime} = gettimeofday() + 0.03; # was 0.012
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
@@ -1171,7 +1171,7 @@ sub OWXMULTI_PT_GetValues($) {
     #-- issue the match ROM command \x55 and the read scratchpad command \xBE
     #-- reading 9 + 2 + 9 data bytes = 20 bytes
     #"ds2438.getvad"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\xBE\x00", 9);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xBE\x00", numread=>9,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
@@ -1227,7 +1227,7 @@ sub OWXMULTI_PT_SetValues($@) {
 
     my $select=sprintf("\x4E%c%c\x48",0,0);
     #"setvalues"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select, 0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 

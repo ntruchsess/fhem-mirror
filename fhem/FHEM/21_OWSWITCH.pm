@@ -1292,6 +1292,7 @@ sub OWXSWITCH_SetState($$) {
 sub OWXSWITCH_PT_GetState($) {
 
   my ($hash) = @_;
+  my $select;
 
   return PT_THREAD( sub {
 
@@ -1314,15 +1315,15 @@ sub OWXSWITCH_PT_GetState($) {
       #-- issue the match ROM command \x55 and the access channel command
       #   \xF5 plus the two byte channel control and the value
       #-- reading 9 + 3 + 2 data bytes + 2 CRC bytes = 16 bytes
-      $thread->{'select'}=sprintf("\xF5\xDD\xFF");
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$thread->{'select'},4);
+      $select=sprintf("\xF5\xDD\xFF");
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>4,});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
       $response = $thread->{pt_execute}->PT_RETVAL();
       unless (length($response) == 4) { 
         PT_EXIT("$owx_dev has returned invalid data");
       }
-      $ret = OWXSWITCH_BinValues($hash,"ds2406.getstate",1,1,$owx_dev,$thread->{'select'},4,$response);
+      $ret = OWXSWITCH_BinValues($hash,"ds2406.getstate",1,1,$owx_dev,$select,4,$response);
       if (defined $ret) {
         PT_EXIT($ret);
       }
@@ -1332,15 +1333,15 @@ sub OWXSWITCH_PT_GetState($) {
       #-- issue the match ROM command \x55 and the read PIO rtegisters command
       #   \xF5 plus the two byte channel target address
       #-- reading 9 + 3 + 8 data bytes + 2 CRC bytes = 22 bytes
-      $thread->{'select'}=sprintf("\xF0\x88\x00");
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$thread->{'select'},10);
+      $select=sprintf("\xF0\x88\x00");
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>10,});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
       $response = $thread->{pt_execute}->PT_RETVAL();
       unless (length($response) == 10) {
         PT_EXIT("$owx_dev has returned invalid data")
       };
-      $ret = OWXSWITCH_BinValues($hash,"ds2408.getstate",1,1,$owx_dev,$thread->{'select'},10,$response);
+      $ret = OWXSWITCH_BinValues($hash,"ds2408.getstate",1,1,$owx_dev,$select,10,$response);
       if (defined $ret) {
         PT_EXIT($ret);
       }
@@ -1350,15 +1351,15 @@ sub OWXSWITCH_PT_GetState($) {
       #-- issue the match ROM command \x55 and the read gpio command
       #   \xF5 plus 2 empty bytes
       #-- reading 9 + 1 + 2 data bytes = 12 bytes
-      $thread->{'select'}="\xF5";
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$thread->{'select'},2);
+      $select="\xF5";
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>2,});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
       $response = $thread->{pt_execute}->PT_RETVAL();
       unless (length($response) == 2) {
         PT_EXIT("$owx_dev has returned invalid data");
       }
-      $ret = OWXSWITCH_BinValues($hash,"ds2413.getstate",1,1,$owx_dev,$thread->{'select'},2,$response);
+      $ret = OWXSWITCH_BinValues($hash,"ds2413.getstate",1,1,$owx_dev,$select,2,$response);
       if (defined $ret) {
         PT_EXIT($ret);
       }
@@ -1381,11 +1382,12 @@ sub OWXSWITCH_PT_GetState($) {
 sub OWXSWITCH_PT_SetState($$) {
 
   my ($hash,$value) = @_;
+  my $select;
 
   return PT_THREAD( sub {
 
     my ($thread) = @_;
-    my ($select,$res,@data);
+    my ($res,@data);
 
     #-- ID of the device
     my $owx_dev = $hash->{ROM_ID};
@@ -1404,7 +1406,7 @@ sub OWXSWITCH_PT_SetState($$) {
       #   \xAA at address TA1 = \x07 TA2 = \x00   
       #-- reading 9 + 3 + 1 data bytes + 2 CRC bytes = 15 bytes
 
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\xAA\x07\x00", 3);
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xAA\x07\x00", numread=>3,});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
       $res = $thread->{pt_execute}->PT_RETVAL();
@@ -1416,14 +1418,14 @@ sub OWXSWITCH_PT_SetState($$) {
       #-- issue the match ROM command \x55 and the write status command
       #   \x55 at address TA1 = \x07 TA2 = \x00
       #-- reading 9 + 4 + 2 data bytes = 15 bytes
-      $thread->{'select'}=sprintf("\x55\x07\x00%c",$statneu);
+      $select=sprintf("\x55\x07\x00%c",$statneu);
 
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$thread->{'select'}, 2);
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>2,});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
       $res = $thread->{pt_execute}->PT_RETVAL();
 
-      my $command = $thread->{'select'};
+      my $command = $select;
 
       #-- second step from above
       @data=split(//,$res);
@@ -1447,7 +1449,7 @@ sub OWXSWITCH_PT_SetState($$) {
       #   \x5A plus the value byte and its complement
       $select=sprintf("\x5A%c%c",$value,255-$value);  
 
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select, 1);
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>1,});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
       $res = $thread->{pt_execute}->PT_RETVAL();
@@ -1466,7 +1468,7 @@ sub OWXSWITCH_PT_SetState($$) {
       #-- issue the match ROM command \x55 and the write gpio command
       #   \x5A plus the value byte and its complement
       $select=sprintf("\x5A%c%c",252+$value,3-$value);   
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select, 1);
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>1,});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
       $res = $thread->{pt_execute}->PT_RETVAL();

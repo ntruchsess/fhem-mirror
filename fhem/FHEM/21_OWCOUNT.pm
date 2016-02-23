@@ -1852,6 +1852,7 @@ sub OWXCOUNT_SetPage($$$) {
 sub OWXCOUNT_PT_GetPage($$$) {
 
   my ($hash,$page,$final) = @_;
+  my ($select,$response);
 
   return PT_THREAD(sub {
     my ($thread) = @_;
@@ -1871,21 +1872,21 @@ sub OWXCOUNT_PT_GetPage($$$) {
     #   \xA5 TA1 TA2 reading 40 data bytes and 2 CRC bytes
     my $ta2 = ($page*32) >> 8;
     my $ta1 = ($page*32) & 255;
-    $thread->{'select'}=sprintf("\xA5%c%c",$ta1,$ta2);
+    $select=sprintf("\xA5%c%c",$ta1,$ta2);
     
     #-- reading 9 + 3 + 40 data bytes (32 byte memory, 4 byte counter + 4 byte zeroes) and 2 CRC bytes = 54 bytes
 
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev, $thread->{'select'}, 42 );
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>42,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
-    $thread->{response} = $thread->{pt_execute}->PT_RETVAL();
+    $response = $thread->{pt_execute}->PT_RETVAL();
 
     #-- reset the bus (needed to stop receiving data ?)
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,undef,undef,undef);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
-    if (my $ret = OWXCOUNT_BinValues($hash,"getpage.".$page.($final ? ".final" : ""),$owx_dev,$thread->{'select'},$thread->{response})) {
+    if (my $ret = OWXCOUNT_BinValues($hash,"getpage.".$page.($final ? ".final" : ""),$owx_dev,$select,$response)) {
       die $ret;
     }
     PT_END;
@@ -1904,7 +1905,8 @@ sub OWXCOUNT_PT_GetPage($$$) {
 sub OWXCOUNT_PT_SetPage($$$) {
 
   my ($hash,$page,$data) = @_;
-  
+  my $select;
+
   return PT_THREAD(sub {
     my ($thread) = @_;
 
@@ -1929,20 +1931,20 @@ sub OWXCOUNT_PT_SetPage($$$) {
     my $ta2 = ($page*32) >> 8;
     my $ta1 = ($page*32) & 255;
     #Log 1, "OWXCOUNT: setting page Nr. $ta2 $ta1 $data";
-    $thread->{'select'}=sprintf("\x0F%c%c",$ta1,$ta2).$data;
+    $select=sprintf("\x0F%c%c",$ta1,$ta2).$data;
 
     #"setpage.1"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev, $thread->{'select'}, 0 );
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
     #-- issue the match ROM command \x55 and the read scratchpad command
     #   \xAA, receiving 2 address bytes, 1 status byte and scratchpad content
-    $thread->{'select'} = "\xAA";
+    $select = "\xAA";
     #-- reading 9 + 3 + up to 32 bytes
     # TODO: sometimes much less than 28
     #"setpage.2"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev, $thread->{'select'}, 28 );
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>28,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     $res = $thread->{pt_execute}->PT_RETVAL();
@@ -1952,11 +1954,11 @@ sub OWXCOUNT_PT_SetPage($$$) {
 
     #-- issue the match ROM command \x55 and the copy scratchpad command
     #   \x5A followed by 3 byte authentication code obtained in previous read
-    $thread->{'select'}="\x5A".substr($res,0,3);
+    $select="\x5A".substr($res,0,3);
     #-- first command, next 2 are address, then data
 
     #"setpage.3"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev, $thread->{'select'}, 6 );
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>6,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     $res = $thread->{pt_execute}->PT_RETVAL();

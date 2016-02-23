@@ -1563,18 +1563,16 @@ sub OWXAD_SetPage($$) {
 sub OWXAD_PT_GetPage($$$) {
 
   my ($hash,$page,$final) = @_;
-  
+  my $select;
+
   return PT_THREAD(sub {
 
     my ($thread) = @_;
-
-    my ($res, $res2, $res3, @data, $an, $vn);
+    my $res;
 
     #-- ID of the device, hash of the busmaster
     my $owx_dev = $hash->{ROM_ID};
     my $master  = $hash->{IODev};
-
-    my ($i,$j,$k);
 
     PT_BEGIN($thread);
 
@@ -1582,7 +1580,7 @@ sub OWXAD_PT_GetPage($$$) {
     if( $page eq "reading") {
       #-- issue the match ROM command \x55 and the start conversion command
 
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev, "\x3C\x0F\x00\xFF\xFF", 0 );
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\x3C\x0F\x00\xFF\xFF",});
       $thread->{ExecuteTime} = gettimeofday() + 0.07; # was 0.02
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
@@ -1592,28 +1590,28 @@ sub OWXAD_PT_GetPage($$$) {
 
       #-- issue the match ROM command \x55 and the read conversion page command
       #   \xAA\x00\x00 
-      $thread->{'select'}="\xAA\x00\x00";
+      $select="\xAA\x00\x00";
     #=============== get the alarm reading ===============================
     } elsif ( $page eq "alarm" ) {
       #-- issue the match ROM command \x55 and the read alarm page command 
       #   \xAA\x10\x00 
-      $thread->{'select'}="\xAA\x10\x00";
+      $select="\xAA\x10\x00";
     #=============== get the status reading ===============================
     } elsif ( $page eq "status" ) {
       #-- issue the match ROM command \x55 and the read status memory page command 
       #   \xAA\x08\x00 r
-      $thread->{'select'}="\xAA\x08\x00";
+      $select="\xAA\x08\x00";
     #=============== wrong value requested ===============================
     } else {
       die "wrong memory page requested from $owx_dev";
     }
     #-- reading 9 + 3 + 8 data bytes and 2 CRC bytes = 22 bytes
 
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev, $thread->{'select'}, 10 );
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>10,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     my $response = $thread->{pt_execute}->PT_RETVAL();
-    my $res = OWXAD_BinValues($hash,"ds2450.get".$page.($final ? ".final" : ""),1,1,$owx_dev,$thread->{'select'},10,$response);
+    my $res = OWXAD_BinValues($hash,"ds2450.get".$page.($final ? ".final" : ""),1,1,$owx_dev,$select,10,$response);
     if ($res) {
       die $res;
     }
@@ -1692,7 +1690,7 @@ sub OWXAD_PT_SetPage($$) {
       PT_EXIT("wrong memory page write attempt");
     }
     #"setpage"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev, $select, 0 );
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     PT_END;

@@ -844,7 +844,7 @@ sub OWXLCD_PT_Byte($$$) {
     } 
 
     #"byte"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     PT_END;
@@ -926,6 +926,7 @@ sub OWXLCD_Get($$) {
 sub OWXLCD_PT_Get($$) {
 
   my ($hash,$cmd) = @_;
+  my $len;
 
   return PT_THREAD(sub {
 
@@ -945,31 +946,31 @@ sub OWXLCD_PT_Get($$) {
     if ( $cmd eq "gpio" ) {
       #-- issue the read GPIO command \x22 (1 byte)
       $select = "\x22";
-      $thread->{len}     = 1;
+      $len    = 1;
     #=============== fill scratch with gpio counters ===============================
     }elsif ( $cmd eq "counter" ) {
       #-- issue the read counter command \x23 (8 bytes)
       $select = "\x23";
-      $thread->{len}     = 8;
+      $len    = 8;
     #=============== fill scratch with version ===============================
     }elsif ( $cmd eq "version" ) {
       #-- issue the read version command \x41
       $select = "\x41";
-      $thread->{len}     = 16;
+      $len    = 16;
     } else {
       die("OWXLCD: Wrong get attempt");
     }
     #"get.prepare"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
     #-- issue the read scratchpad command \xBE
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\xBE", $thread->{len});
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xBE", numread=>$len,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
-    OWXLCD_BinValues($hash, "get.".$cmd, 1, 1, $owx_dev, "\xBE", $thread->{len}, $thread->{pt_execute}->PT_RETVAL());
+    OWXLCD_BinValues($hash, "get.".$cmd, 1, 1, $owx_dev, "\xBE", $len, $thread->{pt_execute}->PT_RETVAL());
 
     PT_END;
   });
@@ -1042,11 +1043,11 @@ sub OWXLCD_GetMemory($$) {
 sub OWXLCD_PT_GetMemory($$) {
 
   my ($hash,$page) = @_;
+  my $select;
 
   return PT_THREAD(sub {
 
     my ($thread) = @_;
-    my ($select);
 
     #-- ID of the device
     my $owx_dev = $hash->{ROM_ID};
@@ -1059,7 +1060,7 @@ sub OWXLCD_PT_GetMemory($$) {
     #Log 1," page read is ".$page;
     $select = sprintf("\4E%c\x10\x37",$page);
     #"prepare"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
@@ -1069,13 +1070,13 @@ sub OWXLCD_PT_GetMemory($$) {
     delete $thread->{ExecuteTime};
 
     #-- issue the match ROM command \x55 and the read scratchpad command \xBE
-    $thread->{'select'} = "\xBE";
+    $select = "\xBE";
     #"get.memory.$page"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$thread->{'select'},16);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>16,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
-    OWXLCD_BinValues($hash, "get.memory.$page", 1, 1, $owx_dev, $thread->{'select'}, 16, $thread->{pt_execute}->PT_RETVAL());
+    OWXLCD_BinValues($hash, "get.memory.$page", 1, 1, $owx_dev, $select, 16, $thread->{pt_execute}->PT_RETVAL());
     #-- process results (10 bytes or more have been sent)
     #$res2 = substr($res,11,16);
     #return $res2;
@@ -1267,7 +1268,7 @@ sub OWXLCD_PT_SetFunction($$$) {
       die "OWXLCD: Wrong function selected '$cmd'";
     } 
     #"set.function"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     
@@ -1406,7 +1407,7 @@ sub OWXLCD_PT_SetIcon($$$) {
         #-- 4 bit data size, RE => 1, blink Enable = \x26     
         $select = "\x10\x26";
         #"set.icon.1"
-        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
         PT_WAIT_THREAD($thread->{pt_execute});
         die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
@@ -1415,14 +1416,14 @@ sub OWXLCD_PT_SetIcon($$$) {
         #-- write 16 zeros to scratchpad
         $select .= "\x4E\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
         #"set.icon.2"
-        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
         PT_WAIT_THREAD($thread->{pt_execute});
         die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
         #-- issue the copy scratchpad to LCD command \x48
         $select="\x48";  
         #"set.icon.3"
-        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
         PT_WAIT_THREAD($thread->{pt_execute});
         die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
       } else {
@@ -1459,21 +1460,21 @@ sub OWXLCD_PT_SetIcon($$$) {
         #-- 4 bit data size, RE => 1, blink Enable = \x26
         $select = "\x10\x26";
         #"set.icon.4"
-        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
         PT_WAIT_THREAD($thread->{pt_execute});
         die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
         #-- SEGRAM addres to 0 = \x40 + icon address
         $select = sprintf("\x10%c",63+$icon);
         #"set.icon.5"
-        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
         PT_WAIT_THREAD($thread->{pt_execute});
         die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
         #-- data
         $select = sprintf("\x12%c",$data);
         #"set.icon.6"
-        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+        $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
         PT_WAIT_THREAD($thread->{pt_execute});
         die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
       }  
@@ -1481,7 +1482,7 @@ sub OWXLCD_PT_SetIcon($$$) {
       #-- return to normal state
       $select = "\x10\x20";
       #"set.icon.7"
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     #-- or else
@@ -1639,14 +1640,14 @@ sub OWXLCD_PT_SetLine($$$) {
     #   followed by LCD page address and the text 
     $select=sprintf("\x4E%c",$lcdpage[$line]).$msgA;
     #"set.line.1"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
     #-- issue the copy scratchpad to LCD command \x48
     $select="\x48";  
     #"set.line.2"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
@@ -1657,14 +1658,14 @@ sub OWXLCD_PT_SetLine($$$) {
       #   followed by LCD page address and the text 
       $select=sprintf("\x4E%c",$lcdpage[$line]+16).$thread->{msgB};
       #"set.line.3"
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
       #-- issue the copy scratchpad to LCD command \x48
       $select="\x48";  
       #"set.line.4"
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     }
@@ -1790,14 +1791,14 @@ sub OWXLCD_PT_SetMemory($$$) {
     #Log 1," page written is ".$page;
     $select=sprintf("\x4E\%c",$page).$msgA;
     #"set.memory.page"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
     #-- issue the copy scratchpad to EEPROM command \x39
     $select = "\x39"; 
     #"set.memory.copy"
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,0);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     PT_END;

@@ -1125,7 +1125,7 @@ sub OWXTHERM_PT_GetValues($) {
       my $now = gettimeofday();
       my $delay = $convtimes{AttrVal($name,"resolution",12)};
       $thread->{ExecuteTime} = $now + $delay*0.001;
-      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\x44",0);
+      $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\x44",});
       PT_WAIT_THREAD($thread->{pt_execute});
       die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
       PT_YIELD_UNTIL(gettimeofday() >= $thread->{ExecuteTime});
@@ -1134,7 +1134,7 @@ sub OWXTHERM_PT_GetValues($) {
     #-- NOW ask the specific device
     #-- issue the match ROM command \x55 and the read scratchpad command \xBE
     #-- reading 9 + 1 + 8 data bytes and 1 CRC byte = 19 bytes
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,"\xBE",9);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xBE", numread=>9,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
     OWXTHERM_BinValues($hash,1,$owx_dev,undef,9,$thread->{pt_execute}->PT_RETVAL());
@@ -1196,7 +1196,7 @@ sub OWXTHERM_PT_SetValues($$) {
     #   3. \x48 sent by WriteBytePower after match ROM => command ok, no effect on EEPROM
 
     my $select=sprintf("\x4E%c%c%c",$thp,$tlp,$cfg); 
-    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,1,$owx_dev,$select,3);
+    $thread->{pt_execute} = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>3,});
     PT_WAIT_THREAD($thread->{pt_execute});
     die $thread->{pt_execute}->PT_CAUSE() if ($thread->{pt_execute}->PT_STATE() == PT_ERROR);
 
