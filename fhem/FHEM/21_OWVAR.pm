@@ -74,23 +74,19 @@ use ProtoThreads;
 no warnings 'deprecated';
 sub Log3($$$);
 sub AttrVal($$$);
+sub CommandAttr($$);
 
 my $owx_version="5.1beta";
-my $owg_channel = "";
+#-- fixed raw channel name, flexible channel name
+my @owg_fixed   = ("A","B","C","D");
 
 my %gets = (
   "id"          => "",
   "present"     => "",
-  "value"       => "",
   "version"     => ""
 );
 
 my %sets = (
-  "value"    => ""
-);
-
-my %updates = (
-  "value"     => ""
 );
 
 ########################################################################################
@@ -117,13 +113,20 @@ sub OWVAR_Initialize ($) {
   $hash->{NotifyFn}= "OWVAR_Notify";
   $hash->{InitFn}  = "OWVAR_Init";
   $hash->{AttrFn}  = "OWVAR_Attr";
-  $hash->{AttrList}= "IODev model:DS2890 loglevel:0,1,2,3,4,5 ".
-                     "Name Function Unit ".
-                     $readingFnAttributes;                
+  my $attlist = "IODev model:DS2890 loglevel:0,1,2,3,4,5 ".
+                "Channels ".$readingFnAttributes.
+                " Name Function Unit ";
+  for( my $i=0;$i<int(@owg_fixed);$i++ ){
+    $attlist .= " ".$owg_fixed[$i]."Name";
+    $attlist .= " ".$owg_fixed[$i]."Function";
+    $attlist .= " ".$owg_fixed[$i]."Unit";
+    $hash->{owg_channel}->[$i]=$owg_fixed[$i];
+  }
+  $hash->{AttrList}= $attlist.
   #-- make sure OWX is loaded so OWX_CRC is available if running with OWServer
   main::LoadModule("OWX");	
 }
-  
+
 ########################################################################################
 #
 # OWVAR_Define - Implements DefFn function
@@ -192,7 +195,7 @@ sub OWVAR_Define ($$) {
   $hash->{ROM_ID}     = "$fam.$id.$crc";
 
   #-- value globals - always the raw values from/for the device
-  $hash->{owg_val}   = "";
+  $hash->{owg_val}   = ["","","",""];
   
   #-- Couple to I/O device
   AssignIoPort($hash);
@@ -260,6 +263,21 @@ sub OWVAR_Attr(@) {
         }
         last;
       };
+      $key eq "Channels" and do {
+        $hash->{wipers} = $value;
+        $hash->{gets}   = {%gets};
+        $hash->{sets}   = {%sets};
+        if ($value == 1) {
+          $hash->{gets}->{value} = "";
+          $hash->{sets}->{value} = "";
+        } else {
+          for( my $i=0;$i<$value;$i++ ){
+            $hash->{gets}->{$owg_fixed[$i]."value"} = "";
+            $hash->{sets}->{$owg_fixed[$i]."value"} = "";
+          }
+        }
+        last;
+      };
     }
   }
   return $ret;
@@ -281,25 +299,32 @@ sub OWVAR_ChannelNames($) {
  
   my ($cname,@cnama,$unit,@unarr);
 
-  #-- name
-  $cname = defined($attr{$name}{"Name"})  ? $attr{$name}{"Name"} : "value";
-  @cnama = split(/\|/,$cname);
-  if( int(@cnama)!=2){
-    push(@cnama,$cnama[0]);
-  }
-  $owg_channel=$cnama[0];
+  $hash->{gets}   = {%gets};
+  $hash->{sets}   = {%sets};
 
-  #-- unit
-  $unit = defined($attr{$name}{"Unit"})  ? $attr{$name}{"Unit"} : "\%|\%";
-  @unarr= split(/\|/,$unit);
-  if( int(@unarr)!=2 ){
-    push(@unarr,$unarr[0]);  
-  }
+  for (my $i=0;$i<$hash->{wipers};$i++){
+    #-- name
+    $cname = $hash->{wipers} == 1 ? AttrVal($name,"Name","value") : AttrVal($name,$owg_fixed[$i]."Name",$owg_fixed[$i]."value");
+    @cnama = split(/\|/,$cname);
+    if( int(@cnama)!=2){
+      push(@cnama,$cnama[0]);
+    }
+    $hash->{owg_channel}->[$i]=$cnama[0];
+    $hash->{gets}->{$cnama[0]} = "";
+    $hash->{sets}->{$cnama[0]} = "";
+ 
+    #-- unit
+    $unit = $hash->{wipers} == 1 ? AttrVal($name,"Unit","\%|\%") : AttrVal($name,$owg_fixed[$i]."Unit","\%|\%");
+    @unarr= split(/\|/,$unit);
+    if( int(@unarr)!=2 ){
+      push(@unarr,$unarr[0]);  
+    }
    
-  #-- put into readings
-  $hash->{READINGS}{"value"}{ABBR}     = $cnama[1];  
-  $hash->{READINGS}{"value"}{UNIT}     = $unarr[0];
-  $hash->{READINGS}{"value"}{UNITABBR} = $unarr[1];
+    #-- put into readings
+    $hash->{READINGS}{$hash->{owg_channel}->[$i]}{ABBR}     = $cnama[1];  
+    $hash->{READINGS}{$hash->{owg_channel}->[$i]}{UNIT}     = $unarr[0];
+    $hash->{READINGS}{$hash->{owg_channel}->[$i]}{UNITABBR} = $unarr[1];
+  }
 }  
 
 ########################################################################################
@@ -328,11 +353,14 @@ sub OWVAR_FormatValues($) {
   #-- put into READINGS
   readingsBeginUpdate($hash);
   
+  my $owg_val = $hash->{owg_val}->[$hash->{wiper}];
+
   #-- formats for output
   if (defined($attr{$name}{"Function"})){
-    Log 1,"READING ".$attr{$name}{"Function"};
+    Log3($name,4,"READING ".$attr{$name}{"Function"});
     ($vfunc,$ufunc) = split('\|',$attr{$name}{"Function"});
     #-- replace by proper values (V -> value)
+    $owg_val=sprintf("%5.2f",(1.0-$owg_val/255.0)*100);
     $vfunc =~ s/V/\$hash->{owg_val}/g; 
     $vfunc = eval($vfunc);
     if( !$vfunc ){
@@ -342,23 +370,53 @@ sub OWVAR_FormatValues($) {
     } else {
       $vval = "???";
     }
-  }else{    
-    $vval = $hash->{owg_val};
-  }      
+  }else{
+    $vval = sprintf("%5.2f",(1.0-$owg_val/255.0)*100);
+  }
  
   #-- string buildup for return value, STATE and alarm
   my $svalue .= sprintf( "%s: %5.3f %s", $hash->{READINGS}{"value"}{ABBR}, $vval,$hash->{READINGS}{"value"}{UNITABBR});
                 
   #-- put into READINGS
   $vval = sprintf( "%5.3f", $vval);
-  readingsBulkUpdate($hash,$owg_channel,$vval);
+  readingsBulkUpdate($hash,$hash->{owg_channel}->[$hash->{wiper}],$vval);
   
   #-- STATE
+  #TODO: should be handled by stateFormat:
   readingsBulkUpdate($hash,"state",$svalue);
   readingsEndUpdate($hash,1); 
   return $svalue;
 }
-  
+
+sub OWXVAR_ParseFeatures($$$) {
+  my ($hash,$owx_dev,$feature) = @_;
+  $hash->{characteristic} = vec($feature,0,1) ? 'linear' : 'logarithmic';                   # bit 0
+  $hash->{volatility}     = vec($feature,1,1) ? 'volatile' : 'non-volatile';                # bit 1
+  $hash->{wipers}         = vec($feature,1,2)+1;                                            # bit 2-3
+  $hash->{resolution}     = 0x20 << vec($feature,2,2);                                      # bit 4-5
+  $hash->{resistance}     = { 0=>'5k', 1=>'10k', 2=>'50k', 3=>'100k' }->{vec $feature,3,2}; # bit 6-7
+
+  if ($hash->{wipers} != AttrVal($hash->{NAME},"Channels",-1)) {
+    CommandAttr(undef,$hash->{NAME}." Channels ".$hash->{wipers});
+  }
+}
+
+sub OWXVAR_ParseControl($$$) {
+  my ($hash,$owx_dev,$control) = @_;
+  # check wiper-bits (bit 0-3) of control-byte are valid  (bit 2-3 are the complement of bit 0-1)
+  die "$owx_dev read control byte returned invalid data: ".ord($control) unless (vec($control,0,2) ^ vec($control,1,2)) == 0x03;
+  $hash->{wiper}       = vec($control,0,2); # bit 0,1
+  $hash->{charge_pump} = vec($control,6,1) ? 'on' : 'off'; # bit 6
+  # bits 2,3,4,5,7 are unused
+}
+
+sub OWXVAR_BuildControl($) {
+  my $hash = shift;
+  my $control = $hash->{charge_pump} eq "on" ? "\x40" : "\x00";
+  vec($control,0,4) = [0b1100,0b1001,0b0110,0b0011]->[$hash->{wiper}];
+  return $control;
+}
+
 ########################################################################################
 #
 # OWVAR_Get - Implements GetFn function 
@@ -381,8 +439,8 @@ sub OWVAR_Get($@) {
     if(int(@a) != 2);
     
   #-- check argument
-  return "OWVAR: Get with unknown argument $a[1], choose one of ".join(" ", sort keys %gets)
-    if(!defined($gets{$a[1]}));
+  return "OWVAR: Get with unknown argument $a[1], choose one of ".join(" ", sort keys %{$hash->{gets}})
+    if(!defined($hash->{gets}->{$a[1]}));
   
   #-- get id
   if($a[1] eq "id") {
@@ -427,12 +485,12 @@ sub OWVAR_Get($@) {
     $ret = OWXVAR_GetValues($hash);
   }elsif( $interface eq "OWX_ASYNC" ){
     eval {
-      $ret = OWX_ASYNC_RunToCompletion($hash,OWXVAR_PT_GetValues($hash));
+      $ret = OWX_ASYNC_RunToCompletion($hash,OWXVAR_PT_GetValue($hash,$a[1]));
     };
     $ret = GP_Catch($@) if $@;
   #-- OWFS interface
   }elsif( $interface eq "OWServer" ){
-    Log 1,"[OWVAR] Get OWFS interface not implemented";
+    Log3 ($name,1,"[OWVAR] Get OWFS interface not implemented");
     #$ret = OWFSVAR_GetValues($hash);
   #-- Unknown interface
   }else{
@@ -493,7 +551,7 @@ sub OWVAR_GetValues($@) {
     };
     $ret = GP_Catch($@) if $@;
   }elsif( $interface eq "OWServer" ){
-    Log 1,"[OWVAR] Get OWFS interface not implemented";
+    Log3($name,1,"[OWVAR] Get OWFS interface not implemented");
     #$ret = OWFSVAR_GetValues($hash);
   }else{
     Log3 $name, 3, "OWVAR: GetValues with wrong IODev type $interface";
@@ -530,7 +588,7 @@ sub OWVAR_InitializeDevice($) {
   my ($ret1,$ret2);
   
   #-- Initial readings 
-  $hash->{owg_val} = "0.0";  
+  $hash->{owg_val} = ["0","0","0","0"];
   $hash->{ERRCOUNT} = 0;
   
   #-- Set state to initialized
@@ -552,13 +610,13 @@ sub OWVAR_Set($@) {
   my ($hash, @a) = @_;
 
   #-- for the selector: which values are possible
-  return join(" ", sort keys %sets) if(@a == 2);
+  return join(" ", sort keys %{$hash->{sets}}) if(@a == 2);
   #-- check syntax
   return "OWVAR: Set needs one parameter"
     if(int(@a) != 3);
   #-- check argument
-  return "OWVAR: Set with unknown argument $a[1], choose one of ".join(",", sort keys %sets)
-        if(!defined($sets{$a[1]}));
+  return "OWVAR: Set with unknown argument $a[1], choose one of ".join(",", sort keys %{$hash->{sets}})
+    if(!defined($hash->{sets}->{$a[1]}));
       
   #-- define vars
   my $key   = $a[1];
@@ -574,7 +632,7 @@ sub OWVAR_Set($@) {
     ($vfunc,$ufunc) = split('\|',$attr{$name}{"Function"});
     #-- replace by proper values (U -> )
     $ufunc =~ s/U/\$value/g;  
-       Log 1,"TO EUAL: $vfunc";  
+       Log3($name,1,"TO EUAL: $vfunc");
     $ufunc = eval($ufunc);
     if( !$ufunc ){
       $value = 0.0;
@@ -591,12 +649,12 @@ sub OWVAR_Set($@) {
     $ret = OWXVAR_SetValues($hash,$key,$value);
   }elsif( $interface eq "OWX_ASYNC" ){
     eval {
-      OWX_ASYNC_Schedule( $hash, OWXVAR_PT_SetValues($hash,$key,$value) );
+      OWX_ASYNC_Schedule( $hash, OWXVAR_PT_SetValue($hash,$key,$value) );
     };
     $ret = GP_Catch($@) if $@;
   #-- OWFS interface
   }elsif( $interface eq "OWServer" ){
-    Log 1,"[OWVAR] Set OWFS interface not implemented";
+    Log3($name,1,"[OWVAR] Set OWFS interface not implemented");
     #$ret = OWFSVAR_SetValues($hash,$args);
   } else {
     return "OWVAR: Set with wrong IODev type $interface";
@@ -730,17 +788,10 @@ sub OWXVAR_BinValues($$$$$$) {
     if (@data != 2); 
   
   #-- this must be different for the different device types
-   
-  my $stat = ord($data[0]);
-  my $val  = ord($data[1]);
-  #Log 1,"[OWVAR] val=$val stat=$stat";
-      
-  $hash->{owg_val}=sprintf("%5.2f",(1.0-$val/255.0)*100);  
-    
-  #} else {
-  #  die "OWXVAR: Unknown device family $hash->{OW_FAMILY}\n";
-  #}
-  
+
+  OWXVAR_ParseControl($hash,$owx_dev,$data[0]);
+  $hash->{owg_val}->[$hash->{wiper}] = ord($data[1]);
+
   #-- and now from raw to formatted values
   $hash->{PRESENT}  = 1;
   my $value = OWVAR_FormatValues($hash);
@@ -828,16 +879,14 @@ sub OWXVAR_SetValues($$$) {
   return undef;
 }
 
-sub OWXVAR_PT_GetValues($) {
+sub OWXVAR_PT_GetControl($) {
 
   my ($hash) = @_;
-  my ($execute,$res);
+  my ($execute,$res,$control);
 
   return PT_THREAD(sub {
 
     my ($thread) = @_;
-
-    my $ret;
 
     #-- ID of the device
     my $owx_dev = $hash->{ROM_ID};
@@ -846,29 +895,187 @@ sub OWXVAR_PT_GetValues($) {
 
     PT_BEGIN($thread);
     my $name   = $hash->{NAME};
-	
-    #-- NOW ask the specific device
-    #-- issue the match ROM command \x55 and the read wiper command \xF0
-    #-- reading 9 + 1 + 2 data bytes and 0 CRC byte = 12 bytes
-    
-    $execute = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xF0", numread=>5,});
+
+    #-- Read Feature and Control Register
+    $execute = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\xAA", numread=>3});
     PT_WAIT_THREAD($execute);
     die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
 
     $res = $execute->PT_RETVAL();
-    unless (defined $res and length($res)==5) {
-      PT_EXIT("$owx_dev has returned invalid data");
-    }
+    die "$owx_dev has returned invalid data" unless (defined $res and length($res)==3);
+    die "$owx_dev read control byte check not 0" unless substr($res,2,1) eq "\x00";
 
-    #-- reset the bus (needed to stop receiving data ?)
-    $execute = OWX_ASYNC_PT_Execute($master,{'reset'=>1,});
+    $execute = OWX_ASYNC_PT_Execute($master,{'reset'=>1});
     PT_WAIT_THREAD($execute);
     die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
 
-    $ret = OWXVAR_BinValues($hash,undef,$owx_dev,undef,undef,substr($res,0,2));
+    OWXVAR_ParseFeatures($hash,$owx_dev,substr($res,0,1));
+    OWXVAR_ParseControl($hash,$owx_dev,substr($res,1,1));
+
+    PT_END;
+  });
+}
+
+sub OWXVAR_PT_SetControl($$@) {
+
+  my ($hash,$control,$resume) = @_;
+  my ($execute,$res);
+
+  return PT_THREAD(sub {
+
+    my ($thread) = @_;
+
+    #-- ID of the device
+    my $owx_dev = $hash->{ROM_ID};
+    #-- hash of the busmaster
+    my $master = $hash->{IODev};
+
+    PT_BEGIN($thread);
+
+    #-- issue SET CONTROL command
+    if ($resume) {
+      $execute = OWX_ASYNC_PT_Execute($master,{'reset'=>1, resume=>1, data=>"\x55".$control, numread=>1});
+    } else {
+      $execute = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>"\x55".$control, numread=>1});
+    }
+    PT_WAIT_THREAD($execute);
+    die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
+
+    #-- process results
+    $res = $execute->PT_RETVAL();
+    unless (defined $res and length($res)==1) {
+      PT_EXIT("$owx_dev has returned invalid data");
+    }
+
+    #-- check DS2890 returns same value
+    die "OWXVAR: Set failed with return value ".ord($res)." from set control ".ord($control)
+      if($res ne $control);
+
+    #-- send RELEASE-command to confirm if ok
+    $execute = OWX_ASYNC_PT_Execute($master,{data=>"\x96", numread=>1});
+    PT_WAIT_THREAD($execute);
+    die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
+
+    $res = $execute->PT_RETVAL();
+    unless (defined $res and length($res)==1) {
+      PT_EXIT("$owx_dev has returned invalid data");
+    }
+
+    #-- validate RELEASE-command was aceppted (DS2890 would write all 1 if not)
+    die "OWXVAR: Set failed with return value ".ord($res)." from release value"
+      if($res ne "\x00");
+
+    PT_END;
+  });
+}
+
+sub OWXVAR_PT_GetValues($) {
+
+  my ($hash) = @_;
+  my ($execute,$res,$wiper,$control);
+
+  return PT_THREAD(sub {
+
+    my ($thread) = @_;
+
+    my ($ret,$rv,$feature,$check);
+
+    #-- ID of the device
+    my $owx_dev = $hash->{ROM_ID};
+    #-- hash of the busmaster
+    my $master = $hash->{IODev};
+
+    PT_BEGIN($thread);
+
+    # read control register from device (updates number of wipers!)
+    $execute = OWXVAR_PT_GetControl($hash);
+    PT_WAIT_THREAD($execute);
+    die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
+
+    # read wiper positions:
+    for ($wiper = 0; $wiper < $hash->{wipers}; $wiper++) {
+      $execute = OWXVAR_PT_GetWiper($hash,$wiper,1);
+      PT_WAIT_THREAD($execute);
+      die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
+    };
+
+    $execute = OWX_ASYNC_PT_Execute($master,{'reset'=>1});
+    PT_WAIT_THREAD($execute);
+    die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
+
+    PT_END;
+  });
+}
+
+sub OWXVAR_PT_GetValue($$) {
+
+  my ($hash,$key) = @_;
+  my ($execute,$wiper);
+
+  return PT_THREAD(sub {
+
+    my ($thread) = @_;
+
+    PT_BEGIN($thread);
+
+    ($wiper) = grep { $hash->{owg_channel}->[$_] eq $key } 0..3;
+    die "$key not valid, use one of ".join(@{$hash->{owg_channel}}," ") unless defined $wiper;
+
+    # read wiper position:
+    $execute = OWXVAR_PT_GetWiper($hash,$wiper);
+    PT_WAIT_THREAD($execute);
+    die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
+
+    #-- reset the bus (needed to stop receiving data ?)
+    $execute = OWX_ASYNC_PT_Execute($hash->{IODev},{'reset'=>1});
+    PT_WAIT_THREAD($execute);
+    die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
+
+    PT_END;
+  });
+}
+
+sub OWXVAR_PT_GetWiper($$@) {
+
+  my ($hash,$wiper,$resume) = @_;
+  my ($execute,$res,$control);
+
+  return PT_THREAD(sub {
+
+    my ($thread) = @_;
+
+    #-- ID of the device
+    my $owx_dev = $hash->{ROM_ID};
+    #-- hash of the busmaster
+    my $master = $hash->{IODev};
+
+    PT_BEGIN($thread);
+
+    $hash->{wiper} = $wiper;
+
+    #-- first set control-byte
+    $control = OWXVAR_BuildControl($hash);
+    $execute = OWXVAR_PT_SetControl($hash, $control, $resume);
+    PT_WAIT_THREAD($execute);
+    die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
+
+    #-- now read wiper-position
+    $execute = OWX_ASYNC_PT_Execute($master,{'reset'=>1, resume=>1, data=>"\xF0", numread=>3});
+    PT_WAIT_THREAD($execute);
+    die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
+
+    $res = $execute->PT_RETVAL();
+    unless (defined $res and length($res)==3) {
+      PT_EXIT("$owx_dev has returned invalid data");
+    }
+    #-- returned control byte must match previously set value
+    die "$owx_dev read control byte invalid or check-byte not 0" unless substr($res,0,1) eq $control and ord(substr($res,2,1)) == 0;
+
+    my $ret = OWXVAR_BinValues($hash,undef,$owx_dev,undef,undef,substr($res,0,2));
     if ($ret) {
       die $ret;
     }
+    
     PT_END;
   });
 }
@@ -882,10 +1089,10 @@ sub OWXVAR_PT_GetValues($) {
 #
 #######################################################################################
 
-sub OWXVAR_PT_SetValues($$$) {
+sub OWXVAR_PT_SetValue($$$) {
   
   my ($hash, $key, $value) = @_;
-  my ($pos,$execute);
+  my ($pos,$execute,$control,$wiper);
 
   return PT_THREAD(sub {
 
@@ -905,11 +1112,21 @@ sub OWXVAR_PT_SetValues($$$) {
     die sprintf("OWXVAR: Set with wrong value $value for $key, range is  [%3.1f,%3.1f]",0,100)
       if($value < 0 || $value > 100);
     $pos = floor((100-$value)*2.55+0.5);
-    #-- issue the match ROM command \x55 and the write wiper command \x0F,
-    #   followed by 1 bytes of data 
-    #
+
+    ($wiper) = grep { $hash->{owg_channel}->[$_] eq $key } 0..3;
+
+    die "$key not valid, use one of ".join(@{$hash->{owg_channel}}," ") unless defined $wiper;
+
+    $hash->{wiper} = $wiper;
+
+    $control = OWXVAR_BuildControl($hash);
+    $execute = OWXVAR_PT_SetControl($hash,$control);
+    PT_WAIT_THREAD($execute);
+    die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
+
+    #-- issue the write wiper command \x0F, followed by 1 bytes of data 
     my $select=sprintf("\x0F%c",$pos);
-    $execute = OWX_ASYNC_PT_Execute($master,{'reset'=>1, match=>$owx_dev, data=>$select, numread=>1,});
+    $execute = OWX_ASYNC_PT_Execute($master,{'reset'=>1, resume=>1, data=>$select, numread=>1,});
     PT_WAIT_THREAD($execute);
     die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
 
@@ -919,7 +1136,7 @@ sub OWXVAR_PT_SetValues($$$) {
       PT_EXIT("$owx_dev has returned invalid data");
     }
 
-    #-- check DS2890 returns same value    
+    #-- check DS2890 returns same value
     $rv=ord($res);
     die "OWXVAR: Set failed with return value $rv from set value $pos"
       if($rv ne $pos);
@@ -928,7 +1145,7 @@ sub OWXVAR_PT_SetValues($$$) {
     $execute = OWX_ASYNC_PT_Execute($master,{data=>"\x96", numread=>1,});
     PT_WAIT_THREAD($execute);
     die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
-      
+
     $res = $execute->PT_RETVAL();
     unless (defined $res and length($res)==1) {
       PT_EXIT("$owx_dev has returned invalid data");
@@ -944,11 +1161,13 @@ sub OWXVAR_PT_SetValues($$$) {
     PT_WAIT_THREAD($execute);
     die $execute->PT_CAUSE() if ($execute->PT_STATE() == PT_ERROR);
 
-    $hash->{owg_val}=sprintf("%5.2f",(1-$pos/255.0)*100);
+    $hash->{owg_val}->[$wiper] = $pos;
+
+    OWVAR_FormatValues($hash);
+
     PT_END;
   });
 }
-
 
 1;
 

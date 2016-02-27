@@ -377,7 +377,7 @@ sub pt_next ($$) {
     #-- issue normal search command \xF0 or the alarm search command \xEC (on 1-Wire bus) 
     #   and activate start accelerator \xB5 (in DS2480 only, no response expected)
     $serial->reset();
-    if( $mode ne "alarm" ){
+    if( $mode ne "alarms" ){
       $serial->block("\xF0");
       $serial->command("\xB5",0);
     } else {
