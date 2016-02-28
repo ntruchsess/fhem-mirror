@@ -239,9 +239,21 @@ sub
 FRM_PWM_State($$$$)
 {
   my ($hash, $tim, $sname, $sval) = @_;
+  my $name = $hash->{NAME};
   if ($sname eq "value") {
-    FRM_PWM_Set($hash,$hash->{NAME},$sname,$sval);
+    # depending on the FHEM startup timing and the Arduino connection type, FHEM statefile restore and Arduino connect take place in arbitrary order
+    if (AttrVal($name, "restoreOnStartup", "on") eq "on") {
+      $hash->{READINGS}{$sname}{VAL} = $sval;
+      $hash->{READINGS}{$sname}{TIME} = $tim;
+      if (defined($hash->{IODev}) && defined($hash->{IODev}->{FirmataDevice} && $hash->{IODev}->{FirmataDevice}->{state} eq "Initialized")) {
+        FRM_PWM_Set($hash, $name, "value", $sval);
+      }
+    } else {
+      $hash->{READINGS}{$sname}{VAL} = undef;
+      $hash->{READINGS}{$sname}{TIME} = gettimeofday();
+    }
   }
+  return 0; # default processing by fhem.pl
 }
 
 sub
