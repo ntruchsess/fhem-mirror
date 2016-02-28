@@ -1,5 +1,5 @@
 ##############################################
-# $Id$
+# $Id: 10_FRM.pm 9258 2015-09-15 20:45:18Z klauswitt $
 ##############################################
 package main;
 
@@ -140,7 +140,7 @@ sub FRM_Start {
 	if($isServer) {
 		my $ret = TcpServer_Open($hash, $dev, $global);
 		if (!$ret) {
-			$hash->{STATE}="listening";
+			readingsSingleUpdate($hash, 'state', "listening", 1);
 		}
 		return $ret;
 	}
@@ -285,8 +285,8 @@ sub FRM_Tcp_Connection_Close($) {
 	if ($hash->{SNAME}) {
 		my $shash = $main::defs{$hash->{SNAME}};
 		if (defined $shash) {
-			$shash->{STATE}="listening";
 			delete $shash->{SocketDevice} if (defined $shash->{SocketDevice});
+			readingsSingleUpdate($shash, 'state', "listening", 1);
 		}
 	}
 	my $dev = $hash->{DeviceName};
@@ -374,17 +374,35 @@ sub FRM_DoInit($) {
 	}
 	$device->observe_string(\&FRM_string_observer,$shash);
 	
-	my $found; # we cannot call $device->probe() here, as it doesn't select bevore read, so it would likely cause IODev to close the connection on the first attempt to read from empty stream
+	my $found; # we cannot call $device->probe() here, as it doesn't select before read, so it would likely cause IODev to close the connection on the first attempt to read from empty stream
 	my $endTicks = time+5;
 	my $queryTicks = time+2;
 	$device->system_reset();
+	delete $main::defs{$name}{firmware};
+	delete $main::defs{$name}{firmware_version};
+	delete $main::defs{$name}{protocol_version};
+	delete $main::defs{$name}{input_pins};
+	delete $main::defs{$name}{input_pins};
+	delete $main::defs{$name}{output_pins};
+	delete $main::defs{$name}{analog_pins};
+	delete $main::defs{$name}{pwm_pins};
+	delete $main::defs{$name}{servo_pins};
+	delete $main::defs{$name}{i2c_pins};
+	delete $main::defs{$name}{onewire_pins};
+	delete $main::defs{$name}{encoder_pins};
+	delete $main::defs{$name}{stepper_pins};
+	delete $main::defs{$name}{analog_resolutions};
+	delete $main::defs{$name}{pwm_resolutions};
+	delete $main::defs{$name}{servo_resolutions};
+	delete $main::defs{$name}{encoder_resolutions};
+	delete $main::defs{$name}{stepper_resolutions};
 	do {
 		FRM_poll($shash);
 		if ($device->{metadata}{firmware} && $device->{metadata}{firmware_version}) {
-			$device->{protocol}->{protocol_version} = $device->{metadata}{firmware_version};
 			$main::defs{$name}{firmware} = $device->{metadata}{firmware};
 			$main::defs{$name}{firmware_version} = $device->{metadata}{firmware_version};
-			Log3 $name,3,"Firmata Firmware Version: ".$device->{metadata}{firmware}." ".$device->{metadata}{firmware_version};
+			$main::defs{$name}{protocol_version} = $device->{protocol}->get_max_supported_protocol_version($device->{metadata}{protocol_version});
+			Log3 $name,3,"Firmata Firmware Version: ".$device->{metadata}{firmware}." ".$device->{metadata}{firmware_version}." (using Protocol Version: ".$main::defs{$name}{protocol_version}.")";
 			$device->analog_mapping_query();
 			$device->capability_query();
 			do {
@@ -452,8 +470,9 @@ sub FRM_DoInit($) {
 		} else {
 			select (undef,undef,undef,0.01);
 			if (time > $queryTicks) {
-				Log3 $name,3,"querying Firmata Firmware Version";
+				Log3 $name,3,"querying Firmata Versions";
 				$device->firmware_version_query();
+				$device->protocol_version_query();
 				$queryTicks++;
 			}
 		}
@@ -462,13 +481,25 @@ sub FRM_DoInit($) {
 		FRM_apply_attribute($shash,"sampling-interval");
 		FRM_apply_attribute($shash,"i2c-config");
 		FRM_forall_clients($shash,\&FRM_Init_Client,undef);
-		$shash->{STATE}="Initialized";
+		readingsSingleUpdate($shash, 'state', "Initialized", 1);
 		return undef;
 	}
-	Log3 $name,3,"no response from Firmata, closing DevIO";
-	DevIo_Disconnected($shash);
-	delete $shash->{FirmataDevice};
-	delete $shash->{SocketDevice};
+	if (defined $shash->{SERVERSOCKET}) {
+		Log3 $name, 3, "no response from Firmata, closing connection";
+		foreach my $e ( sort keys %main::defs ) {
+			if ( defined( my $dev = $main::defs{$e} )) {
+				if ( defined( $dev->{SNAME} ) && ( $dev->{SNAME} eq $shash->{NAME} )) {
+					FRM_Tcp_Connection_Close($dev);
+				}
+			}
+		}
+		FRM_FirmataDevice_Close($shash);
+	} else {
+		Log3 $name, 3, "no response from Firmata, closing DevIo";
+		DevIo_Disconnected($shash);
+		delete $shash->{FirmataDevice};
+		delete $shash->{SocketDevice};
+	}
 	return "FirmataDevice not responding";
 }
 
@@ -480,6 +511,7 @@ FRM_forall_clients($$$)
     if (   defined( $main::defs{$d} )
       && defined( $main::defs{$d}{IODev} )
       && $main::defs{$d}{IODev} == $hash ) {
+      	#Log3 $hash->{NAME}, 4, "$hash->{NAME} -> $main::defs{$d}->{NAME}";
       	&$fn($main::defs{$d},$args);
     }
   }
@@ -513,8 +545,8 @@ FRM_Init_Pin_Client($$$) {
 		FRM_Client_FirmataDevice($hash)->pin_mode($pin,$mode);
 	};
 	if ($@) {
+		readingsSingleUpdate($hash, 'state', "error initializing: pin $pin", 1);
 		$@ =~ /^(.*)( at.*FHEM.*)$/;
-		$hash->{STATE} = "error initializing: ".$1;
 		return $1;
 	}
 	return undef;
@@ -526,7 +558,7 @@ FRM_Client_Define($$)
   my ($hash, $def) = @_;
   my @a = split("[ \t][ \t]*", $def);
 
-  $hash->{STATE}="defined";
+  readingsSingleUpdate($hash, 'state', "defined", 1);
   
   if ($main::init_done) {
     eval {
@@ -564,7 +596,7 @@ FRM_Client_Unassign($)
 {
   my ($dev) = @_;
   delete $dev->{IODev} if defined $dev->{IODev};
-  $dev->{STATE}="defined";  
+  readingsSingleUpdate($dev, 'state', "defined", 1);
 }
 
 sub
@@ -626,7 +658,7 @@ sub new($$) {
 sub data_write {
   my ( $self, $buf ) = @_;
   my $hash = $self->{hash};
-  main::Log3 $self->{name},5,"FRM:>".unpack "H*",$buf;
+  main::Log3 $self->{name},5,"$self->{name} FRM:>".unpack "H*",$buf;
   main::DevIo_SimpleWrite($hash,$buf,undef);
 }
 
@@ -635,7 +667,7 @@ sub data_read {
   my $hash = $self->{hash};
   my $string = main::DevIo_SimpleRead($hash);
   if (defined $string ) {
-    main::Log3 $self->{name},5,"FRM:<".unpack "H*",$string;
+    main::Log3 $self->{name},5,"$self->{name} FRM:<".unpack "H*",$string;
   }
   return $string;
 }
@@ -792,7 +824,7 @@ FRM_OWX_Init($$)
 		}
 	};
 	return GP_Catch($@) if ($@);
-	$hash->{STATE}="Initialized";
+	ReadingsSingleUpdate($hash, 'state', "Initialized", 1);
 	InternalTimer(gettimeofday()+10, "OWX_Discover", $hash,0);
 	return undef;
 }
@@ -1045,6 +1077,16 @@ sub FRM_OWX_Discover ($) {
       - set STATE to listening and delete SocketDevice (to present same
         idle state as FRM_Start)
     o help updated
+    
+  22.12.2015 jensb
+    o modified sub FRM_DoInit:
+      - clear internal readings (device may have changed)
+    
+  05.01.2016 jensb
+    o modified FRM_DoInit:
+      - do not disconnect DevIo in TCP mode to stay reconnectable
+    o use readingsSingleUpdate on state instead of directly changing STATE
+    
 =cut
 
 =pod
@@ -1157,7 +1199,7 @@ sub FRM_OWX_Discover ($) {
   <a name="FRMattr"></a>
   <b>Attributes</b><br>
   <ul>
-      <li>i2c-config<br>
+      <li>i2c-config &lt;write-read-delay&gt;<br>
       Configure the Arduino for ic2 communication. This will enable i2c on the
       i2c_pins received by the capability-query issued during initialization of FRM.<br>
       As of Firmata 2.3 you can set a delay-time (in microseconds, max. 65535, default 0) that will be
@@ -1168,11 +1210,12 @@ sub FRM_OWX_Discover ($) {
       see i2c device manufacturer documentation for details). <br>
       See: <a href="http://www.firmata.org/wiki/Protocol#I2C">Firmata Protocol details about I2C</a><br>
       </li><br>
-      <li>sampling-interval<br>
+      <li>sampling-interval &lt;interval&gt;<br>
       Configure the interval Firmata reports analog data to FRM (in milliseconds, max. 65535). <br>
       See: <a href="http://www.firmata.org/wiki/Protocol#Sampling_Interval">Firmata Protocol details about Sampling Interval</a></br>
       </li>
-    </ul>
+  </ul>
+
   </ul>
 <br>
 
