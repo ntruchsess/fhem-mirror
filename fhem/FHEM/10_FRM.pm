@@ -1,5 +1,5 @@
 ##############################################
-# $Id$
+# $Id: 10_FRM.pm 9258 2015-09-15 20:45:18Z klauswitt $
 ##############################################
 package main;
 
@@ -81,7 +81,7 @@ sub FRM_Initialize($) {
 	$hash->{AttrFn}   = "FRM_Attr";
 	$hash->{NotifyFn} = "FRM_Notify";
 
-	$hash->{AttrList} = "model:nano dummy:1,0 sampling-interval i2c-config $main::readingFnAttributes";
+	$hash->{AttrList} = "model:nano dummy:1,0 sampling-interval i2c-config software-serial-config $main::readingFnAttributes";
 }
 
 #####################################
@@ -289,8 +289,8 @@ sub FRM_Tcp_Connection_Close($) {
 	if ($hash->{SNAME}) {
 		my $shash = $main::defs{$hash->{SNAME}};
 		if (defined $shash) {
-			readingsSingleUpdate($shash, 'state', "listening", 1);
 			delete $shash->{SocketDevice} if (defined $shash->{SocketDevice});
+			readingsSingleUpdate($shash, 'state', "listening", 1);
 		}
 	}
 	my $dev = $hash->{DeviceName};
@@ -560,8 +560,8 @@ FRM_Init_Pin_Client($$$) {
 		FRM_Client_FirmataDevice($hash)->pin_mode($pin,$mode);
 	};
 	if ($@) {
-		$@ =~ /^(.*)( at.*FHEM.*)$/;
 		readingsSingleUpdate($hash, 'state', "error initializing: pin $pin", 1);
+		$@ =~ /^(.*)( at.*FHEM.*)$/;
 		return $1;
 	}
 	return undef;
@@ -673,7 +673,7 @@ sub new($$) {
 sub data_write {
   my ( $self, $buf ) = @_;
   my $hash = $self->{hash};
-  main::Log3 $self->{name},5,"FRM:>".unpack "H*",$buf;
+  main::Log3 $self->{name},5,"$self->{name} FRM:>".unpack "H*",$buf;
   main::DevIo_SimpleWrite($hash,$buf,undef);
 }
 
@@ -682,7 +682,7 @@ sub data_read {
   my $hash = $self->{hash};
   my $string = main::DevIo_SimpleRead($hash);
   if (defined $string ) {
-    main::Log3 $self->{name},5,"FRM:<".unpack "H*",$string;
+    main::Log3 $self->{name},5,"$self->{name} FRM:<".unpack "H*",$string;
   }
   return $string;
 }
@@ -798,7 +798,7 @@ sub FRM_serial_update_device
 	
 	if (defined $hash->{IODevPort} and $hash->{IODevPort} eq $data->{port}) {
 		my $buf = pack("C*", @{$data->{data}});
-		#Log3 $hash->{NAME},5,"FRM_serial_update_device port: " . length($buf) . " bytes on serial port " . $data->{port} . " " . $buf . " for " . $hash->{NAME};
+		#Log3 $hash->{NAME},5,"FRM_serial_update_device port: " . length($buf) . " bytes on serial port " . $data->{port} . " for " . $hash->{NAME};
 		$hash->{IODevRxBuffer} = "" if (!defined($hash->{IODevRxBuffer}));
 		$hash->{IODevRxBuffer} = $hash->{IODevRxBuffer} . $buf;
 		CallFn($hash->{NAME}, "ReadFn", $hash);
@@ -1127,39 +1127,62 @@ sub FRM_Serial_Setup {
   my ($hash) = @_;
   
   if (FRM_is_firmata_connected($hash->{IODev})) {
-    my $firmata  = FRM_Client_FirmataDevice($hash);
+    my $firmata = FRM_Client_FirmataDevice($hash);
     if (!defined $firmata ) {
       Log3 $hash->{NAME},3,"$hash->{IODev}{NAME} Serial_Setup: no Firmata device available";
       return 0;
     }
-    
-    # get serial pins
-    my $port = $hash->{IODevPort};
-    my $rxPinType = 2*$port;
-    my $txPinType = $rxPinType + 1;
-    my $rxPin = undef;
-    my $txPin = undef;
-    foreach my $pin ( keys %{$firmata->{metadata}{serial_resolutions}} ) {
-      if ($firmata->{metadata}{serial_resolutions}{$pin} == $rxPinType) {
-        $rxPin = $pin;
-      }
-      if ($firmata->{metadata}{serial_resolutions}{$pin} == $txPinType) {
-        $txPin = $pin;
-      }
-    }
-    if (!defined $rxPin || !defined $txPin) {
-      Log3 $hash->{NAME},3,"$hash->{IODev}{NAME} Serial_Setup: serial pins of port $port not available on Arduino";
-      my $data = { port => $port, data => [ "" ] };
-      FRM_serial_observer($data, $hash->{IODev}); # send empty buffer to signal EOF
-      return 0;
-    }
-    $hash->{PIN_RX} = $rxPin;
-    $hash->{PIN_TX} = $txPin;
-    
+        
     # configure port by claiming pins, setting baud rate and start reading
+    my $port = $hash->{IODevPort};
     if ($hash->{IODevParameters} =~ m/(\d+)(,([78])(,([NEO])(,([012]))?)?)?/) {
       my $baudrate = $1;
-      $firmata->serial_config($port, $baudrate);
+      if ($port > 7) {
+        # software serial port, get serial pins from attribute
+        my $err; 
+        my $serialattr = AttrVal($hash->{IODev}{NAME}, "software-serial-config", undef);
+        if (defined $serialattr) {
+          my @a = split(":", $serialattr);
+          if (scalar @a == 3 && $a[0] == $port) {
+            $hash->{PIN_RX} = $a[1];
+            $hash->{PIN_TX} = $a[2];
+            
+            # activate port
+            $firmata->serial_config($port, $baudrate, $a[1], $a[2]);
+          } else {
+            $err = "Error, invalid software-serial-config, must be <software serial port number>:<RX pin number>:<TX pin number>";
+          }
+        } else {
+          $err = "Error, attribute software-serial-config required for using software serial port $port";
+        }
+        if ($err) {        
+          Log3 $hash->{NAME},2,"$hash->{IODev}{NAME}: $err";
+          return 0;
+        }
+      } else {
+        # hardware serial port, get serial pins by port number from capability metadata
+        my $rxPinType = 2*$port;
+        my $txPinType = $rxPinType + 1;
+        my $rxPin = undef;
+        my $txPin = undef;
+        foreach my $pin ( keys %{$firmata->{metadata}{serial_resolutions}} ) {
+          if ($firmata->{metadata}{serial_resolutions}{$pin} == $rxPinType) {
+            $rxPin = $pin;
+          }
+          if ($firmata->{metadata}{serial_resolutions}{$pin} == $txPinType) {
+            $txPin = $pin;
+          }
+        }
+        if (!defined $rxPin || !defined $txPin) {
+          Log3 $hash->{NAME},3,"$hash->{IODev}{NAME} Serial_Setup: serial pins of port $port not available on Arduino";
+          return 0;
+        }
+        $hash->{PIN_RX} = $rxPin;
+        $hash->{PIN_TX} = $txPin;
+
+        # activate port
+        $firmata->serial_config($port, $baudrate);
+      }      
       $firmata->observe_serial($port, \&FRM_serial_observer, $hash->{IODev});
       $firmata->serial_read($port, 0); # continuously read and send all available bytes 
       Log3 $hash->{NAME},5,"$hash->{IODev}{NAME} Serial_Setup: serial port $hash->{IODevPort} opened with $baudrate baud for $hash->{NAME}";
@@ -1266,14 +1289,14 @@ sub FRM_Serial_Close {
    
   Each client stands for a Pin of the Arduino configured for a specific use 
   (digital/analog in/out) or an integrated circuit connected to Arduino by i2c.<br><br>
-  
+
   Note: this module is based on <a href="https://github.com/ntruchsess/perl-firmata">Device::Firmata</a> module (perl-firmata).
   perl-firmata is included in FHEM-distributions lib-directory. You can download the latest version <a href="https://github.com/amimoto/perl-firmata/archive/master.zip">as a single zip</a> file from github.<br><br>
 
   Note: this module may require the Device::SerialPort or Win32::SerialPort
   module if you attach the device via USB and the OS sets strange default
   parameters for serial devices.<br><br>
-  
+
   <a name="FRMdefine"></a>
   <b>Define</b><br>
   <ul><br>
@@ -1298,11 +1321,11 @@ sub FRM_Serial_Close {
       with simple file io. This might work if the operating system uses sane
       defaults for the serial parameters, e.g. some Linux distributions and
       OSX.  <br><br>
-      
+
       The Arduino has to run either 'StandardFirmata' or 'ConfigurableFirmata'.
       StandardFirmata supports Digital and Analog-I/O, Servo and I2C. In addition
       to that ConfigurableFirmata supports 1-Wire and Stepper-motors.<br><br>
-      
+
       You can find StandardFirmata in the Arduino-IDE under 'Examples->Firmata->StandardFirmata<br><br>
       ConfigurableFirmata has to be installed manualy. See <a href="https://github.com/firmata/arduino/tree/configurable/examples/ConfigurableFirmata">
       ConfigurableFirmata</a> on GitHub or <a href="http://www.fhemwiki.de/wiki/Arduino_Firmata#Installation_ConfigurableFirmata">FHEM-Wiki</a><br> 
@@ -1351,7 +1374,7 @@ sub FRM_Serial_Close {
   <a name="FRMattr"></a>
   <b>Attributes</b><br>
   <ul>
-      <li>i2c-config<br>
+      <li>i2c-config &lt;write-read-delay&gt;<br>
       Configure the Arduino for ic2 communication. This will enable i2c on the
       i2c_pins received by the capability-query issued during initialization of FRM.<br>
       As of Firmata 2.3 you can set a delay-time (in microseconds, max. 65535, default 0) that will be
@@ -1362,9 +1385,14 @@ sub FRM_Serial_Close {
       see i2c device manufacturer documentation for details). <br>
       See: <a href="http://www.firmata.org/wiki/Protocol#I2C">Firmata Protocol details about I2C</a><br>
       </li><br>
-      <li>sampling-interval<br>
+      <li>sampling-interval &lt;interval&gt;<br>
       Configure the interval Firmata reports analog data to FRM (in milliseconds, max. 65535). <br>
       See: <a href="http://www.firmata.org/wiki/Protocol#Sampling_Interval">Firmata Protocol details about Sampling Interval</a></br>
+      </li>
+      <li>software-serial-config &lt;port&gt;:&lt;rx pin&gt;:&lt;tx pin&gt;<br>
+      For using a software serial port (port number 8, 9, 10 or 11) two io pins must be specified.
+      The RX pin must have interrupt capability and the TX pin must have digital output capability.
+      See: <a href="https://www.arduino.cc/en/Reference/SoftwareSerial">SoftwareSerial Library</a></br>
       </li>
   </ul>
   <br><br>
@@ -1385,6 +1413,8 @@ sub FRM_Serial_Close {
         <br>
         In Firmata 2.8 the serial options (data bits, parity, stop bits) cannot be configured but may be compiled into the 
         Firmata Firmware (see SerialFirmata.cpp ((HardwareSerial*)serialPort)->begin(baud, options); )".
+        <br>
+        Depending on your Arduino hardware a maximum of one software serial can be activated using the software-serial-config attribute.
       </li>
   </ul>
   </ul>
