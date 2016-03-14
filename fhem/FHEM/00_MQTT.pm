@@ -157,8 +157,13 @@ sub Attr($$$$) {
 
 sub Start($) {
   my $hash = shift;
-  my ($dev) = split("[ \t]+", $hash->{DEF});
+  my ($dev,$userpass) = split("[ \t]+", $hash->{DEF});
   $hash->{DeviceName} = $dev;
+  if(defined($userpass) && $userpass ne "") {
+    my($user,$pass) = split(":",$userpass,2);
+    $hash->{username} = $user;
+    $hash->{password} = $pass;
+  }
   DevIo_CloseDev($hash);
   return DevIo_OpenDev($hash, 0, "MQTT::Init");
 }
@@ -335,7 +340,7 @@ sub Read {
 
 sub send_connect($) {
   my $hash = shift;
-  return send_message($hash, message_type => MQTT_CONNECT, keep_alive_timer => $hash->{timeout});
+  return send_message($hash, message_type => MQTT_CONNECT, keep_alive_timer => $hash->{timeout}, user_name => $hash->{username}, password => $hash->{password});
 };
 
 sub send_publish($@) {
@@ -525,8 +530,9 @@ sub client_stop($) {
   <a name="MQTTdefine"></a>
   <p><b>Define</b></p>
   <ul>
-    <p><code>define &lt;name&gt; MQTT &lt;ip:port&gt;</code></p>
+    <p><code>define &lt;name&gt; MQTT &lt;ip:port&gt; &lt;username:password&gt;</code></p>
     <p>Specifies the MQTT device.</p>
+    <p>Username and password are optional.</p>
   </ul>
   <a name="MQTTset"></a>
   <p><b>Set</b></p>
