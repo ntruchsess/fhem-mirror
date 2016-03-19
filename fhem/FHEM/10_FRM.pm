@@ -404,7 +404,7 @@ sub FRM_DoInit($) {
 	delete $main::defs{$name}{serial_resolutions};
 	do {
 		FRM_poll($shash);
-		if ($device->{metadata}{firmware} && $device->{metadata}{firmware_version}) {
+		if ($device->{metadata}{firmware} && $device->{metadata}{firmware_version} && $device->{metadata}{protocol_version}) {
 			$main::defs{$name}{firmware} = $device->{metadata}{firmware};
 			$main::defs{$name}{firmware_version} = $device->{metadata}{firmware_version};
 			$main::defs{$name}{protocol_version} = $device->{protocol}->get_max_supported_protocol_version($device->{metadata}{protocol_version});
