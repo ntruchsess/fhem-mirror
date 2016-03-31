@@ -1,5 +1,5 @@
 ##############################################
-# $Id$
+# $Id: 10_FRM.pm 9258 2015-09-15 20:45:18Z klauswitt $
 ##############################################
 package main;
 
@@ -1544,6 +1544,9 @@ sub FRM_Serial_Close {
   <a name="FRMnotes"></a>
   <b>Notes</b><br>
   <ul>
+      <li>ConfigurableFirmata<br>
+        AnalogInputFirmata must always be enabled, even if not used. Otherwise the device setup will fail with the error <i>Unhandled sysex command</i> when connecting because the pin capability query cannot be completed.
+      </li>
       <li>Serial Ports<br>
         Some serial devices can be connected to a serial port of a Firmata device acting as a serial over LAN adapter
         if their FHEM modules are using basic DevIo (e.g. HEATRONIC in read only mode) by changing their serial device descriptor to
