@@ -1,5 +1,5 @@
 ##############################################
-# $Id$
+# $Id: 20_FRM_AD.pm 5927 2014-05-21 21:56:37Z ntruchsess $
 ##############################################
 package main;
 
@@ -48,8 +48,11 @@ FRM_AD_Init($$)
 	return $ret if (defined $ret);
 	my $firmata = $hash->{IODev}->{FirmataDevice};
 	my $name = $hash->{NAME};
-	$firmata->observe_analog($hash->{PIN},\&FRM_AD_observer,$hash);
-	$main::defs{$name}{resolution}=$firmata->{metadata}{analog_resolutions}{$hash->{PIN}} if (defined $firmata->{metadata}{analog_resolutions});
+	eval {
+		$firmata->observe_analog($hash->{PIN},\&FRM_AD_observer,$hash);
+		$main::defs{$name}{resolution}=$firmata->{metadata}{analog_resolutions}{$hash->{PIN}} if (defined $firmata->{metadata}{analog_resolutions});
+	};
+	return FRM_Catch($@) if $@;
 	if (! (defined AttrVal($name,"stateFormat",undef))) {
 		$main::attr{$name}{"stateFormat"} = "reading";
 	}

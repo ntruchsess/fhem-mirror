@@ -81,7 +81,7 @@ sub FRM_Initialize($) {
 	$hash->{AttrFn}   = "FRM_Attr";
 	$hash->{NotifyFn} = "FRM_Notify";
 
-	$hash->{AttrList} = "model:nano dummy:1,0 sampling-interval i2c-config software-serial-config $main::readingFnAttributes";
+	$hash->{AttrList} = "model:nano dummy:1,0 sampling-interval i2c-config resetDeviceOnConnect:0,1 software-serial-config $main::readingFnAttributes";
 }
 
 #####################################
@@ -128,6 +128,7 @@ sub FRM_Undef($) {
 
 sub FRM_Start {
 	my ($hash) = @_;
+	my $name  = $hash->{NAME};
 
 	my ($dev, $global) = split("[ \t]+", $hash->{DEF});
 	$hash->{DeviceName} = $dev;
@@ -139,6 +140,9 @@ sub FRM_Start {
 #		if(!($isServer || $isClient) ||
 #			($isClient && $global) ||
 #			($global && $global ne "global"));
+
+	# clear old device ids to force full init
+	FRM_ClearConfiguration($hash);
 
 	# Make sure that fhem only runs once
 	if($isServer) {
@@ -185,6 +189,7 @@ sub FRM_Set($@) {
     $command eq "reset" and do {
       return $hash->{NAME}." is not connected" unless (FRM_is_firmata_connected($hash) && (defined $hash->{FD} or ($^O=~/Win/ and defined $hash->{USBDev})));
       $hash->{FirmataDevice}->system_reset();
+      FRM_ClearConfiguration($hash);
       if (defined $hash->{SERVERSOCKET}) {
         # dispose preexisting connections
         foreach my $e ( sort keys %main::defs ) {
@@ -262,6 +267,7 @@ sub FRM_Read($) {
 	}
 	my $device = $hash->{FirmataDevice} or return;
 	$device->poll();
+	FRM_SetupDevice($hash);
 }
 
 sub FRM_Ready($) {
@@ -271,6 +277,7 @@ sub FRM_Ready($) {
 	if ($name=~/^^FRM:.+:\d+$/) { # this is a closed tcp-connection, remove it
 		FRM_Tcp_Connection_Close($hash);
 		FRM_FirmataDevice_Close($hash);
+		return;
 	}
 	return DevIo_OpenDev($hash, 1, "FRM_DoInit") if($hash->{STATE} eq "disconnected");
 	
@@ -305,6 +312,7 @@ sub FRM_Tcp_Connection_Close($) {
 
 sub FRM_FirmataDevice_Close($) {
 	my $hash = shift;
+	my $name = $hash->{NAME};
 	my $device = $hash->{FirmataDevice};
 	if (defined $device) {
 		if (defined $device->{io}) {
@@ -359,32 +367,56 @@ sub FRM_apply_attribute {
 }
 
 sub FRM_DoInit($) {
-	
-	my ($hash) = @_;
-	
-	my $sname = $hash->{SNAME}; #is this a serversocket-connection?
-	my $shash = defined $sname ? $main::defs{$sname} : $hash;
-	
-	my $name = $shash->{NAME};
-	
-	my $firmata_io = Firmata_IO->new($hash,$name);
-	my $device = Device::Firmata::Platform->attach($firmata_io) or return 1;
+  my ($hash) = @_;
 
-	$shash->{FirmataDevice} = $device;
-	if (defined $sname) {
-		$shash->{SocketDevice} = $hash;
-		#as FRM_Read gets the connected socket hash, but calls firmatadevice->poll():
-		$hash->{FirmataDevice} = $device;
-	}
-	$device->observe_string(\&FRM_string_observer,$shash);
-	
-	my $found; # we cannot call $device->probe() here, as it doesn't select before read, so it would likely cause IODev to close the connection on the first attempt to read from empty stream
-	my $endTicks = time+5;
-	my $queryTicks = time+2;
-	$device->system_reset();
+  my $sname = $hash->{SNAME}; #is this a serversocket-connection?
+  my $shash = defined $sname ? $main::defs{$sname} : $hash;
+  my $name = $shash->{NAME};
+
+  Log3 $name, 5, "$name FRM_DoInit";
+  
+  my $firmata_io = Firmata_IO->new($hash, $name);
+  my $device = Device::Firmata::Platform->attach($firmata_io) or return 1;
+
+  $shash->{FirmataDevice} = $device;
+  if (defined $sname) {
+    $shash->{SocketDevice} = $hash;
+    #as FRM_Read gets the connected socket hash, but calls firmatadevice->poll():
+    $hash->{FirmataDevice} = $device;
+  }
+  $device->observe_string(\&FRM_string_observer, $shash);
+  
+  if (AttrVal($name, 'resetDeviceOnConnect', 1)) {
+    $device->system_reset();
+    FRM_ClearConfiguration($hash);
+  }    
+  
+  $shash->{SETUP_START} = gettimeofday();
+  $shash->{SETUP_STAGE} = 1; # detect connect mode (fhem startup, device startup or device reconnect) and query versions
+  $shash->{SETUP_TRIES} = 1;  
+  
+  return FRM_SetupDevice($shash);
+}
+
+=item FRM_ClearConfiguration()
+
+  Parameters:
+    @args:    hash reference of FRM device instance
+
+  Returns:    nothing
+
+  Desciption: 
+    delete all version and capability readings
+  
+=cut
+
+sub FRM_ClearConfiguration($) {
+	my $hash = shift;
+	my $name = $hash->{NAME};
+
+	delete $main::defs{$name}{protocol_version};
 	delete $main::defs{$name}{firmware};
 	delete $main::defs{$name}{firmware_version};
-	delete $main::defs{$name}{protocol_version};
 	delete $main::defs{$name}{input_pins};
 	delete $main::defs{$name}{input_pins};
 	delete $main::defs{$name}{output_pins};
@@ -402,121 +434,222 @@ sub FRM_DoInit($) {
 	delete $main::defs{$name}{encoder_resolutions};
 	delete $main::defs{$name}{stepper_resolutions};
 	delete $main::defs{$name}{serial_resolutions};
-	do {
-		FRM_poll($shash);
-		if ($device->{metadata}{firmware} && $device->{metadata}{firmware_version}) {
-			$main::defs{$name}{firmware} = $device->{metadata}{firmware};
-			$main::defs{$name}{firmware_version} = $device->{metadata}{firmware_version};
-			$main::defs{$name}{protocol_version} = $device->{protocol}->get_max_supported_protocol_version($device->{metadata}{protocol_version});
-			Log3 $name,3,"Firmata Firmware Version: ".$device->{metadata}{firmware}." ".$device->{metadata}{firmware_version}." (using Protocol Version: ".$main::defs{$name}{protocol_version}.")";
-			$device->analog_mapping_query();
-			$device->capability_query();
-			do {
-				FRM_poll($shash);
-				if ($device->{metadata}{analog_mappings} and $device->{metadata}{capabilities}) {
-					my $inputpins = $device->{metadata}{input_pins};
-					$main::defs{$name}{input_pins} = join(",", sort{$a<=>$b}(@$inputpins)) if (defined $inputpins and scalar @$inputpins);
-					my $outputpins = $device->{metadata}{output_pins};
-					$main::defs{$name}{output_pins} =  join(",", sort{$a<=>$b}(@$outputpins)) if (defined $outputpins and scalar @$outputpins);
-					my $analogpins = $device->{metadata}{analog_pins};
-					$main::defs{$name}{analog_pins} = join(",", sort{$a<=>$b}(@$analogpins)) if (defined $analogpins and scalar @$analogpins);
-					my $pwmpins = $device->{metadata}{pwm_pins};
-					$main::defs{$name}{pwm_pins} = join(",", sort{$a<=>$b}(@$pwmpins)) if (defined $pwmpins and scalar @$pwmpins);
-					my $servopins = $device->{metadata}{servo_pins};
-					$main::defs{$name}{servo_pins} = join(",", sort{$a<=>$b}(@$servopins)) if (defined $servopins and scalar @$servopins);
-					my $i2cpins = $device->{metadata}{i2c_pins};
-					$main::defs{$name}{i2c_pins} = join(",", sort{$a<=>$b}(@$i2cpins)) if (defined $i2cpins and scalar @$i2cpins);
-					my $onewirepins = $device->{metadata}{onewire_pins};
-					$main::defs{$name}{onewire_pins} = join(",", sort{$a<=>$b}(@$onewirepins)) if (defined $onewirepins and scalar @$onewirepins);
-					my $encoderpins = $device->{metadata}{encoder_pins};
-					$main::defs{$name}{encoder_pins} = join(",", sort{$a<=>$b}(@$encoderpins)) if (defined $encoderpins and scalar @$encoderpins);
-					my $stepperpins = $device->{metadata}{stepper_pins};
-					$main::defs{$name}{stepper_pins} = join(",", sort{$a<=>$b}(@$stepperpins)) if (defined $stepperpins and scalar @$stepperpins);
-					my $serialpins = $device->{metadata}{serial_pins};
-					$main::defs{$name}{serial_pins} = join(",", sort{$a<=>$b}(@$serialpins)) if (defined $serialpins and scalar @$serialpins);
-					if (defined $device->{metadata}{analog_resolutions}) {
-						my @analog_resolutions;
-						foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{analog_resolutions}})) {
-							push @analog_resolutions,$pin.":".$device->{metadata}{analog_resolutions}{$pin};
-						}
-						$main::defs{$name}{analog_resolutions} = join(",",@analog_resolutions) if (scalar @analog_resolutions);
-					}
-					if (defined $device->{metadata}{pwm_resolutions}) {
-						my @pwm_resolutions;
-						foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{pwm_resolutions}})) {
-							push @pwm_resolutions,$pin.":".$device->{metadata}{pwm_resolutions}{$pin};
-						}
-						$main::defs{$name}{pwm_resolutions} = join(",",@pwm_resolutions) if (scalar @pwm_resolutions);
-					}
-					if (defined $device->{metadata}{servo_resolutions}) {
-						my @servo_resolutions;
-						foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{servo_resolutions}})) {
-							push @servo_resolutions,$pin.":".$device->{metadata}{servo_resolutions}{$pin};
-						}
-						$main::defs{$name}{servo_resolutions} = join(",",@servo_resolutions) if (scalar @servo_resolutions);
-					}
-					if (defined $device->{metadata}{encoder_resolutions}) {
-						my @encoder_resolutions;
-						foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{encoder_resolutions}})) {
-							push @encoder_resolutions,$pin.":".$device->{metadata}{encoder_resolutions}{$pin};
-						}
-						$main::defs{$name}{encoder_resolutions} = join(",",@encoder_resolutions) if (scalar @encoder_resolutions);
-					}
-					if (defined $device->{metadata}{stepper_resolutions}) {
-						my @stepper_resolutions;
-						foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{stepper_resolutions}})) {
-							push @stepper_resolutions,$pin.":".$device->{metadata}{stepper_resolutions}{$pin};
-						}
-						$main::defs{$name}{stepper_resolutions} = join(",",@stepper_resolutions) if (scalar @stepper_resolutions);
-					}
-					if (defined $device->{metadata}{serial_resolutions}) {
-						my @serial_resolutions;
-						foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{serial_resolutions}})) {
-							push @serial_resolutions,$pin.":".$device->{metadata}{serial_resolutions}{$pin};
-						}
-						$main::defs{$name}{serial_resolutions} = join(",",@serial_resolutions) if (scalar @serial_resolutions);
-					}
-					$found = 1;
-				} else {
-					select (undef,undef,undef,0.01);
-				} 
-			} while (time < $endTicks and !$found);
-			$found = 1;
-		} else {
-			select (undef,undef,undef,0.01);
-			if (time > $queryTicks) {
-				Log3 $name,3,"querying Firmata Versions";
-				$device->firmware_version_query();
-				$device->protocol_version_query();
-				$queryTicks++;
-			}
-		}
-	} while (time < $endTicks and !$found);
-	if ($found) {
-		FRM_apply_attribute($shash,"sampling-interval");
-		FRM_apply_attribute($shash,"i2c-config");
-		FRM_serial_setup($shash);
-		FRM_forall_clients($shash,\&FRM_Init_Client,undef);
-		readingsSingleUpdate($shash, 'state', "Initialized", 1);
-		return undef;
-	}
-	if (defined $shash->{SERVERSOCKET}) {
-		Log3 $name, 3, "no response from Firmata, closing connection";
-		foreach my $e ( sort keys %main::defs ) {
-			if ( defined( my $dev = $main::defs{$e} )) {
-				if ( defined( $dev->{SNAME} ) && ( $dev->{SNAME} eq $shash->{NAME} )) {
-					FRM_Tcp_Connection_Close($dev);
-				}
-			}
-		}
-		FRM_FirmataDevice_Close($shash);
-	} else {
-		Log3 $name, 3, "no response from Firmata, closing DevIo";
-		DevIo_Disconnected($shash);
-		delete $shash->{FirmataDevice};
-		delete $shash->{SocketDevice};
-	}
-	return "FirmataDevice not responding";
+}
+
+=item FRM_SetupDevice()
+
+  Parameters:
+    @args:    hash reference of FRM device instance or TCP session device instance
+
+  Returns:    nothing
+
+  Desciption: 
+    Monitor data received from Firmata device immediately after connect, perform
+    protocol, firmware and capability queries and configure device according to 
+    the FRM device attributes.
+  
+=cut
+
+sub FRM_SetupDevice($);
+
+sub FRM_SetupDevice($) {
+  my ($hash) = @_;
+  
+  $hash = $main::defs{$hash->{SNAME}} if (defined($hash->{SNAME}));
+  return undef if (!defined($hash->{SETUP_START}));
+  
+  my $name = $hash->{NAME};
+  
+  Log3 $name, 5, "$name setup stage $hash->{SETUP_STAGE}";
+  
+  my $now = gettimeofday();
+  my $elapsed = $now - $hash->{SETUP_START};
+  my $device = $hash->{FirmataDevice};
+
+  if ($hash->{SETUP_STAGE} == 1) { # protocol and firmware version
+    RemoveInternalTimer($hash);
+    InternalTimer($now + (($elapsed < 1)? 0.1 : 1), 'FRM_SetupDevice', $hash, 0);    
+    # wait for protocol and firmware version
+    my $fhemRestart = !defined($main::defs{$name}{protocol_version});
+    my $versionsReceived = $device->{metadata}{firmware} && $device->{metadata}{firmware_version} && $device->{metadata}{protocol_version};
+    if ($versionsReceived) {
+      # clear old version and capability readings if not already done
+      if (!$fhemRestart) {
+        FRM_ClearConfiguration($hash);
+      }
+      # protocol and firmware versions have been received
+      $main::defs{$name}{firmware} = $device->{metadata}{firmware};
+      $main::defs{$name}{firmware_version} = $device->{metadata}{firmware_version};
+      $main::defs{$name}{protocol_version} = $device->{protocol}->get_max_supported_protocol_version($device->{metadata}{protocol_version});
+      Log3 $name, 3, $name." Firmata Firmware Version: ".$device->{metadata}{firmware}." ".$device->{metadata}{firmware_version}." (using Protocol Version: ".$main::defs{$name}{protocol_version}.")";        
+      # query capabilities
+      $device->analog_mapping_query();
+      $device->capability_query();
+      # wait for capabilities
+      $hash->{SETUP_STAGE} = 2;
+    } elsif ($elapsed >= 3) {
+      # protocol and firmware version still missing
+      if ($hash->{SETUP_TRIES} < 3) {
+        # requery versions
+        Log3 $name, 3, "$name querying Firmata versions";
+        $device->protocol_version_query();
+        $device->firmware_version_query();
+        # restart setup
+        $hash->{SETUP_START} = gettimeofday();
+        $hash->{SETUP_STAGE} = 1;
+        $hash->{SETUP_TRIES}++;
+      } else {
+        # retry limit exceeded, abort
+        $hash->{SETUP_STAGE} = 5; 
+        FRM_SetupDevice($hash);
+      }
+    } elsif ($elapsed >= 0.2 && defined($hash->{PORT})) {
+      # if we don't receive the protocol version within 200 millis, the device has reconnected (or has an old firmware)
+      my $deviceRestart = $device->{metadata}{protocol_version};
+      if (!$deviceRestart && !$fhemRestart) {
+        # probably a reconnect
+        Log3 $name, 3, "$name Firmata device has reconnected";
+        #if ($skipSetupOnReconnect) {
+        #  # skip capability queries and device setup, just reinit client modules
+        #  $hash->{SETUP_STAGE} = 3;
+        #  FRM_SetupDevice($hash);
+        #  return undef;
+        #}
+        # clear old version and capability readings
+        FRM_ClearConfiguration($hash);
+        # query versions
+        Log3 $name, 3, "$name querying Firmata versions";
+        $device->protocol_version_query();
+        $device->firmware_version_query();
+      } 
+    }
+    
+  } elsif  ($hash->{SETUP_STAGE} == 2) { # device capabilities
+    RemoveInternalTimer($hash);
+    InternalTimer(gettimeofday() + 1, 'FRM_SetupDevice', $hash, 0);    
+    my $capabilitiesReceived = $device->{metadata}{analog_mappings} && $device->{metadata}{capabilities};
+    if ($capabilitiesReceived) {
+      # device capabilities have been received, convert to readings
+      my $inputpins = $device->{metadata}{input_pins};
+      $main::defs{$name}{input_pins} = join(",", sort{$a<=>$b}(@$inputpins)) if (defined $inputpins and scalar @$inputpins);
+      my $outputpins = $device->{metadata}{output_pins};
+      $main::defs{$name}{output_pins} =  join(",", sort{$a<=>$b}(@$outputpins)) if (defined $outputpins and scalar @$outputpins);
+      my $analogpins = $device->{metadata}{analog_pins};
+      $main::defs{$name}{analog_pins} = join(",", sort{$a<=>$b}(@$analogpins)) if (defined $analogpins and scalar @$analogpins);
+      my $pwmpins = $device->{metadata}{pwm_pins};
+      $main::defs{$name}{pwm_pins} = join(",", sort{$a<=>$b}(@$pwmpins)) if (defined $pwmpins and scalar @$pwmpins);
+      my $servopins = $device->{metadata}{servo_pins};
+      $main::defs{$name}{servo_pins} = join(",", sort{$a<=>$b}(@$servopins)) if (defined $servopins and scalar @$servopins);
+      my $i2cpins = $device->{metadata}{i2c_pins};
+      $main::defs{$name}{i2c_pins} = join(",", sort{$a<=>$b}(@$i2cpins)) if (defined $i2cpins and scalar @$i2cpins);
+      my $onewirepins = $device->{metadata}{onewire_pins};
+      $main::defs{$name}{onewire_pins} = join(",", sort{$a<=>$b}(@$onewirepins)) if (defined $onewirepins and scalar @$onewirepins);
+      my $encoderpins = $device->{metadata}{encoder_pins};
+      $main::defs{$name}{encoder_pins} = join(",", sort{$a<=>$b}(@$encoderpins)) if (defined $encoderpins and scalar @$encoderpins);
+      my $stepperpins = $device->{metadata}{stepper_pins};
+      $main::defs{$name}{stepper_pins} = join(",", sort{$a<=>$b}(@$stepperpins)) if (defined $stepperpins and scalar @$stepperpins);
+      my $serialpins = $device->{metadata}{serial_pins};
+      $main::defs{$name}{serial_pins} = join(",", sort{$a<=>$b}(@$serialpins)) if (defined $serialpins and scalar @$serialpins);
+      if (defined $device->{metadata}{analog_resolutions}) {
+        my @analog_resolutions;
+        foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{analog_resolutions}})) {
+          push @analog_resolutions,$pin.":".$device->{metadata}{analog_resolutions}{$pin};
+        }
+        $main::defs{$name}{analog_resolutions} = join(",",@analog_resolutions) if (scalar @analog_resolutions);
+      }
+      if (defined $device->{metadata}{pwm_resolutions}) {
+        my @pwm_resolutions;
+        foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{pwm_resolutions}})) {
+          push @pwm_resolutions,$pin.":".$device->{metadata}{pwm_resolutions}{$pin};
+        }
+        $main::defs{$name}{pwm_resolutions} = join(",",@pwm_resolutions) if (scalar @pwm_resolutions);
+      }
+      if (defined $device->{metadata}{servo_resolutions}) {
+        my @servo_resolutions;
+        foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{servo_resolutions}})) {
+          push @servo_resolutions,$pin.":".$device->{metadata}{servo_resolutions}{$pin};
+        }
+        $main::defs{$name}{servo_resolutions} = join(",",@servo_resolutions) if (scalar @servo_resolutions);
+      }
+      if (defined $device->{metadata}{encoder_resolutions}) {
+        my @encoder_resolutions;
+        foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{encoder_resolutions}})) {
+          push @encoder_resolutions,$pin.":".$device->{metadata}{encoder_resolutions}{$pin};
+        }
+        $main::defs{$name}{encoder_resolutions} = join(",",@encoder_resolutions) if (scalar @encoder_resolutions);
+      }
+      if (defined $device->{metadata}{stepper_resolutions}) {
+        my @stepper_resolutions;
+        foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{stepper_resolutions}})) {
+          push @stepper_resolutions,$pin.":".$device->{metadata}{stepper_resolutions}{$pin};
+        }
+        $main::defs{$name}{stepper_resolutions} = join(",",@stepper_resolutions) if (scalar @stepper_resolutions);
+      }
+      if (defined $device->{metadata}{serial_resolutions}) {
+        my @serial_resolutions;
+        foreach my $pin (sort{$a<=>$b}(keys %{$device->{metadata}{serial_resolutions}})) {
+          push @serial_resolutions,$pin.":".$device->{metadata}{serial_resolutions}{$pin};
+        }
+        $main::defs{$name}{serial_resolutions} = join(",",@serial_resolutions) if (scalar @serial_resolutions);
+      }
+      # setup device
+      FRM_apply_attribute($hash, "sampling-interval");
+      FRM_apply_attribute($hash, "i2c-config");
+      FRM_serial_setup($hash);            
+      # ready, init client modules 
+      $hash->{SETUP_STAGE} = 3; 
+      FRM_SetupDevice($hash); 
+      
+    } elsif ($elapsed >= 5) {
+      # capabilities receive timeout, abort
+      $hash->{SETUP_STAGE} = 5; 
+      FRM_SetupDevice($hash);
+    }
+    
+  } elsif  ($hash->{SETUP_STAGE} == 3) { # client modules
+    # client module initialization
+    FRM_forall_clients($hash, \&FRM_Init_Client, undef);
+    readingsSingleUpdate($hash, 'state', "Initialized", 1);
+    # done, terminate setup sequence
+    $hash->{SETUP_STAGE} = 4; 
+    FRM_SetupDevice($hash);
+    
+  } elsif  ($hash->{SETUP_STAGE} == 4) { # finish setup
+    # terminate setup sequence
+    RemoveInternalTimer($hash);
+    delete $hash->{SETUP_START};
+    delete $hash->{SETUP_STAGE};
+    delete $hash->{SETUP_TRIES};
+    
+  } elsif  ($hash->{SETUP_STAGE} == 5) { # abort setup
+    # device setup has failed, cleanup connection
+    if (defined $hash->{SERVERSOCKET}) {
+      Log3 $name, 3, "$name no response from Firmata, closing connection";
+      foreach my $e (sort keys %main::defs) {
+        if (defined(my $dev = $main::defs{$e})) {
+          if (defined($dev->{SNAME}) && ($dev->{SNAME} eq $hash->{NAME})) {
+            FRM_Tcp_Connection_Close($dev);
+          }
+        }
+      }
+      FRM_FirmataDevice_Close($hash);
+    } else {
+      Log3 $name, 3, "$name no response from Firmata, closing DevIo";
+      DevIo_Disconnected($hash);
+      delete $hash->{FirmataDevice};
+      delete $hash->{SocketDevice};
+    }
+    # cleanup setup
+    $hash->{SETUP_STAGE} = 4; 
+    FRM_SetupDevice($hash);
+    
+  } else { 
+    # invalid state, abort
+    $hash->{SETUP_STAGE} = 5; 
+    FRM_SetupDevice($hash);  
+  }
+  
+  return undef;
 }
 
 sub
@@ -1262,6 +1395,12 @@ sub FRM_Serial_Close {
       - do not disconnect DevIo in TCP mode to stay reconnectable
     o use readingsSingleUpdate on state instead of directly changing STATE
     
+  26.03.2016 jensb
+    o asynchronous device setup (FRM_DoInit, FRM_SetupDevice)
+    o experimental reconnect detection
+    o new attribute to skip device reset on connect
+    o help updated
+    
 =cut
 
 =pod
@@ -1361,7 +1500,7 @@ sub FRM_Serial_Close {
   <b>Set</b>
   <ul>
   <li>
-    <code>set &lt;name&gt; init</code><br>
+    <code>set &lt;name&gt; reinit</code><br>
     reinitializes the FRM-Client-devices configured for this Arduino
   </li><br>
   <li>
@@ -1374,25 +1513,30 @@ sub FRM_Serial_Close {
   <a name="FRMattr"></a>
   <b>Attributes</b><br>
   <ul>
+      <li>resetDeviceOnConnect<br>
+      Reset the Firmata device immediately after connect to force default Firmata startup state (default: enabled): 
+      all pins with analog capability are configured as input, all other (digital) pins are configured as output 
+      and the input pin reporting, the i2c configuration and the serial port configuration are cancelled.
+      </li><br>
       <li>i2c-config &lt;write-read-delay&gt;<br>
       Configure the Arduino for ic2 communication. This will enable i2c on the
       i2c_pins received by the capability-query issued during initialization of FRM.<br>
-      As of Firmata 2.3 you can set a delay-time (in microseconds, max. 65535, default 0) that will be
+      As of Firmata 2.3 you can set a delay-time (in microseconds, max. 32767, default: 0) that will be
       inserted into i2c protocol when switching from write to read. This may be necessary because Firmata
       i2c write does not block on the fhem side so consecutive i2c write/read operations get queued and
       will be executed on the Firmata device in a different time sequence. Use the maximum operation
       time required by the connected i2c devices (e.g. 30000 for the BMP180 with triple oversampling,
-      see i2c device manufacturer documentation for details). <br>
-      See: <a href="http://www.firmata.org/wiki/Protocol#I2C">Firmata Protocol details about I2C</a><br>
+      see i2c device manufacturer documentation for details).<br>
+      See: <a href="http://www.firmata.org/wiki/Protocol#I2C">Firmata Protocol details about I2C</a>
       </li><br>
       <li>sampling-interval &lt;interval&gt;<br>
-      Configure the interval Firmata reports analog data to FRM (in milliseconds, max. 65535). <br>
-      See: <a href="http://www.firmata.org/wiki/Protocol#Sampling_Interval">Firmata Protocol details about Sampling Interval</a></br>
-      </li>
+      Configure the interval Firmata reports analog data to FRM (in milliseconds, max. 32767, default: 19 ms).<br>
+      See: <a href="http://www.firmata.org/wiki/Protocol#Sampling_Interval">Firmata Protocol details about Sampling Interval</a>
+      </li><br>
       <li>software-serial-config &lt;port&gt;:&lt;rx pin&gt;:&lt;tx pin&gt;<br>
       For using a software serial port (port number 8, 9, 10 or 11) two io pins must be specified.
-      The RX pin must have interrupt capability and the TX pin must have digital output capability.
-      See: <a href="https://www.arduino.cc/en/Reference/SoftwareSerial">SoftwareSerial Library</a></br>
+      The RX pin must have interrupt capability and the TX pin must have digital output capability.<br>
+      See: <a href="https://www.arduino.cc/en/Reference/SoftwareSerial">Arduino SoftwareSerial Library</a>
       </li>
   </ul>
   <br><br>
@@ -1400,21 +1544,24 @@ sub FRM_Serial_Close {
   <a name="FRMnotes"></a>
   <b>Notes</b><br>
   <ul>
+      <li>ConfigurableFirmata<br>
+        AnalogInputFirmata must always be enabled, even if not used. Otherwise the device setup will fail with the error <i>Unhandled sysex command</i> when connecting because the pin capability query cannot be completed.
+      </li>
       <li>Serial Ports<br>
-        A hardware serial port of an Arduino can be used by all modules using DevIo for physical device, file or network stream access
-        by changing the device descriptor to<br>
-        <br>
+        Some serial devices can be connected to a serial port of a Firmata device acting as a serial over LAN adapter
+        if their FHEM modules are using basic DevIo (e.g. HEATRONIC in read only mode) by changing their serial device descriptor to
+        <br><br>
         FHEM:DEVIO:&lt;FRM device name&gt;:&lt;serial port&gt;@&lt;baud rate&gt;<br>
-        with &lt;serial port&gt; = (int)&lt;serial resolution&gt; : 2<br>
-        <br>
-        To use a port both the RX and TX pins of this port must be available via Firmata, even if one of the pins will not be used. 
-        Arduinos with only one hardware serial port cannot be used, because port 0 is reserved for the Arduino host communication even 
-        when using a LAN module.
-        <br>
-        In Firmata 2.8 the serial options (data bits, parity, stop bits) cannot be configured but may be compiled into the 
-        Firmata Firmware (see SerialFirmata.cpp ((HardwareSerial*)serialPort)->begin(baud, options); )".
-        <br>
-        Depending on your Arduino hardware a maximum of one software serial can be activated using the software-serial-config attribute.
+        with &lt;serial port&gt; equals to &lt;serial resolution&gt; of the hardware serial pins divided by two
+        <br><br>
+        To use a serial port both the RX and TX pin of this port must be available via Firmata, even if one of the pins will not be used. 
+        Depending on the Firmata version the first hardware serial port (port 0) cannot be used even with network connected 
+        devices because port 0 is always reserved for the Arduino host communication.
+        On some Arduinos you can use software serial ports (ports 8 to 11). FRM supports a maximum of one software serial port that can
+        be activated using the software-serial-config attribute.
+        <br><br>
+        In current Firmata versions the serial options (data bits, parity, stop bits) cannot be configured but may be compiled into the 
+        Firmata Firmware (see SerialFirmata.cpp ((HardwareSerial*)serialPort)->begin(baud, options)).
       </li>
   </ul>
   </ul>
