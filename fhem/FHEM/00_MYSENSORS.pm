@@ -228,7 +228,7 @@ sub GetConnectStatus($){
   sendMessage($hash, radioId => 0, childId => 0, cmd => C_INTERNAL, ack => 0, subType => I_VERSION, payload => '');
   
   # neuen Timer starten in einem konfigurierten Interval.
-	InternalTimer(gettimeofday()+300, "MYSENSORS::GetConnectStatus", $hash);
+  InternalTimer(gettimeofday()+300, "MYSENSORS::GetConnectStatus", $hash);
 }
 
 sub Timer($) {
