@@ -218,6 +218,19 @@ sub Init($) {
   return undef;
 }
 
+# GetConnectStatus
+sub GetConnectStatus($){
+ my ($hash) = @_;
+ my $name = $hash->{NAME};
+ Log3 $name, 4, "MySensors: GetConnectStatus called ...";
+ 
+  #query version from gateway 
+  sendMessage($hash, radioId => 0, childId => 0, cmd => C_INTERNAL, ack => 0, subType => I_VERSION, payload => '');
+  
+  # neuen Timer starten in einem konfigurierten Interval.
+	InternalTimer(gettimeofday()+300, "MYSENSORS::GetConnectStatus", $hash);
+}
+
 sub Timer($) {
   my $hash = shift;
   my $now = time;
@@ -246,6 +259,7 @@ sub Read {
   my $data = $hash->{PARTIAL};
   Log3 ($name, 5, "MYSENSORS/RAW: $data/$buf");
   $data .= $buf;
+  readingsSingleUpdate($hash,"lastRead","$buf",1);
 
   while ($data =~ m/\n/) {
     my $txt;
@@ -348,6 +362,8 @@ sub onInternalMsg($$) {
           my $client = shift;
           MYSENSORS::DEVICE::onGatewayStarted($client);
         });
+        #start connect watch thread, interval 500
+	      InternalTimer(gettimeofday()+300, "MYSENSORS::GetConnectStatus", $hash);
         last;
       };
       $type == I_VERSION and do {
